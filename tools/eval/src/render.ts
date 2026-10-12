@@ -51,7 +51,15 @@ async function main(argv: string[]) {
       const deck = readJson<Deck>(file);
       const theme = (opts.theme ?? deck.lesson?.theme ?? "classic") as string;
       const input = deck.slides.map((s) => ({ content: s.content, sources: s.sources ?? [] }));
-      const results = await page.evaluate(([slides, t]) => (window as unknown as { kjMeasure: Measure }).kjMeasure(slides, t), [input, theme] as const);
+      const measure = (slides: typeof input) => page.evaluate(([s, t]) => (window as unknown as { kjMeasure: Measure }).kjMeasure(s, t), [slides, theme] as const);
+      let results: Awaited<ReturnType<typeof measure>>;
+      try {
+        results = await measure(input);
+      } catch {
+        // A slide whose renderer throws (e.g. an invalid function expression) must not hide the rest.
+        results = [];
+        for (const slide of input) results.push(await measure([slide]).then((r) => r[0]!, (e: Error) => ({ error: `render threw: ${e.message.split("\n")[0]}` })));
+      }
       let bad = 0;
       deck.slides.forEach((s, i) => {
         const r = results[i]!;

@@ -184,11 +184,15 @@ export async function draftOutline(ai: AiLayer, input: DraftInput): Promise<Draf
     return { outline: normalizeOutline(res.output, ctx), providerId: res.providerId };
   };
 
+  const rebalance = (x: Outline) => (outlineTiming(x, input.params).needsAck ? rebalanceMinutes(x, input.params) : x);
+  const errors = (x: Outline) => checkOutline(x, input.params).filter((v) => v.level === "error");
   let { outline, providerId } = await call();
-  if (providerId !== "stub" && o.outlineCheckRetry && checkOutline(outline, input.params).some((v) => v.level === "error")) {
-    ({ outline, providerId } = await call(checkOutline(outline, input.params).filter((v) => v.level === "error")));
+  // Rebalancing repairs most timing errors without a model call; only what it cannot fix (e.g. too few slides) is retried.
+  outline = rebalance(outline);
+  if (providerId !== "stub" && o.outlineCheckRetry && errors(outline).length) {
+    ({ outline, providerId } = await call(errors(outline)));
+    outline = rebalance(outline);
   }
-  if (outlineTiming(outline, input.params).needsAck) outline = rebalanceMinutes(outline, input.params);
   if (omitted.length) outline = { ...outline, notCovered: [`pp. ${formatPages(omitted, labels)}：原文过长未读入 · not read (source too long)`.slice(0, 200), ...outline.notCovered].slice(0, 20) };
   return { outline, warnings: checkOutline(outline, input.params), providerId };
 }

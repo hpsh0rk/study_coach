@@ -285,6 +285,9 @@ importers:
       '@kj/templates':
         specifier: workspace:*
         version: link:../../packages/templates
+      '@kj/widgets':
+        specifier: workspace:*
+        version: link:../../packages/widgets
       '@playwright/test':
         specifier: 1.64.0
         version: 1.64.0
