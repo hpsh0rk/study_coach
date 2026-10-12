@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
-import { checkOutline, densityOf, outlineTiming, PAGE_TYPES, TIME_TOLERANCE } from "@kj/pedagogy";
+import { labelOf } from "@kj/pdf-structure";
+import { checkOutline, densityOf, outlineTiming, PAGE_TYPES, planBudget, TIME_TOLERANCE } from "@kj/pedagogy";
 import { PAGE_TYPE_IDS, type Outline, type PageType, type SlideSpec, type VisualKind } from "@kj/schema";
 import { layoutForPageType, LAYOUTS, PAGE_TYPE_VISUALS } from "@kj/templates";
 import { ApiError } from "../../api.ts";
@@ -11,6 +12,7 @@ const VISUAL_LABEL: Record<VisualKind, string> = { none: "无 None", chart: "图
 
 function TimeBudget({ outline, minutes }: { outline: Outline; minutes: number }) {
   const t = outlineTiming(outline, { minutes });
+  const b = planBudget({ minutes });
   const max = minutes * 1.4;
   const pct = (v: number) => `${Math.min(100, (v / max) * 100)}%`;
   return (
@@ -20,7 +22,7 @@ function TimeBudget({ outline, minutes }: { outline: Outline; minutes: number })
           总时长 {t.totalMinutes} / {minutes} 分钟
         </b>
         <span>
-          {t.status === "ok" ? "✓ 在 ±15% 以内 · within budget" : t.status === "over" ? `超出 ${Math.round(t.deviation * 100)}% · over budget` : `不足 ${Math.round(-t.deviation * 100)}% · under budget`}
+          {t.status === "ok" ? `✓ ${b.minMinutes}–${b.maxMinutes} 分钟为合适 · within budget` : t.status === "over" ? `超出 ${Math.round(t.deviation * 100)}% · over budget` : `不足 ${Math.round(-t.deviation * 100)}% · under budget`}
         </span>
         <span className="muted small">
           {t.slideCount} 页 · 讲授 {Math.round(t.lectureShare * 100)}% / 学生活动 {Math.round(t.activityShare * 100)}%
@@ -35,7 +37,27 @@ function TimeBudget({ outline, minutes }: { outline: Outline; minutes: number })
   );
 }
 
-function Row({ spec, i, n, readOnly, onChange, onMove, onDelete, onAdd }: { spec: SlideSpec; i: number; n: number; readOnly: boolean; onChange: (s: SlideSpec) => void; onMove: (d: -1 | 1) => void; onDelete: () => void; onAdd: () => void }) {
+function Row({
+  spec,
+  i,
+  n,
+  readOnly,
+  labels,
+  onChange,
+  onMove,
+  onDelete,
+  onAdd,
+}: {
+  spec: SlideSpec;
+  i: number;
+  n: number;
+  readOnly: boolean;
+  labels: Map<number, string>;
+  onChange: (s: SlideSpec) => void;
+  onMove: (d: -1 | 1) => void;
+  onDelete: () => void;
+  onAdd: () => void;
+}) {
   const d = densityOf(spec);
   const def = PAGE_TYPES[spec.pageType];
   const visuals = PAGE_TYPE_VISUALS[spec.pageType];
@@ -93,7 +115,7 @@ function Row({ spec, i, n, readOnly, onChange, onMove, onDelete, onAdd }: { spec
               </select>
             </label>
           ) : null}
-          <span>教材 p.{spec.sourcePages.join(", ") || "—"}</span>
+          <span>教材 p.{spec.sourcePages.map((p) => labelOf(labels, p)).join(", ") || "—"}</span>
           {d.reasons.length > 0 && <span className={`density-reason ${d.level}`}>{d.reasons[0]}</span>}
         </div>
       </div>
@@ -125,8 +147,9 @@ export function OutlineStep({ view, reached, onChanged }: { view: LessonView; re
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [needAck, setNeedAck] = useState<string | null>(null);
-  const params = view.lesson.params;
+  const params = version?.params ?? view.lesson.params;
   const readOnly = !!version?.confirmedAt;
+  const labels = useMemo(() => new Map(Object.entries(view.pageLabels).map(([k, v]) => [Number(k), v])), [view.pageLabels]);
 
   useEffect(() => {
     setVersion(view.version);
@@ -217,6 +240,16 @@ export function OutlineStep({ view, reached, onChanged }: { view: LessonView; re
           </div>
         </div>
         <TimeBudget outline={outline} minutes={params.minutes} />
+        {outline.notCovered.length > 0 && (
+          <div className="alert warn not-covered" data-testid="not-covered">
+            <b>本节课没有覆盖 · Not covered:</b> {outline.notCovered.join("；")}
+          </div>
+        )}
+        {outline.glossary.length > 0 && (
+          <p className="muted small glossary" data-testid="glossary">
+            术语表 Glossary: {outline.glossary.map((g) => (g.zh ? `${g.term} ${g.zh}` : g.term)).join(" · ")}
+          </p>
+        )}
         {warnings.length > 0 && (
           <ul className="warnings" data-testid="warnings">
             {warnings.slice(0, 6).map((w, i) => (
@@ -235,6 +268,7 @@ export function OutlineStep({ view, reached, onChanged }: { view: LessonView; re
             i={i}
             n={slides.length}
             readOnly={readOnly}
+            labels={labels}
             onChange={(next) => update(slides.map((x, j) => (j === i ? next : x)))}
             onMove={(dir) => {
               const arr = [...slides];

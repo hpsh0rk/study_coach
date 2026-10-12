@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_PARAMS, type Outline, type SlideSpec } from "@kj/schema";
+import { BUDGETS } from "@kj/templates";
 import { fakeAi } from "../../ai/test/fake.ts";
 import { buildSlideMessages as buildMessages, sourcePagesFor, writeSlide, type WriteInput } from "../src/index.ts";
 
@@ -32,7 +33,7 @@ describe("slide writer options", () => {
     const res = await writeSlide(a.ai, outline, "sp2", input());
     expect(a.requests).toHaveLength(2);
     expect(a.requests[1]!.at(-1)!.content).toContain("previous answer had these problems");
-    expect(res.content.layout === "statement" && res.content.bullets.length).toBe(4);
+    expect(res.content.layout === "statement" && res.content.bullets.length).toBe(BUDGETS.statement.bullets.max);
   });
 
   it("slideCheckRetry=false makes one call; truncateFallback=false keeps the overflow", async () => {

@@ -71,6 +71,7 @@ export const pages = sqliteTable(
     text: text("text").notNull(),
     /** Printed page label when it differs from the page index. */
     label: text("label"),
+    words: integer("words").notNull().default(0),
   },
   (t) => [primaryKey({ columns: [t.documentId, t.no] })],
 );

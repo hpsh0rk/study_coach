@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "3f6b2e55-a8bc-4585-85f4-e73800d3de7a",
+  "id": "c4c7eac4-339b-45d0-a50f-96df73ce5bee",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "ai_calls": {
@@ -922,6 +922,14 @@
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
+        },
+        "words": {
+          "name": "words",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
         }
       },
       "indexes": {},

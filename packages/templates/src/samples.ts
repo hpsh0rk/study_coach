@@ -3,10 +3,11 @@ import { BUDGETS } from "./budgets.ts";
 
 export type SampleLang = "en" | "zh";
 
-const EN_WORDS = ["Electromagnetic", "waves", "transfer", "energy", "through", "a", "vacuum", "without", "particles", "oscillating", "the", "wavelength", "frequency", "and", "amplitude", "measured"];
+/** About 6 letters per word: longer than typical textbook prose (≈ 5), so max budgets stay a worst case. */
+const EN_WORDS = ["Sound", "waves", "transfer", "energy", "through", "a", "medium", "without", "moving", "matter", "the", "wavelength", "frequency", "and", "amplitude", "change"];
 const ZH_TEXT = "电磁波可以在真空中传播能量而不需要介质粒子振动方向与传播方向垂直波长频率和振幅决定了波的性质";
 
-/** Worst-case filler: exactly `n` long English words, or the CJK equivalent (1.7 chars per word). */
+/** Worst-case filler: exactly `n` English words, or the CJK equivalent (1.7 chars per word). */
 export function filler(n: number, lang: SampleLang, seed = 0): string {
   if (lang === "zh") {
     const chars = Math.floor(n * 1.7);
@@ -21,7 +22,7 @@ export function filler(n: number, lang: SampleLang, seed = 0): string {
 
 const sliders: FunctionSpec = {
   kind: "function",
-  expr: "A*sin(2*pi*(x/L - f*t))",
+  expr: "A*sin(2*pi*(x/L - f/4))",
   x: [0, 4],
   y: [-3, 3],
   xLabel: "distance / m",
@@ -30,8 +31,7 @@ const sliders: FunctionSpec = {
     { name: "A", label: "Amplitude A / cm", min: 0, max: 3, step: 0.1, value: 2 },
     { name: "L", label: "Wavelength λ / m", min: 0.5, max: 4, step: 0.1, value: 2 },
     { name: "f", label: "Frequency f / Hz", min: 0, max: 5, step: 0.5, value: 1 },
-    { name: "t", label: "Time t / s", min: 0, max: 2, step: 0.1, value: 0 },
-  ].slice(0, 3) as FunctionSpec["params"],
+  ],
 };
 
 /** Content that fills every slot of a layout to its hard budget (used by the overflow test and gallery). */
@@ -50,7 +50,7 @@ export function maxBudgetContent(layout: LayoutId, lang: SampleLang): SlideConte
         layout,
         title: f(b.title.max),
         bullets: times(b.bullets.max, (i) => f(per, i + 1)),
-        visual: { ...sliders, params: sliders.params.slice(0, 2) },
+        visual: { ...sliders, expr: "A*sin(2*pi*x/L)", params: sliders.params.slice(0, 2) },
         terms: times(b.terms.max, (i) => ({ term: f(b.terms.item.max, i + 3), zh: "电磁辐射" })),
       };
     }
@@ -66,7 +66,7 @@ export function maxBudgetContent(layout: LayoutId, lang: SampleLang): SlideConte
           xLabel: "Region of the spectrum",
           yLabel: "log10(frequency / Hz)",
           categories,
-          series: times(4, (s) => ({ name: `Series ${s + 1}`, data: categories.map((_, i) => 8 + i * 1.6 + s * 0.3) })),
+          series: times(4, (s) => ({ name: `Series ${s + 1}`, data: categories.map((_, i) => Math.round((8 + i * 1.6 + s * 0.3) * 10) / 10) })),
           focus: 0,
         },
         takeaways: times(b.takeaways.max, (i) => f(b.takeaways.item.max, i + 1)),

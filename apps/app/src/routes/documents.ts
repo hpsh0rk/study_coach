@@ -1,7 +1,7 @@
 import { and, count, desc, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
-import { ChapterNode, newId, PageText } from "@kj/schema";
+import { ChapterNode, countWords, newId, PageText } from "@kj/schema";
 import { chapters, documents, pages } from "../db/schema.ts";
 import type { AppBindings } from "../env.ts";
 import { HttpError, parseJson } from "../http.ts";
@@ -50,7 +50,10 @@ export const documentRoutes = new Hono<AppBindings>()
     if (body.pages.some((p) => p.no > doc.pageCount)) throw new HttpError(400, "VALIDATION", "Page number beyond the document");
     const d = db(c.env);
     await d.batch(
-      body.pages.map((p) => d.insert(pages).values({ documentId: doc.id, no: p.no, text: p.text, label: p.label ?? null }).onConflictDoUpdate({ target: [pages.documentId, pages.no], set: { text: p.text, label: p.label ?? null } })) as [any, ...any[]],
+      body.pages.map((p) => {
+        const row = { text: p.text, label: p.label ?? null, words: countWords(p.text) };
+        return d.insert(pages).values({ documentId: doc.id, no: p.no, ...row }).onConflictDoUpdate({ target: [pages.documentId, pages.no], set: row });
+      }) as [any, ...any[]],
     );
     const received = (await d.select({ n: count() }).from(pages).where(eq(pages.documentId, doc.id)))[0]!.n;
     await d.update(documents).set({ pagesReceived: received }).where(eq(documents.id, doc.id));
@@ -59,7 +62,10 @@ export const documentRoutes = new Hono<AppBindings>()
   .get("/:id", async (c) => {
     const doc = await ownedDocument(c.env, c.get("user"), c.req.param("id"));
     const tree = await db(c.env).select().from(chapters).where(eq(chapters.documentId, doc.id)).orderBy(chapters.ord);
-    return c.json({ document: doc, chapters: tree.map(({ documentId: _d, ...ch }) => ch), pageLabels: await pageLabels(c.env, doc.id) });
+    const words = await db(c.env).select({ no: pages.no, words: pages.words }).from(pages).where(eq(pages.documentId, doc.id));
+    const pageWords = new Array<number>(doc.pageCount).fill(0);
+    for (const w of words) pageWords[w.no - 1] = w.words;
+    return c.json({ document: doc, chapters: tree.map(({ documentId: _d, ...ch }) => ch), pageLabels: await pageLabels(c.env, doc.id), pageWords });
   })
   .get("/:id/pages/:no", async (c) => {
     const doc = await ownedDocument(c.env, c.get("user"), c.req.param("id"));

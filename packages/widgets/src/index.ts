@@ -121,6 +121,11 @@ function axisCommon(p: Palette, name: string) {
   };
 }
 
+function barLabel(v: unknown): string {
+  const n = Array.isArray(v) ? Number(v[1]) : Number(v);
+  return Number.isFinite(n) ? String(Number(n.toPrecision(3))) : "";
+}
+
 /** ECharts option for a ChartSpec (pure data; rendering lives in ./render). */
 export function chartOption(spec: ChartSpec, p: Palette): Record<string, unknown> {
   const numericX = spec.type === "scatter" || spec.series.every((s) => s.data.every((d) => Array.isArray(d)));
@@ -139,7 +144,10 @@ export function chartOption(spec: ChartSpec, p: Palette): Record<string, unknown
       symbolSize: spec.type === "scatter" ? 22 : 12,
       lineStyle: { width: 6 },
       itemStyle: { color: color(i) },
-      label: spec.type === "bar" ? { show: true, position: "top", fontSize: LABEL_PX * 0.8, color: p.text } : undefined,
+      label:
+        spec.type === "bar" && (spec.focus === undefined ? spec.series.length === 1 : spec.focus === i)
+          ? { show: true, position: "top", fontSize: LABEL_PX * 0.8, color: p.text, formatter: (l: { value: unknown }) => barLabel(l.value) }
+          : undefined,
     })),
   };
 }

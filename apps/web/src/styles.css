@@ -1030,3 +1030,71 @@ label {
     grid-template-columns: 1fr;
   }
 }
+
+/* ---- slot editor / outline extras ---- */
+.slot-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 70vh;
+  overflow: auto;
+  padding-right: 4px;
+}
+.slot-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.slot-field.inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+.slot-field textarea,
+.slot-field input {
+  font: inherit;
+  font-size: 14px;
+  color: var(--text);
+  resize: vertical;
+}
+.slot-json {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+.slot-json.invalid {
+  border-color: var(--err);
+}
+.slot-group {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.slot-group legend {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 0 4px;
+}
+.slot-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 6px;
+  border-bottom: 1px dashed var(--line);
+}
+.slot-item > .btn {
+  align-self: flex-end;
+}
+.not-covered {
+  margin-top: 10px;
+}
+.glossary {
+  margin: 8px 0 0;
+}
+.range-preview {
+  margin: 6px 0 0;
+}

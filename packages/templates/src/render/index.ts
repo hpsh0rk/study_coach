@@ -17,6 +17,8 @@ export interface RenderOptions {
   index?: number;
   total?: number;
   onSourceClick?: (page: number) => void;
+  /** Printed page labels by page index, for the source chips. */
+  pageLabels?: Record<number, string>;
 }
 
 export interface RenderedSlide {
@@ -151,11 +153,12 @@ const RENDERERS: { [L in SlideContent["layout"]]: (b: Builder, c: ContentOf<L>) 
     node("span", "kj-phase-tag", oh).textContent = "② Observe 观察";
     const ul = node("ul", "kj-list kj-list-sm", observe);
     for (const o of c.observe) text("li", "", o, ul);
-    const explain = step(slot("explain", left, "kj-fit"), 2);
+    const right = node("div", "kj-col", body);
+    widget(b, step(slot("sim", right, "kj-grow"), 1), c.sim);
+    const explain = step(slot("explain", right, "kj-fit"), 2);
     const eh = node("div", "kj-phase", explain);
     node("span", "kj-phase-tag", eh).textContent = "③ Explain 解释";
     text("div", "kj-explain", c.explain, explain);
-    widget(b, step(slot("sim", body), 1), c.sim);
   },
 
   quiz(b, c) {
@@ -231,7 +234,7 @@ export function renderSlide(slide: Pick<Slide, "content" | "sources">, opts: Ren
     for (const p of slide.sources) {
       const chip = node("button", "kj-source", src);
       chip.type = "button";
-      chip.textContent = `p.${p}`;
+      chip.textContent = `p.${opts.pageLabels?.[p] ?? p}`;
       chip.dataset.page = String(p);
       if (opts.onSourceClick) {
         chip.addEventListener("click", (e) => {
@@ -257,7 +260,14 @@ export function applyStep(root: HTMLElement, k: number): void {
 }
 
 function overflows(n: HTMLElement): boolean {
-  return n.scrollHeight > n.clientHeight + 1 || n.scrollWidth > n.clientWidth + 1;
+  if (n.scrollHeight > n.clientHeight + 1 || n.scrollWidth > n.clientWidth + 1) return true;
+  // Bottom-aligned content (titles) spills upwards, which scrollHeight does not report.
+  const box = n.getBoundingClientRect();
+  const scale = box.height / (n.offsetHeight || 1) || 1;
+  return [...n.children].some((c) => {
+    const r = c.getBoundingClientRect();
+    return r.height > 0 && r.top < box.top - scale;
+  });
 }
 
 /** Bounded font step-down (56px → 48px body, 72px → 60px title) for slots that overflow. */
@@ -268,7 +278,7 @@ export function fitSlide(root: HTMLElement): void {
     let scale = 1;
     while (overflows(s) && scale > min + 1e-6) {
       scale = Math.max(min, scale - 0.025);
-      s.style.setProperty("--kj-scale", scale.toFixed(3));
+      s.style.setProperty("--kj-scale", (Math.ceil(scale * 1000) / 1000).toFixed(3));
     }
   });
 }
@@ -285,7 +295,7 @@ export function measureOverflow(root: HTMLElement): string[] {
 /** Smallest computed font size of body text inside fitted slots (for T-02 checks). */
 export function minBodyFontPx(root: HTMLElement): number {
   let min = Infinity;
-  root.querySelectorAll<HTMLElement>(".kj-slot li, .kj-slot p, .kj-problem, .kj-explain, .kj-option-text, .kj-qa-q, .kj-node-detail, .kj-phase-text, .kj-step-text").forEach((n) => {
+  root.querySelectorAll<HTMLElement>(".kj-slot li, .kj-slot p, .kj-problem, .kj-explain, .kj-option-text, .kj-qa-q, .kj-node-detail, .kj-phase-text, .kj-step-text, .kj-step-why, .kj-chip, .kj-flow-step, .kj-term").forEach((n) => {
     min = Math.min(min, parseFloat(getComputedStyle(n).fontSize));
   });
   return min;

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
 import { countPages } from "@kj/pdf-structure";
-import { LANGUAGE_LABEL, LESSON_TYPE_LABEL, LEVEL_LABEL, planBudget } from "@kj/pedagogy";
+import { LANGUAGE_LABEL, LESSON_TYPE_LABEL, LEVEL_LABEL, planBudget, scopeAdvice, type ScopeAdvice } from "@kj/pedagogy";
 import type { LessonParams, ThemeId } from "@kj/schema";
 import { THEMES } from "@kj/templates/render";
 import { ApiError } from "../../api.ts";
@@ -10,12 +10,12 @@ import { Stepper, StepIntro, type StepKey } from "./Stepper.tsx";
 
 const MINUTE_CHOICES = [30, 35, 40, 45, 60, 80, 90];
 
-/** How much textbook each minute has to cover; drives the density hint before any model call. */
-export function pacing(minutes: number, pages: number): { perPage: number; level: "dense" | "ok" | "light"; text: string } {
-  const perPage = pages ? minutes / pages : 0;
-  if (perPage < 2) return { perPage, level: "dense", text: "内容偏多：每页教材不到 2 分钟，建议少选几页或延长课时 · Dense: consider fewer pages or a longer lesson" };
-  if (perPage > 10) return { perPage, level: "light", text: "内容偏少：课时会有大量练习时间，可以多选几页 · Light: you could add pages" };
-  return { perPage, level: "ok", text: "内容量合适 · Good fit" };
+/** Selection size vs lesson length (words-based estimate); drives the hint before any model call. */
+export function pacing(minutes: number, words: number): ScopeAdvice & { level: "dense" | "ok" | "light"; text: string } {
+  const a = scopeAdvice(words, minutes);
+  if (a.tooMuch) return { ...a, level: "dense", text: `内容偏多：约需 ${a.lessons} 节课，建议拆成 ${a.lessons} 课时或少选几节 · Too much for one lesson: split it` };
+  if (a.estimatedMinutes < minutes * 0.5) return { ...a, level: "light", text: "内容偏少：课时会有大量练习时间，可以多选几页 · Light: you could add pages" };
+  return { ...a, level: "ok", text: "内容量合适 · Good fit" };
 }
 
 export function SettingsStep({ view, reached }: { view: LessonView; reached: StepKey }) {
@@ -26,7 +26,9 @@ export function SettingsStep({ view, reached }: { view: LessonView; reached: Ste
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const pages = countPages(view.lesson.scope.ranges);
-  const p = pacing(params.minutes, pages);
+  const p = pacing(params.minutes, view.lesson.scopeWords);
+  const v = view.version;
+  const stale = !!v && (JSON.stringify(v.params) !== JSON.stringify(params) || JSON.stringify(v.scope.ranges) !== JSON.stringify(view.lesson.scope.ranges));
   const budget = planBudget(params);
   const set = <K extends keyof LessonParams>(k: K, v: LessonParams[K]) => setParams({ ...params, [k]: v });
 
@@ -118,14 +120,12 @@ export function SettingsStep({ view, reached }: { view: LessonView; reached: Ste
               <span>教材页 pages</span>
             </div>
             <div>
-              <b>{p.perPage.toFixed(1)}</b>
-              <span>分钟/页 min per page</span>
+              <b>{p.estimatedMinutes}</b>
+              <span>约需分钟 min needed</span>
             </div>
             <div>
-              <b>
-                {budget.slideRange[0]}–{budget.slideRange[1]}
-              </b>
-              <span>预计幻灯片 slides</span>
+              <b>{params.minutes}</b>
+              <span>课时 lesson min</span>
             </div>
           </div>
           <div className={`density-bar ${p.level}`}>
@@ -136,6 +136,11 @@ export function SettingsStep({ view, reached }: { view: LessonView; reached: Ste
           </p>
         </aside>
       </div>
+      {stale && (
+        <div className="alert warn" data-testid="stale-outline">
+          课时设置或教材范围改了：现有大纲仍按创建时的设置，点“重新生成大纲”才会按新设置来 · The current outline keeps the settings it was drafted with; re-draft to apply changes.
+        </div>
+      )}
       {error && <div className="alert error">{error}</div>}
       <div className="wizard-actions">
         <button className="btn ghost" onClick={() => nav(`/lessons/${view.lesson.id}/chapters`)}>

@@ -3,6 +3,7 @@ import { useNavigate } from "react-router";
 import { PAGE_TYPES } from "@kj/pedagogy";
 import type { Slide, SlideSpec } from "@kj/schema";
 import { ApiError } from "../../api.ts";
+import { SlotEditor } from "../../components/SlotEditor.tsx";
 import { SlidePreview, SlideThumb } from "../../components/SlideView.tsx";
 import { documentApi, lessonApi, type LessonView } from "../../lessonApi.ts";
 import { Stepper, StepIntro, type StepKey } from "./Stepper.tsx";
@@ -18,17 +19,19 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
   const [failed, setFailed] = useState<Record<string, string>>({});
   const [selected, setSelected] = useState<string | null>(specs[0]?.id ?? null);
   const [shareUrl, setShareUrl] = useState<string | null>(null);
-  const [source, setSource] = useState<{ no: number; text: string } | null>(null);
+  const [source, setSource] = useState<{ no: number; text: string; label: string | null } | null>(null);
+  const [editing, setEditing] = useState(false);
   const stop = useRef(false);
   const theme = view.lesson.theme;
 
+  const labels = view.pageLabels;
   const generateOne = useCallback(
-    async (specId: string) => {
+    async (specId: string, regenerate = false) => {
       if (!confirmed) return;
       setRunning((r) => new Set(r).add(specId));
       setFailed(({ [specId]: _drop, ...rest }) => rest);
       try {
-        const { slide } = await lessonApi.generate(view.lesson.id, confirmed.id, specId);
+        const { slide } = await lessonApi.generate(view.lesson.id, confirmed.id, specId, regenerate);
         setSlides((m) => ({ ...m, [specId]: slide }));
       } catch (e) {
         setFailed((f) => ({ ...f, [specId]: e instanceof ApiError ? e.message : (e as Error).message }));
@@ -45,14 +48,19 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
 
   async function generateAll() {
     stop.current = false;
-    const todo = specs.filter((s) => !slides[s.id]).map((s) => s.id);
-    let next = 0;
-    await Promise.all(
-      Array.from({ length: CONCURRENCY }, async () => {
-        while (next < todo.length && !stop.current) await generateOne(todo[next++]!);
-      }),
-    );
+    const missing = specs.filter((s) => !slides[s.id]);
+    // Worked examples first, so faded and practice pages can mirror their problem.
+    for (const todo of [missing.filter((s) => s.pageType === "worked"), missing.filter((s) => s.pageType !== "worked")].map((l) => l.map((s) => s.id))) {
+      let next = 0;
+      await Promise.all(
+        Array.from({ length: CONCURRENCY }, async () => {
+          while (next < todo.length && !stop.current) await generateOne(todo[next++]!);
+        }),
+      );
+    }
   }
+
+  const replaceSlide = (slide: Slide) => setSlides((m) => ({ ...m, [slide.specId]: slide }));
 
   const openSource = useCallback(async (no: number) => setSource(await documentApi.page(view.lesson.documentId, no)), [view.lesson.documentId]);
 
@@ -135,9 +143,17 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
           {specs.map((s, i) => {
             const slide = slides[s.id];
             return (
-              <li key={s.id} className={`thumb-card ${selected === s.id ? "selected" : ""}`} onClick={() => setSelected(s.id)} data-testid="thumb">
+              <li
+                key={s.id}
+                className={`thumb-card ${selected === s.id ? "selected" : ""}`}
+                onClick={() => {
+                  setSelected(s.id);
+                  setEditing(false);
+                }}
+                data-testid="thumb"
+              >
                 {slide ? (
-                  <SlideThumb slide={slide} theme={theme} index={i} />
+                  <SlideThumb slide={slide} theme={theme} index={i} pageLabels={labels} />
                 ) : (
                   <div className="thumb-empty">
                     {running.has(s.id) ? <span className="spinner" /> : failed[s.id] ? "⚠ 失败 failed" : "未生成 not yet"}
@@ -159,13 +175,36 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
               <b>
                 {specs.indexOf(sel) + 1}. {sel.title}
               </b>
-              <button className="btn small ghost" disabled={running.has(sel.id)} onClick={() => generateOne(sel.id)}>
-                {slides[sel.id] ? "重新生成 Regenerate" : "生成这一页 Generate"}
-              </button>
+              <div className="row">
+                {selSlide && !editing && (
+                  <button className="btn small ghost" onClick={() => setEditing(true)} data-testid="edit-slide">
+                    编辑 Edit
+                  </button>
+                )}
+                {selSlide?.canUndo && !editing && (
+                  <button className="btn small ghost" onClick={async () => replaceSlide((await lessonApi.undoSlide(view.lesson.id, selSlide.id)).slide)} data-testid="undo-slide">
+                    撤销 Undo
+                  </button>
+                )}
+                <button className="btn small ghost" disabled={running.has(sel.id) || editing} onClick={() => generateOne(sel.id, !!selSlide)} data-testid="regenerate">
+                  {selSlide ? "重新生成 Regenerate" : "生成这一页 Generate"}
+                </button>
+              </div>
             </div>
-            {selSlide ? (
+            {selSlide && editing ? (
+              <SlotEditor
+                key={selSlide.id}
+                content={selSlide.content}
+                notes={selSlide.notes}
+                onCancel={() => setEditing(false)}
+                onSave={async (content, notes) => {
+                  replaceSlide((await lessonApi.editSlide(view.lesson.id, selSlide.id, { content, notes })).slide);
+                  setEditing(false);
+                }}
+              />
+            ) : selSlide ? (
               <>
-                <SlidePreview slide={selSlide} theme={theme} onSourceClick={openSource} />
+                <SlidePreview slide={selSlide} theme={theme} onSourceClick={openSource} pageLabels={labels} />
                 <h3>讲稿 Speaker notes</h3>
                 <p className="notes">{selSlide.notes || "—"}</p>
                 {selSlide.warnings.length > 0 && (
@@ -189,7 +228,7 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
         <div className="modal" onClick={() => setSource(null)}>
           <div className="modal-card card" onClick={(e) => e.stopPropagation()}>
             <div className="row between">
-              <h2>教材第 {source.no} 页 · Source page</h2>
+              <h2>教材第 {source.label ?? source.no} 页 · Source page</h2>
               <button className="btn small ghost" onClick={() => setSource(null)}>
                 关闭 Close
               </button>

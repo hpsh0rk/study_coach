@@ -25,6 +25,7 @@ import {
   ownedLesson,
   pageLabels,
   scopePages,
+  scopeWords,
   slideFromRow,
   slidesOf,
   specHash,
@@ -110,10 +111,11 @@ async function insertVersion(env: Env, lesson: LessonRow, outline: Outline): Pro
 }
 
 async function lessonView(env: Env, lesson: LessonRow) {
-  const [latest, confirmed, labels] = await Promise.all([latestVersion(env, lesson.id), latestConfirmed(env, lesson.id), pageLabels(env, lesson.documentId)]);
+  const scope = lessonScope(lesson);
+  const [latest, confirmed, labels, words] = await Promise.all([latestVersion(env, lesson.id), latestConfirmed(env, lesson.id), pageLabels(env, lesson.documentId), scopeWords(env, lesson.documentId, scope)]);
   const share = (await db(env).select({ id: shareLinks.id }).from(shareLinks).where(and(eq(shareLinks.lessonId, lesson.id), isNull(shareLinks.revokedAt))).limit(1))[0];
   return {
-    lesson: { id: lesson.id, title: lesson.title, documentId: lesson.documentId, theme: lesson.theme, params: lessonParams(lesson), scope: lessonScope(lesson), createdAt: lesson.createdAt, updatedAt: lesson.updatedAt },
+    lesson: { id: lesson.id, title: lesson.title, documentId: lesson.documentId, theme: lesson.theme, params: lessonParams(lesson), scope, scopeWords: words, createdAt: lesson.createdAt, updatedAt: lesson.updatedAt },
     version: latest ? versionView(latest) : null,
     confirmedVersionId: confirmed?.id ?? null,
     slides: confirmed ? await slidesOf(env, confirmed) : [],

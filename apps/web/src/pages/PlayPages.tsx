@@ -6,25 +6,37 @@ import { api } from "../api.ts";
 import { badgeOf } from "../components/SlideView.tsx";
 import { documentApi, lessonApi } from "../lessonApi.ts";
 
-function PlayerHost({ slides, theme, showNotes, onSource }: { slides: PlayerSlide[]; theme: ThemeId; showNotes: boolean; onSource?: (page: number) => void }) {
+function PlayerHost({
+  slides,
+  theme,
+  showNotes,
+  onSource,
+  pageLabels,
+}: {
+  slides: PlayerSlide[];
+  theme: ThemeId;
+  showNotes: boolean;
+  onSource?: (page: number) => void;
+  pageLabels?: Record<number, string>;
+}) {
   const host = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!host.current || !slides.length) return;
-    const p = new Player(host.current, { slides, theme, showNotes, badge: (s) => badgeOf(s.pageType), onSourceClick: onSource });
+    const p = new Player(host.current, { slides, theme, showNotes, badge: (s) => badgeOf(s.pageType), onSourceClick: onSource, pageLabels });
     return () => p.dispose();
-  }, [slides, theme, showNotes, onSource]);
+  }, [slides, theme, showNotes, onSource, pageLabels]);
   return <div ref={host} className="player-host" data-testid="player" />;
 }
 
 export function PlayPage() {
   const { id = "" } = useParams();
-  const [data, setData] = useState<{ slides: PlayerSlide[]; theme: ThemeId; documentId: string } | null>(null);
+  const [data, setData] = useState<{ slides: PlayerSlide[]; theme: ThemeId; documentId: string; pageLabels: Record<number, string> } | null>(null);
   const [error, setError] = useState("");
-  const [source, setSource] = useState<{ no: number; text: string } | null>(null);
+  const [source, setSource] = useState<{ no: number; text: string; label: string | null } | null>(null);
   useEffect(() => {
     lessonApi
       .get(id)
-      .then((v) => setData({ slides: v.slides, theme: v.lesson.theme, documentId: v.lesson.documentId }))
+      .then((v) => setData({ slides: v.slides, theme: v.lesson.theme, documentId: v.lesson.documentId, pageLabels: v.pageLabels }))
       .catch((e) => setError((e as Error).message));
   }, [id]);
   const docId = useRef<string | null>(null);
@@ -47,12 +59,12 @@ export function PlayPage() {
       <Link to={`/lessons/${id}/slides`} className="play-exit">
         ← 退出放映 Exit
       </Link>
-      <PlayerHost slides={data.slides} theme={data.theme} showNotes onSource={stableSource} />
+      <PlayerHost slides={data.slides} theme={data.theme} showNotes onSource={stableSource} pageLabels={data.pageLabels} />
       {source && (
         <div className="modal" onClick={() => setSource(null)}>
           <div className="modal-card card" onClick={(e) => e.stopPropagation()}>
             <div className="row between">
-              <h2>教材第 {source.no} 页 · Source page</h2>
+              <h2>教材第 {source.label ?? source.no} 页 · Source page</h2>
               <button className="btn small ghost" onClick={() => setSource(null)}>
                 关闭 Close
               </button>
@@ -67,18 +79,18 @@ export function PlayPage() {
 
 export function SharePage() {
   const { token = "" } = useParams();
-  const [data, setData] = useState<{ slides: PlayerSlide[]; theme: ThemeId; title: string } | null>(null);
+  const [data, setData] = useState<{ slides: PlayerSlide[]; theme: ThemeId; title: string; pageLabels: Record<number, string> } | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
-    api<{ lesson: { title: string; theme: ThemeId }; slides: PlayerSlide[] }>(`/api/share/${token}`)
-      .then((r) => setData({ slides: r.slides, theme: r.lesson.theme, title: r.lesson.title }))
+    api<{ lesson: { title: string; theme: ThemeId; pageLabels: Record<number, string> }; slides: PlayerSlide[] }>(`/api/share/${token}`)
+      .then((r) => setData({ slides: r.slides, theme: r.lesson.theme, title: r.lesson.title, pageLabels: r.lesson.pageLabels }))
       .catch((e) => setError((e as Error).message));
   }, [token]);
   if (error) return <div className="card narrow">{error}</div>;
   if (!data) return <div className="page-loading dark">Loading… 加载中</div>;
   return (
     <div className="play-page">
-      <PlayerHost slides={data.slides} theme={data.theme} showNotes={false} />
+      <PlayerHost slides={data.slides} theme={data.theme} showNotes={false} pageLabels={data.pageLabels} />
     </div>
   );
 }

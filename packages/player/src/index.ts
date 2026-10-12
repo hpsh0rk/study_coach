@@ -16,6 +16,7 @@ export interface PlayerOptions {
   badge?(slide: PlayerSlide): string;
   onChange?(pos: Position): void;
   onSourceClick?(page: number): void;
+  pageLabels?: Record<number, string>;
 }
 
 function fontsReady(): Promise<unknown> {
@@ -42,11 +43,11 @@ function scaleInto(container: HTMLElement, inner: HTMLElement): ResizeObserver {
 }
 
 /** Static, fully revealed thumbnail. Returns a disposer. */
-export function renderThumb(container: HTMLElement, slide: Pick<Slide, "content" | "sources">, theme: ThemeId, opts: { badge?: string; index?: number } = {}): () => void {
+export function renderThumb(container: HTMLElement, slide: Pick<Slide, "content" | "sources">, theme: ThemeId, opts: { badge?: string; index?: number; pageLabels?: Record<number, string> } = {}): () => void {
   container.replaceChildren();
   container.classList.add("kj-thumb");
   const wrap = el("div", "kj-thumb-inner", container);
-  const r = renderSlide(slide, { theme, interactive: false, badge: opts.badge, index: opts.index });
+  const r = renderSlide(slide, { theme, interactive: false, badge: opts.badge, index: opts.index, pageLabels: opts.pageLabels });
   wrap.append(r.el);
   applyStep(r.el, r.steps);
   const obs = scaleInto(container, wrap);
@@ -177,6 +178,7 @@ export class Player {
       index: this.pos.index,
       total: this.opts.slides.length,
       onSourceClick: this.opts.onSourceClick,
+      pageLabels: this.opts.pageLabels,
     });
     this.stage.append(this.current.el);
     const root = this.current.el;

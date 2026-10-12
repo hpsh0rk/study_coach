@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
 import { pagesInRanges } from "@kj/pdf-structure";
 import { LessonParams, LessonScope, newId, Outline, sha256Hex, SlideContent, type PageText, type Slide, type SlideSpec } from "@kj/schema";
 import { db } from "./auth/session.ts";
@@ -65,6 +65,16 @@ export async function scopePages(env: Env, documentId: string, scope: LessonScop
     out.push(...rows.map((r) => ({ no: r.no, text: r.text, ...(r.label ? { label: r.label } : {}) })));
   }
   return out;
+}
+
+/** Word count of a scope (for the "this needs about N minutes" estimate). */
+export async function scopeWords(env: Env, documentId: string, scope: LessonScope): Promise<number> {
+  const inRanges = or(...scope.ranges.map((r) => and(gte(pages.no, r.start), lte(pages.no, r.end))));
+  const row = await db(env)
+    .select({ n: sql<number>`COALESCE(SUM(${pages.words}), 0)` })
+    .from(pages)
+    .where(and(eq(pages.documentId, documentId), inRanges));
+  return row[0]?.n ?? 0;
 }
 
 /** Printed page labels of a document (only pages whose label differs from the index). */

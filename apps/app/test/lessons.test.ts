@@ -52,6 +52,8 @@ describe("documents", () => {
     expect((await other.req("GET", `/api/documents/${docId}`)).status).toBe(404);
     const mine = await teacher.req("GET", `/api/documents/${docId}`);
     expect(mine.json.chapters).toHaveLength(3);
+    expect(mine.json.pageWords).toHaveLength(8);
+    expect(mine.json.pageWords[0]).toBeGreaterThan(10);
     expect((await teacher.req("GET", `/api/documents/${docId}/pages/2`)).json.text).toContain("v = f λ");
   });
 });

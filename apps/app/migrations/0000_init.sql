@@ -135,6 +135,7 @@ CREATE TABLE `pages` (
 	`no` integer NOT NULL,
 	`text` text NOT NULL,
 	`label` text,
+	`words` integer DEFAULT 0 NOT NULL,
 	PRIMARY KEY(`document_id`, `no`),
 	FOREIGN KEY (`document_id`) REFERENCES `documents`(`id`) ON UPDATE no action ON DELETE cascade
 );
