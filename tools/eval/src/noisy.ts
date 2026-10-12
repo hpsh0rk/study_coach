@@ -119,6 +119,8 @@ function listOf(c: SlideContent): ListRef | null {
       return { items: () => c.options.map((o) => o.text), set: (i, s) => (c.options[i]!.text = s), add: (s) => c.options.push({ text: s, misconception: "" }), max: B.quiz.options.max, itemMax: B.quiz.options.item.max };
     case "questions":
       return { items: () => c.items.map((x) => x.q), set: (i, s) => (c.items[i]!.q = s), add: (s) => c.items.push({ q: s, a: "See notes" }), max: B.questions.items.max, itemMax: B.questions.items.item.max };
+    case "order":
+      return { items: () => c.items.map((x) => x.text), set: (i, s) => (c.items[i]!.text = s), add: (s) => c.items.push({ text: s, match: c.mode === "match" ? "See notes" : "" }), max: B.order.items.max, itemMax: B.order.items.item.max };
     case "summary":
       return { items: () => c.nodes.map((n) => n.head), set: (i, s) => (c.nodes[i]!.head = s), add: (s) => c.nodes.push({ head: s, detail: "" }), max: B.summary.nodes.max, itemMax: B.summary.nodes.item.max };
   }

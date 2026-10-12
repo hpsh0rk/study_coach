@@ -47,6 +47,8 @@ export const ExperimentContent = z.object({
   sim: ExperimentSim,
   observe: z.array(text.min(1)),
   explain: text.min(1),
+  /** The prediction the simulation bears out; highlighted next to the class tally at the explain step. */
+  outcome: z.number().int().min(0).optional(),
 });
 
 export const QuizContent = z.object({
@@ -55,6 +57,16 @@ export const QuizContent = z.object({
   options: z.array(z.object({ text: text.min(1), misconception: text.default("") })),
   answer: z.number().int().min(0),
   explain: text.min(1),
+  /** Hinge question: the class votes first; the teacher's tally is revealed before the answer. */
+  poll: z.boolean().optional(),
+});
+
+/** Put items in order (`order`: listed in the right order) or match each item to its `match` (`match`). Shown shuffled. */
+export const OrderContent = z.object({
+  layout: z.literal("order"),
+  title: text.min(1),
+  mode: z.enum(["order", "match"]).default("order"),
+  items: z.array(z.object({ text: text.min(1), match: text.default("") })),
 });
 
 export const QuestionsContent = z.object({
@@ -77,6 +89,7 @@ export const SlideContent = z.discriminatedUnion("layout", [
   ExperimentContent,
   QuizContent,
   QuestionsContent,
+  OrderContent,
   SummaryContent,
 ]);
 export type SlideContent = z.infer<typeof SlideContent>;

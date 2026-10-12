@@ -1,5 +1,5 @@
 import type { Violation, Timing } from "@kj/pedagogy";
-import type { ChapterNode, LessonParams, LessonScope, Outline, PageRange, Slide, ThemeId } from "@kj/schema";
+import type { ChapterNode, LessonParams, LessonScope, Outline, PageRange, Slide, ThemeId, UnitRef } from "@kj/schema";
 import { api } from "./api.ts";
 
 export interface DocumentRow {
@@ -72,6 +72,8 @@ export interface LessonListItem {
   title: string;
   updatedAt: number;
   params: LessonParams;
+  /** Set when the lesson was planned as part of a unit (整单元规划). */
+  unit: UnitRef | null;
   status: "scoped" | "outline" | "confirmed" | "slides";
   slides: number;
   planned: number;
@@ -92,6 +94,9 @@ export const lessonApi = {
     api<{ slide: Slide; reused: boolean }>(`/api/lessons/${id}/outline-versions/${vid}/slides/${specId}/generate`, { body: { regenerate } }),
   editSlide: (id: string, slideId: string, body: { content?: unknown; notes?: string }) => api<{ slide: Slide }>(`/api/lessons/${id}/slides/${slideId}`, { method: "PATCH", body }),
   undoSlide: (id: string, slideId: string) => api<{ slide: Slide }>(`/api/lessons/${id}/slides/${slideId}/undo`, { method: "POST" }),
+  duplicate: (id: string, title?: string) => api<LessonView>(`/api/lessons/${id}/duplicate`, { body: title ? { title } : {} }),
+  planUnit: (body: { documentId: string; chapterIds: string[]; ranges: PageRange[]; count?: number; lessonId?: string; params?: LessonParams; title?: string }) =>
+    api<{ unit: { id: string; title: string; count: number }; lessons: { id: string; title: string; ranges: PageRange[]; estimatedMinutes: number }[] }>("/api/lessons/unit", { body }),
   deck: (id: string) => api<Record<string, unknown>>(`/api/lessons/${id}/deck`),
   share: (id: string, body: { versionId?: string; ack?: boolean } = {}) => api<ShareView>(`/api/lessons/${id}/share`, { body }),
   unshare: (id: string) => api(`/api/lessons/${id}/share`, { method: "DELETE" }),

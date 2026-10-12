@@ -12,7 +12,7 @@ import { neutralizeSource, SOURCE_RULE } from "./safety.ts";
 import { simFor } from "./sims.ts";
 import type { DraftInput } from "./types.ts";
 
-export const OUTLINE_PROMPT_VERSION = "outline.draft@5";
+export const OUTLINE_PROMPT_VERSION = "outline.draft@6";
 export { OUTLINE_SOURCE_CHARS };
 
 export interface DraftResult {
@@ -82,7 +82,8 @@ export function buildMessages(input: DraftInput, problems?: Violation[]) {
     o.phases
       ? "- Skeleton: cover → retrieval (3–5 recap questions on prior knowledge the lesson builds on, not on today's new content) → 2–3 learning loops (each: explanation pages, then student activity) → summary → exit ticket."
       : "- Order the slides from cover to exit ticket.",
-    "- Never more than 10 minutes of consecutive lecture pages (concept/process/data/worked/summary) without a check, practice, faded or experiment page.",
+    "- Never more than 10 minutes of consecutive lecture pages (concept/process/data/worked/summary) without a check, practice, faded, sequence or experiment page.",
+    "- A sequence page (cards students put in order or match) suits a process, cycle or set of term–definition pairs; at most one per loop.",
     "- A worked example is followed by a faded example or practice built on the same problem with new numbers.",
     sim
       ? `- At most one experiment page, using the simulation "${sim.title.en}" (predict–observe–explain).`
@@ -119,7 +120,7 @@ export function buildMessages(input: DraftInput, problems?: Violation[]) {
 
 const roundHalf = (n: number) => Math.max(0.5, Math.round(n * 2) / 2);
 
-export interface NormalizeContext {
+interface NormalizeContext {
   validPages: number[];
   /** Experiment pages become practice pages when no catalog simulation fits. */
   simAvailable: boolean;

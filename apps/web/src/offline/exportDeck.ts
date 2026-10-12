@@ -24,7 +24,7 @@ function base64(buf: ArrayBuffer): string {
 }
 
 /** "U+4E00-9FFF, U+20" → [[0x4e00, 0x9fff], [0x20, 0x20]] */
-export function parseUnicodeRange(range: string): [number, number][] {
+function parseUnicodeRange(range: string): [number, number][] {
   return range
     .split(",")
     .map((r) => r.trim().replace(/^U\+/i, ""))
@@ -42,7 +42,7 @@ const unquote = (s: string) => s.trim().replace(/^["']|["']$/g, "");
  * Subsets fonts the way the app serves them: of every @font-face loaded on this page, keeps only
  * the unicode-range chunks that contain a character of the deck, and inlines them as data URLs.
  */
-export async function inlineFontFaces(chars: Set<number>, math: boolean): Promise<{ css: string; files: number; bytes: number }> {
+async function inlineFontFaces(chars: Set<number>, math: boolean): Promise<{ css: string; files: number; bytes: number }> {
   const picked: { rule: CSSFontFaceRule; url: string }[] = [];
   for (const sheet of Array.from(document.styleSheets)) {
     let rules: CSSRuleList;
@@ -96,14 +96,14 @@ function simIds(slides: Slide[]): string[] {
 
 const escapeHtml = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
 
-export interface OfflineFile {
+interface OfflineFile {
   html: string;
   filename: string;
   fontFiles: number;
 }
 
 /** One self-contained HTML file: deck + player runtime + catalog sims + the font chunks it needs. No network at all when opened. */
-export async function buildOfflineHtml(lessonId: string): Promise<OfflineFile> {
+async function buildOfflineHtml(lessonId: string): Promise<OfflineFile> {
   const deck = (await lessonApi.deck(lessonId)) as unknown as { lesson: { title: string; theme: ThemeId; pageLabels: Record<number, string> }; slides: Slide[] };
   const [js, css] = await Promise.all([text("/offline/runtime.js"), text("/offline/runtime.css")]);
   const sims: Record<string, string> = {};

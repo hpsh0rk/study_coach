@@ -1,10 +1,10 @@
 import { z } from "zod";
 
-export const PAGE_TYPE_IDS = ["cover", "retrieval", "concept", "process", "data", "worked", "faded", "practice", "experiment", "check", "summary", "exit"] as const;
+export const PAGE_TYPE_IDS = ["cover", "retrieval", "concept", "process", "data", "worked", "faded", "practice", "sequence", "experiment", "check", "summary", "exit"] as const;
 export const PageType = z.enum(PAGE_TYPE_IDS);
 export type PageType = z.infer<typeof PageType>;
 
-export const LAYOUT_IDS = ["title", "statement", "chart", "steps", "experiment", "quiz", "questions", "summary"] as const;
+export const LAYOUT_IDS = ["title", "statement", "chart", "steps", "experiment", "quiz", "questions", "order", "summary"] as const;
 export const LayoutId = z.enum(LAYOUT_IDS);
 export type LayoutId = z.infer<typeof LayoutId>;
 

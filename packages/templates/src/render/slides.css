@@ -599,7 +599,8 @@
   border-color: var(--kj-bad);
 }
 .kj-answered .kj-option[data-correct="true"],
-.kj-slide[data-step-now="1"] .kj-option[data-correct="true"] {
+.kj-slide:not(.kj-poll)[data-step-now="1"] .kj-option[data-correct="true"],
+.kj-slide.kj-poll[data-step-now="2"] .kj-option[data-correct="true"] {
   border-color: var(--kj-good);
   box-shadow: 0 0 0 4px var(--kj-good) inset;
 }
@@ -612,6 +613,144 @@
   border-radius: 20px;
   padding: 14px 28px;
   border-left: 10px solid var(--kj-good);
+}
+
+/* ---- class tally (poll quiz, experiment predictions): absolutely placed, so it never changes the layout ---- */
+.kj-tallied {
+  position: relative;
+}
+.kj-option.kj-tallied {
+  padding-right: 200px;
+}
+.kj-chip.kj-tallied {
+  padding-right: 90px;
+}
+.kj-tally {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.kj-tally-bar {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 12px;
+  background: var(--kj-accent);
+  border-radius: 0 6px 6px 0;
+  transition: width 0.3s;
+}
+.kj-tally-n {
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 40px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--kj-accent);
+}
+.kj-poll .kj-option:disabled {
+  cursor: default;
+}
+.kj-chip[data-outcome="true"] {
+  transition: box-shadow 0.3s;
+}
+.kj-layout-experiment[data-step-now="2"] .kj-chip[data-outcome="true"] {
+  border-color: var(--kj-good);
+  box-shadow: 0 0 0 4px var(--kj-good) inset;
+}
+
+/* ---- order / match ---- */
+.kj-order {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  position: relative;
+}
+.kj-order-hint,
+.kj-order-reveal {
+  font-size: 40px;
+  font-weight: 700;
+  color: var(--kj-soft);
+}
+.kj-order-reveal {
+  position: absolute;
+  right: 0;
+  top: 0;
+  color: var(--kj-good);
+}
+.kj-order-cols {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 40px;
+}
+.kj-cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-rows: repeat(var(--kj-cards, 4), minmax(0, 1fr));
+  gap: 16px;
+  min-height: 0;
+}
+.kj-card {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  padding: 6px 24px;
+  border-radius: 18px;
+  border: 4px solid var(--kj-panel-line);
+  background: var(--kj-panel);
+  touch-action: none;
+  user-select: none;
+  cursor: grab;
+  min-height: 0;
+  overflow: hidden;
+  line-height: 1.15;
+}
+.kj-card:disabled {
+  cursor: default;
+}
+.kj-card-fixed {
+  cursor: default;
+  border-style: dashed;
+}
+.kj-order-match .kj-card-fixed::after {
+  content: "↔";
+  margin-left: auto;
+  color: var(--kj-accent);
+}
+.kj-card.kj-picked {
+  border-color: var(--kj-accent);
+  box-shadow: 0 0 0 4px var(--kj-accent) inset;
+}
+.kj-card-n {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: var(--kj-accent);
+  color: var(--kj-accent-ink);
+  font-size: 40px;
+  visibility: hidden;
+}
+.kj-layout-order[data-step-now="1"] .kj-card {
+  order: var(--kj-key);
+  cursor: default;
+}
+.kj-layout-order[data-step-now="1"] .kj-card-n {
+  visibility: visible;
+}
+.kj-layout-order[data-step-now="1"] .kj-card.kj-right {
+  border-color: var(--kj-good);
 }
 
 /* ---- questions ---- */

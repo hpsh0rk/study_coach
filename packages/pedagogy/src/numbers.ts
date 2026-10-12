@@ -272,6 +272,9 @@ function slideTexts(c: SlideContent): { prose: string[]; tex: string[]; data: nu
     case "questions":
       prose = [c.title, ...c.items.flatMap((i) => [i.q, i.a])];
       break;
+    case "order":
+      prose = [c.title, ...c.items.flatMap((i) => [i.text, i.match])];
+      break;
     case "summary":
       prose = [c.title, ...c.nodes.flatMap((n) => [n.head, n.detail])];
       break;

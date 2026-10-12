@@ -8,6 +8,7 @@ import { adminRoutes } from "./routes/admin.ts";
 import { authRoutes } from "./routes/auth.ts";
 import { documentRoutes } from "./routes/documents.ts";
 import { lessonRoutes } from "./routes/lessons.ts";
+import { reuseRoutes } from "./routes/reuse.ts";
 import { shareRoutes } from "./routes/share.ts";
 
 export const app = new Hono<AppBindings>();
@@ -26,6 +27,7 @@ app.get("/api/health", (c) => c.json({ ok: true, env: c.env.ENVIRONMENT }));
 app.route("/api/auth", authRoutes);
 app.route("/api/admin", adminRoutes);
 app.route("/api/documents", documentRoutes);
+app.route("/api/lessons", reuseRoutes);
 app.route("/api/lessons", lessonRoutes);
 app.route("/api/share", shareRoutes);
 app.all("/api/*", (c) => c.json({ error: { code: "NOT_FOUND", message: "Not found" } }, 404));

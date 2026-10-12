@@ -20,6 +20,7 @@ export const PAGE_TYPES: Record<PageType, PageTypeDef> = {
   worked: { id: "worked", label: { zh: "例题示范", en: "Worked example" }, minutes: 4, range: [3, 5], mode: "lecture" },
   faded: { id: "faded", label: { zh: "渐隐练习", en: "Faded example" }, minutes: 3.5, range: [2.5, 4.5], mode: "practice" },
   practice: { id: "practice", label: { zh: "独立练习", en: "Practice" }, minutes: 6, range: [4, 8], mode: "practice" },
+  sequence: { id: "sequence", label: { zh: "排序配对", en: "Order / match" }, minutes: 3, range: [2, 4], mode: "practice" },
   experiment: { id: "experiment", label: { zh: "实验（预测-观察-解释）", en: "Experiment" }, minutes: 8, range: [6, 10], mode: "practice" },
   check: { id: "check", label: { zh: "检查理解", en: "Check" }, minutes: 2, range: [1.5, 3], mode: "practice" },
   summary: { id: "summary", label: { zh: "结构小结", en: "Summary" }, minutes: 2.5, range: [2, 3], mode: "lecture" },
@@ -105,6 +106,67 @@ export function scopeAdvice(words: number, lessonMinutes: number, unreadPages = 
   };
 }
 
+/** A contiguous part of a unit's selection (a chapter, or loose pages) with its pages' word counts. */
+export interface UnitPiece {
+  title: string;
+  chapterId?: string;
+  pages: { no: number; words: number }[];
+}
+
+const pieceWords = (p: UnitPiece) => p.pages.reduce((n, x) => n + x.words, 0);
+
+/**
+ * "整单元规划": splits a selection into `count` lessons (default: what the minutes estimate needs), keeping
+ * chapters whole where possible. A chapter longer than a lesson is cut at page boundaries; cuts fall at the
+ * piece boundaries closest to equal shares of the words.
+ */
+export function planUnit(pieces: UnitPiece[], lessonMinutes: number, count?: number): UnitPiece[][] {
+  const total = pieces.reduce((n, p) => n + pieceWords(p), 0);
+  let n = Math.max(1, Math.min(12, count ?? scopeAdvice(total, lessonMinutes).lessons));
+  const target = total / n;
+  const parts: UnitPiece[] = [];
+  for (const p of pieces) {
+    if (pieceWords(p) <= target * 1.25 || p.pages.length < 2) {
+      parts.push(p);
+      continue;
+    }
+    let chunk: UnitPiece["pages"] = [];
+    let acc = 0;
+    const chunks: UnitPiece["pages"][] = [];
+    for (const page of p.pages) {
+      if (chunk.length && acc + page.words > target) {
+        chunks.push(chunk);
+        chunk = [];
+        acc = 0;
+      }
+      chunk.push(page);
+      acc += page.words;
+    }
+    if (chunk.length) chunks.push(chunk);
+    chunks.forEach((pages, i) => parts.push({ title: chunks.length > 1 ? `${p.title} (${i + 1})` : p.title, ...(p.chapterId ? { chapterId: p.chapterId } : {}), pages }));
+  }
+  n = Math.min(n, parts.length);
+  if (n <= 1) return [parts];
+  const cum: number[] = [];
+  parts.reduce((acc, p, i) => (cum[i] = acc + pieceWords(p)), 0);
+  const cuts: number[] = [];
+  let from = 0;
+  for (let j = 1; j < n; j++) {
+    const goal = (total * j) / n;
+    let best = from;
+    for (let b = from; b <= parts.length - 1 - (n - j); b++) if (Math.abs(cum[b]! - goal) < Math.abs(cum[best]! - goal)) best = b;
+    cuts.push(best);
+    from = best + 1;
+  }
+  const groups: UnitPiece[][] = [];
+  let start = 0;
+  for (const c of [...cuts, parts.length - 1]) {
+    groups.push(parts.slice(start, c + 1));
+    start = c + 1;
+  }
+  return groups;
+}
+
 export interface Violation {
   level: "error" | "warning";
   code: string;
@@ -120,6 +182,7 @@ const LIST_OF: Record<LayoutId, ListBudget> = {
   experiment: BUDGETS.experiment.observe,
   quiz: BUDGETS.quiz.options,
   questions: BUDGETS.questions.items,
+  order: BUDGETS.order.items,
   summary: BUDGETS.summary.nodes,
 };
 
@@ -226,6 +289,8 @@ function screenText(c: SlideContent): string[] {
       return [c.question, ...c.options.map((o) => o.text), c.explain];
     case "questions":
       return [c.title, ...c.items.flatMap((i) => [i.q, i.a])];
+    case "order":
+      return [c.title, ...c.items.flatMap((i) => [i.text, i.match])];
     case "summary":
       return [c.title, ...c.nodes.flatMap((n) => [n.head, n.detail])];
   }

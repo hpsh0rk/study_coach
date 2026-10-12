@@ -67,6 +67,10 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
   await expect(page.getByTestId("budget")).toContainText("分钟为合适");
   await shot(page, "04-outline");
 
+  // A sequencing page (排序配对): the writer fills an order slide that students rearrange.
+  await rows.nth(2).getByLabel("页面类型 Page type").selectOption("sequence");
+  await expect(rows.nth(2).getByLabel("页面类型 Page type")).toHaveValue("sequence");
+
   // Push the plan past +15%: the server refuses with 409 until the teacher acknowledges.
   for (const i of [0, 1]) await rows.nth(i).getByLabel("分钟 Minutes").fill("15");
   await expect(page.getByTestId("budget")).toContainText("over budget");
@@ -152,6 +156,21 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
     await page.getByTestId("undo-slide").click();
   });
 
+  await test.step("hinge question: the check slide becomes a vote first, answer later", async () => {
+    await page.getByTestId("thumb").filter({ hasText: "检查理解" }).first().click();
+    await page.getByTestId("edit-slide").click();
+    await page.getByTestId("toggle-poll").check();
+    await page.getByTestId("save-slide").click();
+    await expect(page.locator(".preview-pane .kj-slide.kj-poll")).toBeVisible();
+    await expect(page.locator(".preview-pane .kj-poll .kj-option:disabled").first()).toBeVisible();
+  });
+
+  await test.step("order slide from the sequence page", async () => {
+    await page.getByTestId("thumb").filter({ hasText: "排序配对" }).first().click();
+    await expect(page.locator(".preview-pane .kj-order .kj-card").first()).toBeVisible();
+    await shotOf(page.locator(".preview-pane .slide-preview"), "12-order-slide");
+  });
+
   await test.step("table visual on the data page", async () => {
     await page.getByTestId("thumb").filter({ hasText: "数据图表" }).first().click();
     const table = page.locator(".preview-pane .kj-table");
@@ -232,14 +251,71 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
     await page.keyboard.press("b");
     await expect(pPlayer).toHaveAttribute("data-blank", "0");
 
-    // Jump to the quiz: the answer key is only in the presenter window.
-    for (let i = 0; i < count * 4 && !(await presenter.getByTestId("presenter-answers").isVisible()); i++) await presenter.keyboard.press("ArrowRight");
+    // Jump to the hinge question: the answer key is only in the presenter window.
+    const poll = pPlayer.locator(".kj-slide.kj-poll");
+    for (let i = 0; i < count * 4 && !(await poll.isVisible()); i++) await presenter.keyboard.press("ArrowRight");
+    await expect(poll).toBeVisible();
     await expect(presenter.getByTestId("presenter-answers")).toBeVisible();
     await expect.poll(() => positionOf(player)).toBe(await positionOf(pPlayer));
     await expect(page.getByText("答案 Answer")).toHaveCount(0);
+
+    // Votes typed in the presenter window show as a distribution on the projector at the next click; the answer one click later.
+    const votes = presenter.locator(".kj-tally-inputs input");
+    await expect(votes).toHaveCount(3);
+    for (const [i, n] of [3, 12, 5].entries()) await votes.nth(i).fill(String(n));
+    await presenter.keyboard.press("PageDown");
+    await expect.poll(() => positionOf(player)).toBe(await positionOf(pPlayer));
+    const tallies = page.locator(".kj-slide.kj-poll .kj-tally-n");
+    await expect(tallies.nth(1)).toHaveText("12 · 60%");
+    await expect(tallies.nth(1)).toBeVisible();
+    await expect(page.locator(".kj-slide.kj-poll .kj-explain")).toBeHidden();
+    await presenter.keyboard.press("PageDown");
+    await expect.poll(() => positionOf(player)).toBe(await positionOf(pPlayer));
+    await expect(page.locator(".kj-slide.kj-poll .kj-explain")).toBeVisible();
     await shot(presenter, "09-presenter");
-    await shot(page, "07-present");
+    await shot(page, "13-poll-tally");
     await presenter.close();
+  });
+
+  await test.step("order slide: tap two cards to swap them, the clicker reveals the right order", async () => {
+    const player = page.locator(".kj-player");
+    const order = player.locator(".kj-slide.kj-layout-order");
+    await page.keyboard.press("Home");
+    for (let i = 0; i < count * 4 && !(await order.isVisible()); i++) await page.keyboard.press("ArrowRight");
+    await expect(order).toBeVisible();
+    const cards = order.locator(".kj-card");
+    const before = await cards.evaluateAll((cs) => cs.map((c) => c.getAttribute("data-key")));
+    const at = await positionOf(player);
+    await cards.nth(0).click();
+    await expect(cards.nth(0)).toHaveClass(/kj-picked/);
+    await cards.nth(1).click();
+    expect(await cards.evaluateAll((cs) => cs.map((c) => c.getAttribute("data-key")))).toEqual([before[1], before[0], ...before.slice(2)]);
+    expect(await positionOf(player)).toBe(at);
+    await page.keyboard.press("PageDown");
+    await expect(order.locator(".kj-order-reveal")).toBeVisible();
+    await shot(page, "15-order-reveal");
+  });
+
+  await test.step("pen layer: draw on the projected slide, erase with Escape-then-navigate, nothing saved", async () => {
+    const player = page.locator(".kj-player");
+    await page.keyboard.press("Home");
+    await page.keyboard.press("d");
+    const ink = page.locator("canvas.kj-ink");
+    await expect(ink).toBeVisible();
+    const box = (await ink.boundingBox())!;
+    await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.6);
+    await page.mouse.down();
+    for (let i = 1; i <= 12; i++) await page.mouse.move(box.x + box.width * (0.3 + i * 0.03), box.y + box.height * (0.6 - Math.sin(i / 3) * 0.12));
+    await page.mouse.up();
+    const inked = () => ink.evaluate((c: HTMLCanvasElement) => c.getContext("2d")!.getImageData(0, 0, c.width, c.height).data.some((v, i) => i % 4 === 3 && v > 0));
+    expect(await inked()).toBe(true);
+    expect(await positionOf(player)).toBe("0.0");
+    await shot(page, "14-pen-annotation");
+    await page.getByRole("button", { name: /清除 Clear/ }).click();
+    expect(await inked()).toBe(false);
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("PageDown");
+    await expect.poll(() => positionOf(player)).not.toBe("0.0");
   });
 
   await test.step("offline single-file export runs with the network blocked", async () => {
@@ -278,9 +354,38 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
     for (let i = 0; i < count * 4 && !(await simFrame.isVisible()); i++) await off.keyboard.press("ArrowRight");
     await expect(off.frameLocator(".kj-sim iframe").locator("canvas")).toBeVisible();
     await shot(off, "11-offline-sim");
+    const order = off.locator(".kj-slide.kj-layout-order");
+    await off.keyboard.press("Home");
+    for (let i = 0; i < count * 4 && !(await order.isVisible()); i++) await off.keyboard.press("ArrowRight");
+    await expect(order.locator(".kj-card")).not.toHaveCount(0);
     expect(network).toEqual([]);
     expect(errors).toEqual([]);
     await ctx.close();
+  });
+
+  await test.step("复制这节课到新学期: the copy keeps the confirmed outline and every slide", async () => {
+    await page.goto("/");
+    await page.getByTestId(`duplicate-${lessonId}`).click();
+    await page.waitForURL(/\/lessons\/[^/]+\/outline\?copied=1$/);
+    const copyId = /\/lessons\/([^/]+)\//.exec(page.url())![1]!;
+    expect(copyId).not.toBe(lessonId);
+    await expect(page.getByTestId("copied-hint")).toBeVisible();
+    await shot(page, "16-duplicated-outline");
+    await page.goto(`/lessons/${copyId}/slides`);
+    await expect(page.getByTestId("gen-progress")).toContainText(`已生成 ${count} / ${count}`);
+    await expect(page.getByTestId("share-url")).toHaveCount(0);
+  });
+
+  await test.step("整单元规划: one chapter range planned as a unit of lessons", async () => {
+    const { lesson } = await (await page.request.get(`/api/lessons/${lessonId}`)).json();
+    const res = await page.request.post("/api/lessons/unit", { data: { documentId: lesson.documentId, chapterIds: lesson.scope.chapterIds, ranges: lesson.scope.ranges, count: 2, title: "Waves unit 波动单元" }, headers: { "x-kj-csrf": "1" } });
+    expect(res.status()).toBe(201);
+    const { unit } = await res.json();
+    await page.goto(`/?unit=${unit.id}`);
+    const group = page.locator(`[data-testid="unit-group"].fresh`);
+    await expect(group).toContainText("Waves unit 波动单元");
+    await expect(group.getByTestId("lesson-card")).toHaveCount(2);
+    await shot(page, "17-unit-group");
   });
 });
 

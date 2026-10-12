@@ -25,7 +25,11 @@ type Def =
   | { type: "visual"; key: "visual" | "chart"; label: string; kinds: VisualKind[]; narrow: boolean }
   | { type: "sim"; key: "sim" }
   | { type: "answer"; key: "answer" }
-  | { type: "fadeFrom"; key: "fadeFrom" };
+  | { type: "fadeFrom"; key: "fadeFrom" }
+  | { type: "toggle"; key: string; label: string; hint: string }
+  | { type: "select"; key: string; label: string; choices: { value: string; label: string }[] }
+  /** Optional pick of one entry of the string list at `from` (e.g. the prediction the simulation bears out). */
+  | { type: "pick"; key: string; label: string; from: Path };
 
 const B = BUDGETS;
 const title = (b: TextBudget): Def => ({ type: "text", key: "title", label: "标题 Title", budget: b });
@@ -57,16 +61,31 @@ const FORM: Record<SlideContent["layout"], Def[]> = {
     { type: "sim", key: "sim" },
     { type: "lines", key: "observe", label: "观察提示 Observe", budget: B.experiment.observe },
     { type: "text", key: "explain", label: "解释 Explain", budget: B.experiment.explain },
+    { type: "pick", key: "outcome", label: "实验结果对应的预测 Prediction the simulation confirms", from: ["predict", "options"] },
   ],
   quiz: [
     { type: "text", key: "question", label: "问题 Question", budget: B.quiz.question },
     { type: "items", key: "options", label: "选项 Options", budget: B.quiz.options, fields: [{ key: "text", label: "选项 Option", budget: B.quiz.options.item }, { key: "misconception", label: "对应误区 Misconception", budget: B.quiz.misconception }] },
     { type: "answer", key: "answer" },
+    { type: "toggle", key: "poll", label: "课堂投票（铰链题）Hinge question: vote first", hint: "放映时先举手投票，老师输入各选项人数，翻页先显示分布，再显示答案。" },
     { type: "text", key: "explain", label: "解释 Explain", budget: B.quiz.explain },
   ],
   questions: [
     title(B.questions.title),
     { type: "items", key: "items", label: "题目 Items", budget: B.questions.items, fields: [{ key: "q", label: "问 Question", budget: B.questions.items.item }, { key: "a", label: "答 Answer", budget: B.questions.answer }] },
+  ],
+  order: [
+    title(B.order.title),
+    {
+      type: "select",
+      key: "mode",
+      label: "活动 Activity",
+      choices: [
+        { value: "order", label: "排序：按正确顺序填写，放映时打乱 · Order" },
+        { value: "match", label: "配对：每张卡片写上对应的另一半 · Match" },
+      ],
+    },
+    { type: "items", key: "items", label: "卡片（按正确答案填写）Cards, in the right order", budget: B.order.items, fields: [{ key: "text", label: "卡片 Card", budget: B.order.items.item }, { key: "match", label: "配对的另一半（仅配对）Match", budget: B.order.match }] },
   ],
   summary: [
     title(B.summary.title),
@@ -439,6 +458,46 @@ function render(def: Def, draft: Obj, base: Path, issues: SlotIssue[], onChange:
             {steps.slice(1).map((_, i) => (
               <option key={i + 1} value={i + 1}>
                 从第 {i + 2} 步起留空 · from step {i + 2}
+              </option>
+            ))}
+          </select>
+          <FieldIssues issues={issues} path={path} />
+        </label>
+      );
+    }
+    case "toggle":
+      return (
+        <label key={def.key} className="slot-field inline toggle">
+          <input type="checkbox" checked={!!value} onChange={(e) => onChange(path, e.target.checked || undefined)} data-testid={`toggle-${def.key}`} />
+          <span>
+            {def.label}
+            <small className="muted"> {def.hint}</small>
+          </span>
+        </label>
+      );
+    case "select":
+      return (
+        <label key={def.key} className="slot-field inline">
+          <span>{def.label}</span>
+          <select value={String(value ?? def.choices[0]?.value)} onChange={(e) => onChange(path, e.target.value)} data-testid={`select-${def.key}`}>
+            {def.choices.map((c) => (
+              <option key={c.value} value={c.value}>
+                {c.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      );
+    case "pick": {
+      const options = (def.from.reduce<any>((o, k) => o?.[k], draft) as string[] | undefined) ?? [];
+      return (
+        <label key={def.key} className="slot-field inline">
+          <span>{def.label}</span>
+          <select value={value === undefined ? "" : String(value)} onChange={(e) => onChange(path, e.target.value === "" ? undefined : Number(e.target.value))} data-testid={`pick-${def.key}`}>
+            <option value="">不标出 · not marked</option>
+            {options.map((o, i) => (
+              <option key={i} value={i}>
+                {LETTERS[i]}. {o || "（空）"}
               </option>
             ))}
           </select>

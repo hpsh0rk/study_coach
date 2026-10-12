@@ -59,7 +59,7 @@ export async function scopePages(env: Env, documentId: string, scope: LessonScop
   return pagesByNo(env, documentId, pagesInRanges(scope.ranges));
 }
 
-export async function pagesByNo(env: Env, documentId: string, wanted: number[]): Promise<PageText[]> {
+async function pagesByNo(env: Env, documentId: string, wanted: number[]): Promise<PageText[]> {
   const out: PageText[] = [];
   for (let i = 0; i < wanted.length; i += 90) {
     const chunk = wanted.slice(i, i + 90);
@@ -73,7 +73,7 @@ export async function pagesByNo(env: Env, documentId: string, wanted: number[]):
   return out;
 }
 
-export interface ScopeStats {
+interface ScopeStats {
   /** Word count (for the "this needs about N minutes" estimate). */
   words: number;
   /** Pages without usable text (scanned images): never sent to the model. */
@@ -224,6 +224,7 @@ export async function lessonList(env: Env, user: SessionUser) {
       title: lessons.title,
       updatedAt: lessons.updatedAt,
       params: lessons.params,
+      scope: lessons.scope,
       latestConfirmed: sql<number | null>`${latest}`,
       planned: sql<number>`COALESCE((SELECT v.spec_count FROM outline_versions v WHERE v.id = ${confirmedId}), 0)`,
       slides: sql<number>`(SELECT COUNT(*) FROM slides s WHERE s.outline_version_id = ${confirmedId})`,
@@ -237,6 +238,7 @@ export async function lessonList(env: Env, user: SessionUser) {
     title: r.title,
     updatedAt: r.updatedAt,
     params: LessonParams.parse(JSON.parse(r.params)),
+    unit: LessonScope.parse(JSON.parse(r.scope)).unit ?? null,
     status: r.latestConfirmed === null ? "scoped" : r.slides ? "slides" : !r.latestConfirmed ? "outline" : "confirmed",
     slides: r.slides,
     planned: r.planned,

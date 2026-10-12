@@ -99,7 +99,7 @@ function visualFor(spec: SlideSpec, source: string, bullets: string[], outline: 
   return { kind: "flow", steps };
 }
 
-export interface StubInput {
+interface StubInput {
   spec: SlideSpec;
   outline: Outline;
   lessonTitle: string;
@@ -218,6 +218,11 @@ export function stubSlide(input: StubInput): { content: SlideContent; notes: str
         (i) => ({ q: `Recall key idea ${i + 1}`, a: clip(pts[i] ?? spec.title, 5) }),
       );
       content = { layout: "questions", title: clip(spec.title, BUDGETS.questions.title.max), items };
+      break;
+    }
+    case "order": {
+      const steps = pad(pts.slice(0, 5).map((p) => clip(p, BUDGETS.order.items.item.max)), 3, (i) => clip(sentences[i] ?? `Stage ${i + 1}`, BUDGETS.order.items.item.max));
+      content = { layout: "order", title, mode: "order", items: steps.map((text) => ({ text, match: "" })) };
       break;
     }
     case "summary": {
