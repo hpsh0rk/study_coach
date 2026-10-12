@@ -287,8 +287,10 @@ function visualItems(v: VisualSpec | ExperimentSim | ChartContentChart, rect: Re
       }
       return [item];
     }
-    case "table":
-      return [tableItem(v, rect, slot), ...(v.caption ? [text(`${slot}.caption`, { x: rect.x, y: rect.y + rect.h - 50, w: rect.w, h: 50 }, [para(v.caption)], p, { fontPx: FONT.source, minFontPx: FONT.source, color: p.soft })] : [])];
+    case "table": {
+      const t = tableItem(v, rect, slot);
+      return [t, ...(v.caption ? [text(`${slot}.caption`, { x: rect.x, y: t.rect.y + t.rect.h + 12, w: rect.w, h: 50 }, [para(v.caption)], p, { fontPx: FONT.source, minFontPx: FONT.source, color: p.soft })] : [])];
+    }
     case "flow": {
       const n = v.steps.length;
       const arrow = 44;
