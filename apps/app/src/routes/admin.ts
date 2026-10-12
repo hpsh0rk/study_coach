@@ -7,7 +7,8 @@ import { aiCalls, aiProviders, auditLog, users } from "../db/schema.ts";
 import { secret, type AppBindings, type Env } from "../env.ts";
 import { HttpError, parseJson } from "../http.ts";
 import { generatePassword, hashPassword, passwordProblem } from "../auth/password.ts";
-import { db, destroyUserSessions, requireAdmin, requireUser } from "../auth/session.ts";
+import { destroyUserSessions, requireAdmin, requireUser } from "../auth/session.ts";
+import { db } from "../db/index.ts";
 
 const Username = z
   .string()

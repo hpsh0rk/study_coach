@@ -5,7 +5,8 @@ import { auditLog, loginAttempts, users } from "../db/schema.ts";
 import type { AppBindings, Env } from "../env.ts";
 import { HttpError, parseJson } from "../http.ts";
 import { DUMMY_HASH, hashPassword, needsRehash, passwordProblem, verifyPassword } from "../auth/password.ts";
-import { createSession, db, destroySession, destroyUserSessions, loadSessionUser, requireUser } from "../auth/session.ts";
+import { createSession, destroySession, destroyUserSessions, loadSessionUser, requireUser } from "../auth/session.ts";
+import { db } from "../db/index.ts";
 
 const WINDOW_MS = 15 * 60_000;
 const MAX_FAILURES = 8;

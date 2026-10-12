@@ -4,12 +4,12 @@ import { z } from "zod";
 import { normalizeRanges, pagesInRanges } from "@kj/pdf-structure";
 import { planBudget, planUnit, unitGroupLabel, unitGroupMinutes, type UnitPiece } from "@kj/pedagogy";
 import { DEFAULT_PARAMS, LessonParams, newId, PageRange, type ChapterNode, type LessonScope } from "@kj/schema";
-import { db, requireUser } from "../auth/session.ts";
+import { requireUser } from "../auth/session.ts";
+import { db } from "../db/index.ts";
 import { lessons, outlineVersions, pages, slides } from "../db/schema.ts";
 import type { AppBindings } from "../env.ts";
 import { HttpError, parseJson } from "../http.ts";
-import { latestConfirmed, latestVersion, lessonScope, ownedLesson, type VersionRow } from "../store.ts";
-import { lessonView, scopeFor, treeOf } from "./lessons.ts";
+import { latestConfirmed, latestVersion, lessonScope, lessonView, ownedLesson, scopeFor, treeOf, type VersionRow } from "../store.ts";
 
 /** Selected chapters with no selected child: they own their pages in the unit split. */
 function leafChapters(tree: ChapterNode[], ids: string[]): ChapterNode[] {

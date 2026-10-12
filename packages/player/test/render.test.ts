@@ -37,3 +37,18 @@ describe("render safety", () => {
     r.dispose();
   });
 });
+
+describe("built-in labels", () => {
+  it("follow the teaching language (bilingual by default)", () => {
+    const content: SlideContent = { layout: "title", title: "力与运动", subtitle: "", objectives: ["说出牛顿第一定律"] };
+    const labelOf = (language?: "en" | "zh" | "en+zh") => {
+      const r = renderSlide({ content, sources: [3] }, { theme: "classic", interactive: false, language });
+      const out = [r.el.querySelector(".kj-objectives-label")!.textContent, r.el.querySelector(".kj-sources-label")!.textContent];
+      r.dispose();
+      return out;
+    };
+    expect(labelOf("zh")).toEqual(["学习目标", "教材"]);
+    expect(labelOf("en")).toEqual(["Learning objectives", "Source"]);
+    expect(labelOf()).toEqual(["Learning objectives · 学习目标", "Source · 教材"]);
+  });
+});

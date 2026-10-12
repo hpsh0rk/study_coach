@@ -443,6 +443,7 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
   await test.step("delete a lesson (soft): it leaves the list, Undo brings it back", async () => {
     await page.goto("/");
     const cards = page.getByTestId("lesson-card");
+    await expect(page.getByTestId(`delete-${lessonId}`)).toBeVisible();
     const before = await cards.count();
     page.once("dialog", (d) => void d.accept());
     await page.getByTestId(`delete-${lessonId}`).click();
