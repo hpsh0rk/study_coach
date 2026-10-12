@@ -51,9 +51,11 @@ test("source chips never sit under the player's control bar", async ({ page }) =
             .map((c) => ({ text: c.textContent, r: c.getBoundingClientRect() }))
             .filter(({ r }) => r.right > bar.left && r.bottom > bar.top && r.top < bar.bottom)
             .map(({ text }) => text),
+          clipped: [...document.querySelectorAll<HTMLElement>(".kj-slide [data-clip]")].filter((c) => c.scrollHeight > c.clientHeight + 1).map((c) => c.textContent),
         };
       });
       expect(clash.under, `${size.width}×${size.height} slide ${slide + 1}`).toEqual([]);
+      expect(clash.clipped, `${size.width}×${size.height} slide ${slide + 1} clipped option text`).toEqual([]);
       expect(clash.visible).toBeGreaterThan(0);
       if (clash.hidden) expect(clash.more).toBe(`+${clash.hidden}`);
       if (process.env.SHOTS_DIR && slide === 0) await page.screenshot({ path: `${process.env.SHOTS_DIR}/source-chips-${size.width}x${size.height}.png` });

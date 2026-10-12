@@ -626,7 +626,9 @@
   position: relative;
 }
 .kj-option.kj-tallied {
-  padding-right: 200px;
+  /* Room for a three-digit count (40px tabular figures + 16px inset); every pixel counts at the 7-word option budget. */
+  padding-right: 88px;
+  gap: 16px;
 }
 .kj-chip.kj-tallied {
   padding-right: 90px;

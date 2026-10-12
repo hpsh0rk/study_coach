@@ -300,6 +300,7 @@ const RENDERERS: { [L in SlideContent["layout"]]: (b: Builder, c: ContentOf<L>) 
     const buttons = c.options.map((o, i) => {
       const btn = node("button", "kj-option", grid);
       btn.type = "button";
+      btn.dataset.clip = "";
       if (!b.opts.hideAnswers) btn.dataset.correct = String(i === c.answer);
       node("b", "kj-option-letter", btn).textContent = LETTERS[i] ?? String(i + 1);
       text("span", "kj-option-text", o.text, btn);
@@ -472,6 +473,8 @@ export function applyStep(root: HTMLElement, k: number): void {
 
 function overflows(n: HTMLElement): boolean {
   if (n.scrollHeight > n.clientHeight + 1 || n.scrollWidth > n.clientWidth + 1) return true;
+  // Boxes that clip their own text (quiz options in shrinkable grid rows) never grow the slot's scroll size.
+  for (const c of n.querySelectorAll<HTMLElement>("[data-clip]")) if (c.scrollHeight > c.clientHeight + 1) return true;
   // Bottom-aligned content (titles) spills upwards, which scrollHeight does not report.
   const box = n.getBoundingClientRect();
   const scale = box.height / (n.offsetHeight || 1) || 1;
