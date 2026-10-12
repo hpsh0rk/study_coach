@@ -1,17 +1,15 @@
+import { z } from "zod";
 import { newId } from "@kj/schema";
-import { CAPABILITIES, type CapabilityInput, type CapabilityName, type CapabilityOutput } from "./capabilities.ts";
 import { chatCompletion, ProviderError, type AiConfigSource, type ChatMessage, type FetchLike, type ProviderConfig, type RouteTarget } from "./providers.ts";
+
+/** Capabilities that can be routed to a model in /admin; "default" covers anything unlisted. */
+export const KNOWN_CAPABILITIES = ["outline.draft", "slide.write"] as const;
+export type CapabilityName = (typeof KNOWN_CAPABILITIES)[number];
 
 export interface CallContext {
   orgId: string;
   userId: string;
-  projectId?: string;
-  gateToken?: string;
-}
-
-export interface GateVerifier {
-  /** Must check the token against the project's current confirmed outline. */
-  verify(projectId: string, gateToken: string): Promise<boolean>;
+  lessonId?: string;
 }
 
 export interface AiCallRecord {
@@ -20,7 +18,7 @@ export interface AiCallRecord {
   promptVersion: string;
   providerId: string;
   model: string;
-  status: "ok" | "error" | "rejected";
+  status: "ok" | "error";
   inputTokens: number;
   outputTokens: number;
   latencyMs: number;
@@ -32,14 +30,6 @@ export interface Meter {
   record(rec: AiCallRecord): Promise<void>;
 }
 
-export class AiGateError extends Error {
-  readonly code = "OUTLINE_NOT_CONFIRMED";
-  constructor(message: string) {
-    super(message);
-    this.name = "AiGateError";
-  }
-}
-
 export class AiOutputError extends Error {
   constructor(message: string) {
     super(message);
@@ -49,14 +39,25 @@ export class AiOutputError extends Error {
 
 export interface AiLayerOptions {
   config: AiConfigSource;
-  gate: GateVerifier;
   meter: Meter;
   fetch?: FetchLike;
-  /** When no route is configured, use the deterministic stub. Off in production once providers are set. */
+  /** With no provider routed, answer from the caller's deterministic stub (local dev, CI, evals). */
   allowStubFallback: boolean;
 }
 
-export interface AiResult<T> {
+export interface StructuredRequest<T> {
+  capability: CapabilityName;
+  promptVersion: string;
+  schema: z.ZodType<T>;
+  messages: ChatMessage[];
+  /** Deterministic answer used when no provider is configured. Must satisfy `schema`. */
+  stub: () => unknown;
+  temperature?: number;
+  timeoutMs?: number;
+  ctx: CallContext;
+}
+
+export interface StructuredResult<T> {
   output: T;
   callId: string;
   providerId: string;
@@ -73,28 +74,32 @@ function extractJson(text: string): unknown {
   return JSON.parse(trimmed.slice(start, end + 1));
 }
 
-/** The single entry point for every model call in the system (red line 3). */
+export function issuesText(error: z.ZodError): string {
+  return error.issues
+    .slice(0, 12)
+    .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
+    .join("; ");
+}
+
+/** JSON Schema shown to the model; refinements (word budgets) are restated in the prompt text. */
+const jsonSchemas = new WeakMap<z.ZodType, unknown>();
+
+/** JSON Schema of a zod schema, computed once per schema object (Workers CPU budget). */
+export function jsonSchemaOf(schema: z.ZodType): unknown {
+  let json = jsonSchemas.get(schema);
+  if (json === undefined) jsonSchemas.set(schema, (json = z.toJSONSchema(schema, { io: "input", unrepresentable: "any" })));
+  return json;
+}
+
+/** The single entry point for every model call in the system. */
 export function createAiLayer(opts: AiLayerOptions) {
-  async function call<N extends CapabilityName>(name: N, rawInput: CapabilityInput<N>, ctx: CallContext): Promise<AiResult<CapabilityOutput<N>>> {
-    const cap = CAPABILITIES[name];
+  async function callStructured<T>(req: StructuredRequest<T>): Promise<StructuredResult<T>> {
     const callId = newId("ai");
     const started = Date.now();
-    const base = { id: callId, capability: cap.name, promptVersion: cap.promptVersion, ctx };
+    const base = { id: callId, capability: req.capability, promptVersion: req.promptVersion, ctx: req.ctx };
 
-    if (cap.requiresGate) {
-      if (!ctx.projectId || !ctx.gateToken) {
-        await opts.meter.record({ ...base, providerId: "-", model: "-", status: "rejected", inputTokens: 0, outputTokens: 0, latencyMs: 0, error: "missing gate token" });
-        throw new AiGateError(`${cap.name} requires a confirmed-outline gate token`);
-      }
-      if (!(await opts.gate.verify(ctx.projectId, ctx.gateToken))) {
-        await opts.meter.record({ ...base, providerId: "-", model: "-", status: "rejected", inputTokens: 0, outputTokens: 0, latencyMs: 0, error: "stale gate token" });
-        throw new AiGateError(`${cap.name}: gate token is not valid for the current outline`);
-      }
-    }
-
-    const input = cap.input.parse(rawInput) as never;
     const config = await opts.config.load();
-    const route = config.routes[cap.name] ?? config.routes.default;
+    const route = config.routes[req.capability] ?? config.routes.default;
     const providers = new Map(config.providers.filter((p) => p.enabled).map((p) => [p.id, p]));
     const targets: { provider: ProviderConfig; target: RouteTarget }[] = [];
     for (const t of [route?.primary, route?.fallback]) {
@@ -103,8 +108,8 @@ export function createAiLayer(opts: AiLayerOptions) {
     }
 
     if (targets.length === 0) {
-      if (!opts.allowStubFallback) throw new ProviderError(`no AI provider configured for ${cap.name}; configure one in /admin`, undefined, false);
-      const output = cap.output.parse(cap.stub(input)) as CapabilityOutput<N>;
+      if (!opts.allowStubFallback) throw new ProviderError(`no AI provider configured for ${req.capability}; configure one in /admin · 请在后台配置模型`, undefined, false);
+      const output = req.schema.parse(req.stub());
       await opts.meter.record({ ...base, providerId: STUB_PROVIDER_ID, model: "stub", status: "ok", inputTokens: 0, outputTokens: 0, latencyMs: Date.now() - started });
       return { output, callId, providerId: STUB_PROVIDER_ID, model: "stub" };
     }
@@ -114,28 +119,27 @@ export function createAiLayer(opts: AiLayerOptions) {
       let inputTokens = 0;
       let outputTokens = 0;
       try {
-        const messages: ChatMessage[] = cap.buildMessages(input);
+        const messages: ChatMessage[] = [...req.messages];
         for (let attempt = 0; attempt < 2; attempt++) {
           const res = await chatCompletion(
             provider,
-            { model: target.model, messages, temperature: route?.temperature ?? cap.temperature, json: true, timeoutMs: cap.timeoutMs },
+            { model: target.model, messages, temperature: route?.temperature ?? req.temperature ?? 0.4, json: true, timeoutMs: req.timeoutMs ?? 90_000 },
             opts.fetch,
           );
           inputTokens += res.usage.inputTokens;
           outputTokens += res.usage.outputTokens;
           let problem: string;
           try {
-            const parsed = cap.output.safeParse(extractJson(res.text));
+            const parsed = req.schema.safeParse(extractJson(res.text));
             if (parsed.success) {
               await opts.meter.record({ ...base, providerId: provider.id, model: res.model, status: "ok", inputTokens, outputTokens, latencyMs: Date.now() - started });
-              return { output: parsed.data as CapabilityOutput<N>, callId, providerId: provider.id, model: res.model };
+              return { output: parsed.data, callId, providerId: provider.id, model: res.model };
             }
-            problem = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
+            problem = issuesText(parsed.error);
           } catch (err) {
             problem = (err as Error).message;
           }
-          // One automatic repair round (plan §8), then fall through to the fallback route.
-          messages.push({ role: "assistant", content: res.text }, { role: "user", content: `Your JSON was invalid: ${problem}. Return the corrected JSON object only.` });
+          messages.push({ role: "assistant", content: res.text }, { role: "user", content: `Your JSON was invalid: ${problem}. Shorten or fix the offending fields and return the corrected JSON object only.` });
         }
         throw new AiOutputError(`${provider.name}/${target.model} returned invalid output twice`);
       } catch (err) {
@@ -147,7 +151,7 @@ export function createAiLayer(opts: AiLayerOptions) {
     throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
 
-  return { call };
+  return { callStructured };
 }
 
 export type AiLayer = ReturnType<typeof createAiLayer>;

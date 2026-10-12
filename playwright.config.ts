@@ -13,12 +13,12 @@ export default defineConfig({
   reporter: process.env.CI ? [["github"], ["html", { open: "never" }]] : "list",
   use: { baseURL, trace: "retain-on-failure", viewport: { width: 1280, height: 720 }, locale: "zh-CN" },
   projects: [
-    { name: "e2e", testMatch: /flow\.spec\.ts/, use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 720 } } },
-    { name: "screenshots", testMatch: /screenshots\.spec\.ts/, use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 720 } } },
+    { name: "overflow", testMatch: /[\\/]overflow\.spec\.ts$/, use: { ...devices["Desktop Chrome"], viewport: { width: 1920, height: 1080 } } },
+    { name: "e2e", testMatch: /[\\/]flow\.spec\.ts$/, use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 720 } } },
   ],
   webServer: {
     command: "bash scripts/e2e-server.sh",
-    url: `${baseURL}/demo`,
+    url: `${baseURL}/api/health`,
     timeout: 180_000,
     reuseExistingServer: !process.env.CI,
     stdout: "ignore",

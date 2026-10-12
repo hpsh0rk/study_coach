@@ -8,14 +8,12 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run",
-    "json-schema": "node --experimental-strip-types scripts/emit-json-schema.ts"
+    "test": "vitest run"
   },
   "dependencies": {
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/node": "^22.20.5",
     "vitest": "~4.1.11"
   }
 }

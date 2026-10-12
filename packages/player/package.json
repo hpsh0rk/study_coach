@@ -12,8 +12,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@kj/renderer": "workspace:*",
-    "@kj/schema": "workspace:*"
+    "@kj/schema": "workspace:*",
+    "@kj/templates": "workspace:*"
   },
   "devDependencies": {
     "happy-dom": "^20.0.0",

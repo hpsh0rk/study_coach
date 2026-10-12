@@ -16,7 +16,7 @@ function unb64(text: string): Uint8Array<ArrayBuffer> {
   return out;
 }
 
-async function importKey(secret: string): Promise<CryptoKey> {
+async function importKey(secret: string) {
   const raw = await crypto.subtle.digest("SHA-256", enc.encode(secret));
   return crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt", "decrypt"]);
 }

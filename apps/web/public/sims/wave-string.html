@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Wave on a string · 弦上的波</title>
+<style>
+  html, body { margin: 0; height: 100%; font-family: Arimo, "Noto Sans SC", sans-serif; background: #fff; color: #17202e; }
+  body { display: flex; flex-direction: column; }
+  canvas { flex: 1 1 0; min-height: 0; width: 100%; display: block; }
+  .controls { display: grid; grid-template-columns: auto 1fr 4em; gap: 6px 18px; align-items: center; padding: 10px 24px 14px; font-size: 32px; }
+  input[type="range"] { width: 100%; height: 40px; accent-color: #1f5fbf; }
+  output { text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
+  .readout { grid-column: 1 / -1; color: #4b5668; font-size: 30px; }
+  button { font: inherit; font-size: 30px; padding: 4px 18px; border-radius: 12px; border: 2px solid #c9d7ef; background: #eef3fb; cursor: pointer; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="controls">
+  <label for="a">Amplitude 振幅 / cm</label><input id="a" type="range" min="0" max="3" step="0.1" value="1.5" /><output id="ao"></output>
+  <label for="f">Frequency 频率 / Hz</label><input id="f" type="range" min="0.2" max="3" step="0.1" value="1" /><output id="fo"></output>
+  <label for="v">Wave speed 波速 / m/s</label><input id="v" type="range" min="0.5" max="4" step="0.1" value="2" /><output id="vo"></output>
+  <div class="readout"><span id="lambda"></span> &nbsp; <button id="pause" type="button">Pause 暂停</button></div>
+</div>
+<script>
+  const $ = (id) => document.getElementById(id);
+  const canvas = $("c"), ctx = canvas.getContext("2d");
+  const LENGTH = 6; // metres of string shown
+  let t = 0, running = true, last = performance.now();
+  function size() { const r = canvas.getBoundingClientRect(); canvas.width = Math.max(1, r.width); canvas.height = Math.max(1, r.height); }
+  function values() { return { A: +$("a").value, f: +$("f").value, v: +$("v").value }; }
+  function draw() {
+    const { A, f, v } = values(), lambda = v / f, w = canvas.width, h = canvas.height, mid = h / 2, scale = (h * 0.4) / 3;
+    $("ao").textContent = A.toFixed(1); $("fo").textContent = f.toFixed(1); $("vo").textContent = v.toFixed(1);
+    $("lambda").textContent = `λ = v / f = ${lambda.toFixed(2)} m`;
+    ctx.clearRect(0, 0, w, h);
+    ctx.strokeStyle = "#dfe5ee"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(0, mid); ctx.lineTo(w, mid); ctx.stroke();
+    for (let m = 0; m <= LENGTH; m++) { const x = (m / LENGTH) * w; ctx.beginPath(); ctx.moveTo(x, mid - 10); ctx.lineTo(x, mid + 10); ctx.stroke(); }
+    ctx.strokeStyle = "#1f5fbf"; ctx.lineWidth = 6; ctx.beginPath();
+    for (let px = 0; px <= w; px += 2) {
+      const x = (px / w) * LENGTH, y = A * Math.sin(2 * Math.PI * (x / lambda - f * t));
+      px === 0 ? ctx.moveTo(px, mid - y * scale) : ctx.lineTo(px, mid - y * scale);
+    }
+    ctx.stroke();
+    const bx = w * 0.25, by = mid - A * Math.sin(2 * Math.PI * ((0.25 * LENGTH) / lambda - f * t)) * scale;
+    ctx.fillStyle = "#d9730d"; ctx.beginPath(); ctx.arc(bx, by, 14, 0, 2 * Math.PI); ctx.fill();
+  }
+  function frame(now) { if (running) t += (now - last) / 1000; last = now; draw(); requestAnimationFrame(frame); }
+  $("pause").addEventListener("click", () => { running = !running; $("pause").textContent = running ? "Pause 暂停" : "Play 播放"; });
+  addEventListener("resize", size);
+  size(); requestAnimationFrame(frame);
+</script>
+</body>
+</html>

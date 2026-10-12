@@ -1,7 +1,7 @@
 import { and, desc, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
-import { CAPABILITIES, maskSecret, PLANNED_CAPABILITIES, PROVIDER_PRESETS, ProviderKind, sealSecret, testProvider } from "@kj/ai";
+import { KNOWN_CAPABILITIES, maskSecret, PROVIDER_PRESETS, ProviderKind, sealSecret, testProvider } from "@kj/ai";
 import { newId } from "@kj/schema";
 import { aiCalls, aiProviders, aiRoutes, auditLog, users } from "../db/schema.ts";
 import { secret, type AppBindings } from "../env.ts";
@@ -42,7 +42,7 @@ export const adminRoutes = new Hono<AppBindings>()
     const id = newId("usr");
     await db(c.env)
       .insert(users)
-      .values({ id, orgId: me.orgId, username: body.username, displayName: body.displayName ?? null, passwordHash: hashPassword(password), role: body.role, mustChangePassword: true });
+      .values({ id, orgId: me.orgId, username: body.username, displayName: body.displayName ?? null, passwordHash: await hashPassword(password), role: body.role, mustChangePassword: true });
     await db(c.env).insert(auditLog).values({ orgId: me.orgId, actorId: me.id, action: "admin.user_created", target: id });
     const row = (await db(c.env).select().from(users).where(eq(users.id, id)))[0]!;
     // The initial password is shown to the admin exactly once.
@@ -54,7 +54,7 @@ export const adminRoutes = new Hono<AppBindings>()
     const password = generatePassword();
     const res = await db(c.env)
       .update(users)
-      .set({ passwordHash: hashPassword(password), mustChangePassword: true, updatedAt: Date.now() })
+      .set({ passwordHash: await hashPassword(password), mustChangePassword: true, updatedAt: Date.now() })
       .where(and(eq(users.id, id), eq(users.orgId, me.orgId)))
       .returning({ id: users.id });
     if (!res.length) throw new HttpError(404, "NOT_FOUND", "User not found");
@@ -87,8 +87,7 @@ export const adminRoutes = new Hono<AppBindings>()
     ]);
     return c.json({
       presets: PROVIDER_PRESETS,
-      capabilities: ["default", ...Object.keys(CAPABILITIES)],
-      plannedCapabilities: PLANNED_CAPABILITIES,
+      capabilities: ["default", ...KNOWN_CAPABILITIES],
       stubFallback: c.env.AI_ALLOW_STUB === "true",
       providers: providers.map((p) => ({ id: p.id, kind: p.kind, name: p.name, baseUrl: p.baseUrl, apiKeyHint: p.apiKeyHint, enabled: p.enabled })),
       routes,
@@ -143,7 +142,7 @@ export const adminRoutes = new Hono<AppBindings>()
     const body = await parseJson(
       c,
       z.object({
-        capability: z.string().refine((v) => v === "default" || v in CAPABILITIES || (PLANNED_CAPABILITIES as readonly string[]).includes(v), "unknown capability"),
+        capability: z.string().refine((v) => v === "default" || (KNOWN_CAPABILITIES as readonly string[]).includes(v), "unknown capability"),
         primary: z.object({ providerId: z.string(), model: z.string().trim().min(1) }),
         fallback: z.object({ providerId: z.string(), model: z.string().trim().min(1) }).nullable().optional(),
         temperature: z.number().min(0).max(2).nullable().optional(),

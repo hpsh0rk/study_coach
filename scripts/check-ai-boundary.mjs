@@ -5,7 +5,7 @@ import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const SCAN = ["apps", "packages", "fixtures", "scripts"];
+const SCAN = ["apps", "packages", "tools", "scripts"];
 const ALLOWED = [join("packages", "ai") + sep, join("scripts", "check-ai-boundary.mjs")];
 const SKIP_DIRS = new Set(["node_modules", "dist", ".wrangler", "migrations"]);
 const EXT = /\.(ts|tsx|js|mjs|cjs)$/;

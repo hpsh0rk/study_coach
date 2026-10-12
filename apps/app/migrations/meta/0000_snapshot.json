@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "a9037874-6f7e-495b-b6a7-f9974a81d253",
+  "id": "c4c7eac4-339b-45d0-a50f-96df73ce5bee",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "ai_calls": {
@@ -28,8 +28,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "project_id": {
-          "name": "project_id",
+        "lesson_id": {
+          "name": "lesson_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
@@ -107,10 +107,10 @@
         }
       },
       "indexes": {
-        "ai_calls_project_idx": {
-          "name": "ai_calls_project_idx",
+        "ai_calls_lesson_idx": {
+          "name": "ai_calls_lesson_idx",
           "columns": [
-            "project_id"
+            "lesson_id"
           ],
           "isUnique": false
         },
@@ -373,15 +373,15 @@
     "chapters": {
       "name": "chapters",
       "columns": {
-        "id": {
-          "name": "id",
+        "document_id": {
+          "name": "document_id",
           "type": "text",
-          "primaryKey": true,
+          "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
-        "document_id": {
-          "name": "document_id",
+        "id": {
+          "name": "id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -429,30 +429,15 @@
           "notNull": true,
           "autoincrement": false
         },
-        "word_count": {
-          "name": "word_count",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "est_slides": {
-          "name": "est_slides",
+        "words": {
+          "name": "words",
           "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         }
       },
-      "indexes": {
-        "chapters_doc_idx": {
-          "name": "chapters_doc_idx",
-          "columns": [
-            "document_id"
-          ],
-          "isUnique": false
-        }
-      },
+      "indexes": {},
       "foreignKeys": {
         "chapters_document_id_documents_id_fk": {
           "name": "chapters_document_id_documents_id_fk",
@@ -464,11 +449,19 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "no action",
+          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
-      "compositePrimaryKeys": {},
+      "compositePrimaryKeys": {
+        "chapters_document_id_id_pk": {
+          "columns": [
+            "document_id",
+            "id"
+          ],
+          "name": "chapters_document_id_id_pk"
+        }
+      },
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
@@ -489,15 +482,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "project_id": {
-          "name": "project_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "uploaded_by": {
-          "name": "uploaded_by",
+        "owner_id": {
+          "name": "owner_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -510,8 +496,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "r2_key": {
-          "name": "r2_key",
+        "title": {
+          "name": "title",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -524,46 +510,33 @@
           "notNull": true,
           "autoincrement": false
         },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "parser_id": {
-          "name": "parser_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
         "page_count": {
           "name": "page_count",
           "type": "integer",
           "primaryKey": false,
-          "notNull": false,
+          "notNull": true,
           "autoincrement": false
         },
-        "parsed_key": {
-          "name": "parsed_key",
-          "type": "text",
+        "pages_received": {
+          "name": "pages_received",
+          "type": "integer",
           "primaryKey": false,
-          "notNull": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "has_text_layer": {
+          "name": "has_text_layer",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
           "autoincrement": false
         },
-        "workflow_instance_id": {
-          "name": "workflow_instance_id",
-          "type": "text",
+        "has_bookmarks": {
+          "name": "has_bookmarks",
+          "type": "integer",
           "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "error": {
-          "name": "error",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
+          "notNull": true,
           "autoincrement": false
         },
         "created_at": {
@@ -572,20 +545,14 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
         }
       },
       "indexes": {
-        "documents_project_idx": {
-          "name": "documents_project_idx",
+        "documents_owner_idx": {
+          "name": "documents_owner_idx",
           "columns": [
-            "project_id"
+            "org_id",
+            "owner_id"
           ],
           "isUnique": false
         }
@@ -604,12 +571,116 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "documents_project_id_projects_id_fk": {
-          "name": "documents_project_id_projects_id_fk",
+        "documents_owner_id_users_id_fk": {
+          "name": "documents_owner_id_users_id_fk",
           "tableFrom": "documents",
-          "tableTo": "projects",
+          "tableTo": "users",
           "columnsFrom": [
-            "project_id"
+            "owner_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "lessons": {
+      "name": "lessons",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "org_id": {
+          "name": "org_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "owner_id": {
+          "name": "owner_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "document_id": {
+          "name": "document_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "scope": {
+          "name": "scope",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "params": {
+          "name": "params",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "theme": {
+          "name": "theme",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'classic'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "lessons_owner_idx": {
+          "name": "lessons_owner_idx",
+          "columns": [
+            "org_id",
+            "owner_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "lessons_org_id_orgs_id_fk": {
+          "name": "lessons_org_id_orgs_id_fk",
+          "tableFrom": "lessons",
+          "tableTo": "orgs",
+          "columnsFrom": [
+            "org_id"
           ],
           "columnsTo": [
             "id"
@@ -617,12 +688,25 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "documents_uploaded_by_users_id_fk": {
-          "name": "documents_uploaded_by_users_id_fk",
-          "tableFrom": "documents",
+        "lessons_owner_id_users_id_fk": {
+          "name": "lessons_owner_id_users_id_fk",
+          "tableFrom": "lessons",
           "tableTo": "users",
           "columnsFrom": [
-            "uploaded_by"
+            "owner_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "lessons_document_id_documents_id_fk": {
+          "name": "lessons_document_id_documents_id_fk",
+          "tableFrom": "lessons",
+          "tableTo": "documents",
+          "columnsFrom": [
+            "document_id"
           ],
           "columnsTo": [
             "id"
@@ -697,8 +781,8 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
-    "projects": {
-      "name": "projects",
+    "outline_versions": {
+      "name": "outline_versions",
       "columns": {
         "id": {
           "name": "id",
@@ -707,42 +791,69 @@
           "notNull": true,
           "autoincrement": false
         },
-        "org_id": {
-          "name": "org_id",
+        "lesson_id": {
+          "name": "lesson_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
-        "owner_id": {
-          "name": "owner_id",
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "outline": {
+          "name": "outline",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
-        "title": {
-          "name": "title",
+        "params": {
+          "name": "params",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
-        "slide_count": {
-          "name": "slide_count",
+        "scope": {
+          "name": "scope",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "spec_count": {
+          "name": "spec_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "total_minutes": {
+          "name": "total_minutes",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "ack_over_budget": {
+          "name": "ack_over_budget",
           "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": 0
+          "default": false
         },
-        "deck_version": {
-          "name": "deck_version",
+        "confirmed_at": {
+          "name": "confirmed_at",
           "type": "integer",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 0
+          "notNull": false,
+          "autoincrement": false
         },
         "created_at": {
           "name": "created_at",
@@ -750,54 +861,102 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
         }
       },
       "indexes": {
-        "projects_owner_idx": {
-          "name": "projects_owner_idx",
+        "outline_versions_lesson_version_uq": {
+          "name": "outline_versions_lesson_version_uq",
           "columns": [
-            "org_id",
-            "owner_id"
+            "lesson_id",
+            "version"
           ],
-          "isUnique": false
+          "isUnique": true
         }
       },
       "foreignKeys": {
-        "projects_org_id_orgs_id_fk": {
-          "name": "projects_org_id_orgs_id_fk",
-          "tableFrom": "projects",
-          "tableTo": "orgs",
+        "outline_versions_lesson_id_lessons_id_fk": {
+          "name": "outline_versions_lesson_id_lessons_id_fk",
+          "tableFrom": "outline_versions",
+          "tableTo": "lessons",
           "columnsFrom": [
-            "org_id"
+            "lesson_id"
           ],
           "columnsTo": [
             "id"
           ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "projects_owner_id_users_id_fk": {
-          "name": "projects_owner_id_users_id_fk",
-          "tableFrom": "projects",
-          "tableTo": "users",
-          "columnsFrom": [
-            "owner_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
+          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "pages": {
+      "name": "pages",
+      "columns": {
+        "document_id": {
+          "name": "document_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "no": {
+          "name": "no",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "text": {
+          "name": "text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "label": {
+          "name": "label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "words": {
+          "name": "words",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "pages_document_id_documents_id_fk": {
+          "name": "pages_document_id_documents_id_fk",
+          "tableFrom": "pages",
+          "tableTo": "documents",
+          "columnsFrom": [
+            "document_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "pages_document_id_no_pk": {
+          "columns": [
+            "document_id",
+            "no"
+          ],
+          "name": "pages_document_id_no_pk"
+        }
+      },
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
@@ -885,8 +1044,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "project_id": {
-          "name": "project_id",
+        "lesson_id": {
+          "name": "lesson_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -906,13 +1065,6 @@
           "notNull": true,
           "autoincrement": false
         },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
         "revoked_at": {
           "name": "revoked_at",
           "type": "integer",
@@ -929,26 +1081,26 @@
           ],
           "isUnique": true
         },
-        "share_project_idx": {
-          "name": "share_project_idx",
+        "share_lesson_idx": {
+          "name": "share_lesson_idx",
           "columns": [
-            "project_id"
+            "lesson_id"
           ],
           "isUnique": false
         }
       },
       "foreignKeys": {
-        "share_links_project_id_projects_id_fk": {
-          "name": "share_links_project_id_projects_id_fk",
+        "share_links_lesson_id_lessons_id_fk": {
+          "name": "share_links_lesson_id_lessons_id_fk",
           "tableFrom": "share_links",
-          "tableTo": "projects",
+          "tableTo": "lessons",
           "columnsFrom": [
-            "project_id"
+            "lesson_id"
           ],
           "columnsTo": [
             "id"
           ],
-          "onDelete": "no action",
+          "onDelete": "cascade",
           "onUpdate": "no action"
         },
         "share_links_created_by_users_id_fk": {
@@ -957,6 +1109,172 @@
           "tableTo": "users",
           "columnsFrom": [
             "created_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "slides": {
+      "name": "slides",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "lesson_id": {
+          "name": "lesson_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "outline_version_id": {
+          "name": "outline_version_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "spec_id": {
+          "name": "spec_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "spec_hash": {
+          "name": "spec_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "layout": {
+          "name": "layout",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "page_type": {
+          "name": "page_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "minutes": {
+          "name": "minutes",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "content": {
+          "name": "content",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "notes": {
+          "name": "notes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sources": {
+          "name": "sources",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "warnings": {
+          "name": "warnings",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "provider_id": {
+          "name": "provider_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "prev_content": {
+          "name": "prev_content",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "prev_notes": {
+          "name": "prev_notes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "slides_version_spec_uq": {
+          "name": "slides_version_spec_uq",
+          "columns": [
+            "outline_version_id",
+            "spec_id"
+          ],
+          "isUnique": true
+        },
+        "slides_lesson_hash_idx": {
+          "name": "slides_lesson_hash_idx",
+          "columns": [
+            "lesson_id",
+            "spec_hash"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "slides_lesson_id_lessons_id_fk": {
+          "name": "slides_lesson_id_lessons_id_fk",
+          "tableFrom": "slides",
+          "tableTo": "lessons",
+          "columnsFrom": [
+            "lesson_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "slides_outline_version_id_outline_versions_id_fk": {
+          "name": "slides_outline_version_id_outline_versions_id_fk",
+          "tableFrom": "slides",
+          "tableTo": "outline_versions",
+          "columnsFrom": [
+            "outline_version_id"
           ],
           "columnsTo": [
             "id"

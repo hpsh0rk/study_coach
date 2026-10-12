@@ -14,7 +14,6 @@ type Kind = "deepseek" | "glm" | "custom";
 interface AiView {
   presets: Record<Kind, { label: string; baseUrl: string; models: string[]; docs: string }>;
   capabilities: string[];
-  plannedCapabilities: string[];
   stubFallback: boolean;
   providers: { id: string; kind: Kind; name: string; baseUrl: string; apiKeyHint: string; enabled: boolean }[];
   routes: { capability: string; primaryProviderId: string; primaryModel: string; fallbackProviderId: string | null; fallbackModel: string | null; temperature: number | null }[];
@@ -288,10 +287,9 @@ function AiPanel() {
         <label>
           能力 Capability
           <select value={route.capability} onChange={(e) => setRoute({ ...route, capability: e.target.value })}>
-            {[...view.capabilities, ...view.plannedCapabilities].map((c) => (
+            {view.capabilities.map((c) => (
               <option key={c} value={c}>
                 {c}
-                {view.plannedCapabilities.includes(c) ? " (planned)" : ""}
               </option>
             ))}
           </select>

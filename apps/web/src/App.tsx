@@ -1,13 +1,15 @@
-import { BrowserRouter, Link, NavLink, Route, Routes, useNavigate } from "react-router";
+import type { ReactNode } from "react";
+import { BrowserRouter, Link, NavLink, Route, Routes, useNavigate, useParams } from "react-router";
 import { AuthProvider, RequireAuth, useAuth } from "./auth.tsx";
 import { AdminPage } from "./pages/AdminPage.tsx";
 import { ChangePasswordPage, LoginPage } from "./pages/AuthPages.tsx";
-import { DemoGridPage, DemoPlayPage, DemoSpeakerPage } from "./pages/DemoPages.tsx";
-import { PlayPage, SpeakerPage } from "./pages/PlayPages.tsx";
-import { ProjectPage } from "./pages/ProjectPage.tsx";
-import { ProjectsPage } from "./pages/ProjectsPage.tsx";
-import { SharePage } from "./pages/SharePage.tsx";
-import type { ReactNode } from "react";
+import { GalleryPage } from "./pages/dev/GalleryPage.tsx";
+import { RenderPage } from "./pages/dev/RenderPage.tsx";
+import { LessonPage } from "./pages/LessonPage.tsx";
+import { LessonsPage } from "./pages/LessonsPage.tsx";
+import { PlayPage, SharePage } from "./pages/PlayPages.tsx";
+import { ChaptersStep } from "./pages/wizard/ChaptersStep.tsx";
+import { UploadStep } from "./pages/wizard/UploadStep.tsx";
 
 function Shell({ children }: { children: ReactNode }) {
   const { me, logout } = useAuth();
@@ -19,8 +21,11 @@ function Shell({ children }: { children: ReactNode }) {
           <span className="brand-mark">〰</span> AI 课件工坊
         </Link>
         <nav>
-          {me && <NavLink to="/" end>备课 Projects</NavLink>}
-          <NavLink to="/demo">放映示例 Demo</NavLink>
+          {me && (
+            <NavLink to="/" end>
+              我的课 Lessons
+            </NavLink>
+          )}
           {me?.role === "admin" && <NavLink to="/admin">后台 Admin</NavLink>}
         </nav>
         <div className="topbar-user">
@@ -49,6 +54,17 @@ function Shell({ children }: { children: ReactNode }) {
   );
 }
 
+function NewChapters() {
+  const { docId = "" } = useParams();
+  return <ChaptersStep key={docId} documentId={docId} reached="chapters" />;
+}
+
+const authed = (node: ReactNode, admin = false) => (
+  <RequireAuth admin={admin}>
+    <Shell>{node}</Shell>
+  </RequireAuth>
+);
+
 export function App() {
   return (
     <BrowserRouter>
@@ -57,14 +73,14 @@ export function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/change-password" element={<ChangePasswordPage />} />
           <Route path="/s/:token" element={<SharePage />} />
-          <Route path="/demo/play" element={<DemoPlayPage />} />
-          <Route path="/demo/speaker" element={<DemoSpeakerPage />} />
-          <Route path="/demo" element={<Shell><DemoGridPage /></Shell>} />
+          <Route path="/dev/gallery" element={<GalleryPage />} />
+          <Route path="/dev/render" element={<RenderPage />} />
           <Route path="/play/:id" element={<RequireAuth><PlayPage /></RequireAuth>} />
-          <Route path="/speaker/:id" element={<RequireAuth><SpeakerPage /></RequireAuth>} />
-          <Route path="/admin" element={<RequireAuth admin><Shell><AdminPage /></Shell></RequireAuth>} />
-          <Route path="/projects/:id" element={<RequireAuth><Shell><ProjectPage /></Shell></RequireAuth>} />
-          <Route path="/" element={<RequireAuth><Shell><ProjectsPage /></Shell></RequireAuth>} />
+          <Route path="/admin" element={authed(<AdminPage />, true)} />
+          <Route path="/new" element={authed(<UploadStep />)} />
+          <Route path="/new/:docId" element={authed(<NewChapters />)} />
+          <Route path="/lessons/:id/:step?" element={authed(<LessonPage />)} />
+          <Route path="/" element={authed(<LessonsPage />)} />
           <Route path="*" element={<Shell><div className="card narrow">Page not found · 页面不存在</div></Shell>} />
         </Routes>
       </AuthProvider>

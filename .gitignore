@@ -13,3 +13,4 @@ apps/app/.wrangler.deploy.jsonc
 .wrangler-e2e
 __pycache__/
 .pytest_cache/
+results/

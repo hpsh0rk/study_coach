@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Simple pendulum · 单摆</title>
+<style>
+  html, body { margin: 0; height: 100%; font-family: Arimo, "Noto Sans SC", sans-serif; background: #fff; color: #17202e; }
+  body { display: flex; flex-direction: column; }
+  canvas { flex: 1 1 0; min-height: 0; width: 100%; display: block; }
+  .controls { display: grid; grid-template-columns: auto 1fr 4em; gap: 6px 18px; align-items: center; padding: 10px 24px 14px; font-size: 32px; }
+  input[type="range"] { width: 100%; height: 40px; accent-color: #1f5fbf; }
+  output { text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
+  .readout { grid-column: 1 / -1; color: #4b5668; font-size: 30px; }
+  button { font: inherit; font-size: 30px; padding: 4px 18px; border-radius: 12px; border: 2px solid #c9d7ef; background: #eef3fb; cursor: pointer; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="controls">
+  <label for="l">Length 摆长 / m</label><input id="l" type="range" min="0.2" max="2" step="0.1" value="1" /><output id="lo"></output>
+  <label for="g">Gravity 重力加速度 / m/s²</label><input id="g" type="range" min="1.6" max="25" step="0.1" value="9.8" /><output id="go"></output>
+  <label for="a">Start angle 初始角度 / °</label><input id="a" type="range" min="2" max="40" step="1" value="15" /><output id="ao"></output>
+  <div class="readout"><span id="period"></span> &nbsp; <button id="reset" type="button">Release 释放</button></div>
+</div>
+<script>
+  const $ = (id) => document.getElementById(id);
+  const canvas = $("c"), ctx = canvas.getContext("2d");
+  let theta = 0, omega = 0, swings = 0, timer = 0, lastSign = 0, last = performance.now();
+  function size() { const r = canvas.getBoundingClientRect(); canvas.width = Math.max(1, r.width); canvas.height = Math.max(1, r.height); }
+  function reset() { theta = (+$("a").value * Math.PI) / 180; omega = 0; swings = 0; timer = 0; lastSign = 0; }
+  function step(dt) {
+    const L = +$("l").value, g = +$("g").value;
+    for (let i = 0; i < 10; i++) { omega += (-(g / L) * Math.sin(theta) * dt) / 10; theta += (omega * dt) / 10; }
+    timer += dt;
+    const sign = Math.sign(omega);
+    if (lastSign && sign && sign !== lastSign) swings++;
+    if (sign) lastSign = sign;
+  }
+  function draw() {
+    const L = +$("l").value, g = +$("g").value, w = canvas.width, h = canvas.height;
+    $("lo").textContent = L.toFixed(1); $("go").textContent = g.toFixed(1); $("ao").textContent = $("a").value;
+    const measured = swings >= 2 ? ` · measured ≈ ${((2 * timer) / swings).toFixed(2)} s` : "";
+    $("period").textContent = `T = 2π√(L/g) = ${(2 * Math.PI * Math.sqrt(L / g)).toFixed(2)} s${measured}`;
+    ctx.clearRect(0, 0, w, h);
+    const px = w / 2, py = 20, len = ((h - 80) * L) / 2, bx = px + len * Math.sin(theta), by = py + len * Math.cos(theta);
+    ctx.fillStyle = "#4b5668"; ctx.fillRect(px - 120, py - 8, 240, 8);
+    ctx.strokeStyle = "#dfe5ee"; ctx.setLineDash([10, 10]); ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px, py + len); ctx.stroke(); ctx.setLineDash([]);
+    ctx.strokeStyle = "#17202e"; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(bx, by); ctx.stroke();
+    ctx.fillStyle = "#1f5fbf"; ctx.beginPath(); ctx.arc(bx, by, 30, 0, 2 * Math.PI); ctx.fill();
+  }
+  function frame(now) { step(Math.min(0.05, (now - last) / 1000)); last = now; draw(); requestAnimationFrame(frame); }
+  for (const id of ["l", "g", "a"]) $(id).addEventListener("input", reset);
+  $("reset").addEventListener("click", reset);
+  addEventListener("resize", size);
+  size(); reset(); requestAnimationFrame(frame);
+</script>
+</body>
+</html>

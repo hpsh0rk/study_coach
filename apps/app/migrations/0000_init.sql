@@ -2,7 +2,7 @@ CREATE TABLE `ai_calls` (
 	`id` text PRIMARY KEY NOT NULL,
 	`org_id` text NOT NULL,
 	`user_id` text NOT NULL,
-	`project_id` text,
+	`lesson_id` text,
 	`capability` text NOT NULL,
 	`prompt_version` text NOT NULL,
 	`provider_id` text NOT NULL,
@@ -15,7 +15,7 @@ CREATE TABLE `ai_calls` (
 	`created_at` integer NOT NULL
 );
 --> statement-breakpoint
-CREATE INDEX `ai_calls_project_idx` ON `ai_calls` (`project_id`);--> statement-breakpoint
+CREATE INDEX `ai_calls_lesson_idx` ON `ai_calls` (`lesson_id`);--> statement-breakpoint
 CREATE INDEX `ai_calls_org_time_idx` ON `ai_calls` (`org_id`,`created_at`);--> statement-breakpoint
 CREATE TABLE `ai_providers` (
 	`id` text PRIMARY KEY NOT NULL,
@@ -55,42 +55,53 @@ CREATE TABLE `audit_log` (
 );
 --> statement-breakpoint
 CREATE TABLE `chapters` (
-	`id` text PRIMARY KEY NOT NULL,
 	`document_id` text NOT NULL,
+	`id` text NOT NULL,
 	`parent_id` text,
 	`ord` integer NOT NULL,
 	`level` integer NOT NULL,
 	`title` text NOT NULL,
 	`page_start` integer NOT NULL,
 	`page_end` integer NOT NULL,
-	`word_count` integer NOT NULL,
-	`est_slides` integer NOT NULL,
-	FOREIGN KEY (`document_id`) REFERENCES `documents`(`id`) ON UPDATE no action ON DELETE no action
+	`words` integer NOT NULL,
+	PRIMARY KEY(`document_id`, `id`),
+	FOREIGN KEY (`document_id`) REFERENCES `documents`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE INDEX `chapters_doc_idx` ON `chapters` (`document_id`);--> statement-breakpoint
 CREATE TABLE `documents` (
 	`id` text PRIMARY KEY NOT NULL,
 	`org_id` text NOT NULL,
-	`project_id` text,
-	`uploaded_by` text NOT NULL,
+	`owner_id` text NOT NULL,
 	`filename` text NOT NULL,
-	`r2_key` text NOT NULL,
+	`title` text NOT NULL,
 	`size_bytes` integer NOT NULL,
-	`status` text NOT NULL,
-	`parser_id` text,
-	`page_count` integer,
-	`parsed_key` text,
-	`workflow_instance_id` text,
-	`error` text,
+	`page_count` integer NOT NULL,
+	`pages_received` integer DEFAULT 0 NOT NULL,
+	`has_text_layer` integer NOT NULL,
+	`has_bookmarks` integer NOT NULL,
+	`created_at` integer NOT NULL,
+	FOREIGN KEY (`org_id`) REFERENCES `orgs`(`id`) ON UPDATE no action ON DELETE no action,
+	FOREIGN KEY (`owner_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE no action
+);
+--> statement-breakpoint
+CREATE INDEX `documents_owner_idx` ON `documents` (`org_id`,`owner_id`);--> statement-breakpoint
+CREATE TABLE `lessons` (
+	`id` text PRIMARY KEY NOT NULL,
+	`org_id` text NOT NULL,
+	`owner_id` text NOT NULL,
+	`document_id` text NOT NULL,
+	`title` text NOT NULL,
+	`scope` text NOT NULL,
+	`params` text NOT NULL,
+	`theme` text DEFAULT 'classic' NOT NULL,
 	`created_at` integer NOT NULL,
 	`updated_at` integer NOT NULL,
 	FOREIGN KEY (`org_id`) REFERENCES `orgs`(`id`) ON UPDATE no action ON DELETE no action,
-	FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON UPDATE no action ON DELETE no action,
-	FOREIGN KEY (`uploaded_by`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE no action
+	FOREIGN KEY (`owner_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE no action,
+	FOREIGN KEY (`document_id`) REFERENCES `documents`(`id`) ON UPDATE no action ON DELETE no action
 );
 --> statement-breakpoint
-CREATE INDEX `documents_project_idx` ON `documents` (`project_id`);--> statement-breakpoint
+CREATE INDEX `lessons_owner_idx` ON `lessons` (`org_id`,`owner_id`);--> statement-breakpoint
 CREATE TABLE `login_attempts` (
 	`key` text PRIMARY KEY NOT NULL,
 	`window_start` integer NOT NULL,
@@ -103,20 +114,32 @@ CREATE TABLE `orgs` (
 	`created_at` integer NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE `projects` (
+CREATE TABLE `outline_versions` (
 	`id` text PRIMARY KEY NOT NULL,
-	`org_id` text NOT NULL,
-	`owner_id` text NOT NULL,
-	`title` text NOT NULL,
-	`slide_count` integer DEFAULT 0 NOT NULL,
-	`deck_version` integer DEFAULT 0 NOT NULL,
+	`lesson_id` text NOT NULL,
+	`version` integer NOT NULL,
+	`outline` text NOT NULL,
+	`params` text NOT NULL,
+	`scope` text NOT NULL,
+	`spec_count` integer NOT NULL,
+	`total_minutes` real NOT NULL,
+	`ack_over_budget` integer DEFAULT false NOT NULL,
+	`confirmed_at` integer,
 	`created_at` integer NOT NULL,
-	`updated_at` integer NOT NULL,
-	FOREIGN KEY (`org_id`) REFERENCES `orgs`(`id`) ON UPDATE no action ON DELETE no action,
-	FOREIGN KEY (`owner_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE no action
+	FOREIGN KEY (`lesson_id`) REFERENCES `lessons`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE INDEX `projects_owner_idx` ON `projects` (`org_id`,`owner_id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `outline_versions_lesson_version_uq` ON `outline_versions` (`lesson_id`,`version`);--> statement-breakpoint
+CREATE TABLE `pages` (
+	`document_id` text NOT NULL,
+	`no` integer NOT NULL,
+	`text` text NOT NULL,
+	`label` text,
+	`words` integer DEFAULT 0 NOT NULL,
+	PRIMARY KEY(`document_id`, `no`),
+	FOREIGN KEY (`document_id`) REFERENCES `documents`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
 CREATE TABLE `sessions` (
 	`id` text PRIMARY KEY NOT NULL,
 	`user_id` text NOT NULL,
@@ -130,17 +153,39 @@ CREATE INDEX `sessions_user_idx` ON `sessions` (`user_id`);--> statement-breakpo
 CREATE TABLE `share_links` (
 	`id` text PRIMARY KEY NOT NULL,
 	`token_hash` text NOT NULL,
-	`project_id` text NOT NULL,
+	`lesson_id` text NOT NULL,
 	`created_by` text NOT NULL,
 	`created_at` integer NOT NULL,
-	`expires_at` integer,
 	`revoked_at` integer,
-	FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON UPDATE no action ON DELETE no action,
+	FOREIGN KEY (`lesson_id`) REFERENCES `lessons`(`id`) ON UPDATE no action ON DELETE cascade,
 	FOREIGN KEY (`created_by`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE no action
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `share_token_uq` ON `share_links` (`token_hash`);--> statement-breakpoint
-CREATE INDEX `share_project_idx` ON `share_links` (`project_id`);--> statement-breakpoint
+CREATE INDEX `share_lesson_idx` ON `share_links` (`lesson_id`);--> statement-breakpoint
+CREATE TABLE `slides` (
+	`id` text PRIMARY KEY NOT NULL,
+	`lesson_id` text NOT NULL,
+	`outline_version_id` text NOT NULL,
+	`spec_id` text NOT NULL,
+	`spec_hash` text NOT NULL,
+	`layout` text NOT NULL,
+	`page_type` text NOT NULL,
+	`minutes` real NOT NULL,
+	`content` text NOT NULL,
+	`notes` text NOT NULL,
+	`sources` text NOT NULL,
+	`warnings` text NOT NULL,
+	`provider_id` text NOT NULL,
+	`prev_content` text,
+	`prev_notes` text,
+	`updated_at` integer NOT NULL,
+	FOREIGN KEY (`lesson_id`) REFERENCES `lessons`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`outline_version_id`) REFERENCES `outline_versions`(`id`) ON UPDATE no action ON DELETE no action
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `slides_version_spec_uq` ON `slides` (`outline_version_id`,`spec_id`);--> statement-breakpoint
+CREATE INDEX `slides_lesson_hash_idx` ON `slides` (`lesson_id`,`spec_hash`);--> statement-breakpoint
 CREATE TABLE `users` (
 	`id` text PRIMARY KEY NOT NULL,
 	`org_id` text NOT NULL,

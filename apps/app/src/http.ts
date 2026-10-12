@@ -13,10 +13,12 @@ export class HttpError extends Error {
   }
 }
 
+/** An empty body parses as undefined, so schemas with a default accept body-less POSTs. */
 export async function parseJson<T extends z.ZodType>(c: Context, schema: T): Promise<z.infer<T>> {
   let body: unknown;
   try {
-    body = await c.req.json();
+    const raw = await c.req.text();
+    body = raw.trim() ? JSON.parse(raw) : undefined;
   } catch {
     throw new HttpError(400, "BAD_JSON", "Request body must be JSON");
   }
