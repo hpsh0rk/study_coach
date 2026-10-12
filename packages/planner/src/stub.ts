@@ -39,11 +39,11 @@ const cleanTitle = (t: string) => t.replace(/^(chapter\s+)?\d+(\.\d+)*\s*/i, "")
  */
 /** One long section becomes 2–3 parts so the lesson still gets several learning loops. */
 function loopsOf(input: DraftInput): PlannerSection[] {
-  const sections = sectionsOf(input).slice(0, 3);
+  const sections = sectionsOf(input).slice(0, input.params.minutes < 35 ? 2 : 3);
   if (sections.length !== 1) return sections;
   const s = sections[0]!;
   const span = s.pageEnd - s.pageStart + 1;
-  const parts = span >= 9 ? 3 : span >= 5 ? 2 : 1;
+  const parts = Math.min(input.params.minutes < 35 ? 2 : 3, span >= 9 ? 3 : span >= 5 ? 2 : 1);
   if (parts === 1) return sections;
   const size = Math.ceil(span / parts);
   return Array.from({ length: parts }, (_, k) => ({
@@ -121,6 +121,12 @@ export function stubOutline(input: DraftInput): { objectives: string[]; slides: 
   slides.push({ pageType: "practice", title: "Practice questions", purpose: "Independent practice", keyPoints: sections.map((s) => cleanTitle(s.title)).slice(0, 3), visual: "none", minutes: 5, sourcePages: all, loop: sections.length });
   slides.push({ pageType: "summary", title: "How the ideas connect", purpose: "Structure of the lesson", keyPoints: sections.map((s) => cleanTitle(s.title)).slice(0, 4), visual: "none", minutes: 2.5, sourcePages: [], loop: 0 });
   slides.push({ pageType: "exit", title: "Exit ticket", purpose: "Check the objectives", keyPoints: objectives.slice(0, 3), visual: "none", minutes: 3, sourcePages: all, loop: 0 });
+  const limit = input.params.minutes * 1.1;
+  for (const optional of ["faded", "data", "experiment", "worked"] as const) {
+    for (let i = slides.length - 1; i >= 0 && slides.reduce((n, x) => n + x.minutes, 0) > limit; i--) {
+      if (slides[i]!.pageType === optional) slides.splice(i, 1);
+    }
+  }
   return {
     objectives: objectives.length ? objectives : ["Understand the selected pages"],
     slides: slides.map((x) => ({ ...x, title: x.title.slice(0, 160), sourcePages: x.sourcePages.slice(0, 20) })),
