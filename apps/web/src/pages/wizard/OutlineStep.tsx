@@ -275,10 +275,11 @@ export function OutlineStep({ view, reached, onChanged }: { view: LessonView; re
     <div className="wizard">
       <Stepper current="outline" reached={reached} lessonId={view.lesson.id} />
       <StepIntro step="outline" />
-      {copied && readOnly && (
+      {copied && (
         <div className="alert info" data-testid="copied-hint">
-          已复制到新学期：大纲和 {view.slides.length} 页幻灯片（包括你手动改过的）都沿用了。点下方“修改大纲”按新学期调整，确认后只有改动过的页需要重新生成。· Copied with every slide;
-          revise the outline and only changed slides are regenerated.
+          已复制到新学期：大纲和 {view.slides.length} 页幻灯片（包括你手动改过的）都沿用了。
+          {readOnly ? "点下方“修改大纲”按新学期调整" : "原课里没确认的大纲草稿也一起复制了，可以直接改"}，确认后只有改动过的页需要重新生成。· Copied with every slide; revise the outline and only changed slides
+          are regenerated.
         </div>
       )}
       <div className="card outline-head">

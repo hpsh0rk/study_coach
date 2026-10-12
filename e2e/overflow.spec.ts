@@ -17,4 +17,10 @@ test("all layouts fit at max budget with body text >= 48px", async ({ page }) =>
     expect.soft(c.minFont, `${c.id} smallest body font`).toBeGreaterThanOrEqual(48 - 0.01);
     expect.soft(c.hidden, `${c.id} elements still hidden at the last reveal step`).toBe(0);
   }
+  if (process.env.SHOTS_DIR) {
+    for (const id of ["order-sample", "order-match-zh", "quiz-poll-en", "experiment-sample"]) {
+      const fig = page.getByTestId(`slide-${id}`);
+      if (await fig.count()) await fig.locator(".kj-slide").screenshot({ path: `${process.env.SHOTS_DIR}/18-gallery-${id}.png` });
+    }
+  }
 });

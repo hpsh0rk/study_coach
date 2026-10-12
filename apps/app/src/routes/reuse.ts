@@ -20,7 +20,10 @@ function leafChapters(tree: ChapterNode[], ids: string[]): ChapterNode[] {
 /** Consecutive pages owned by the same leaf chapter (or by none) form one piece of the unit. */
 function piecesOf(scope: LessonScope, tree: ChapterNode[], words: Map<number, number>): UnitPiece[] {
   const leaves = leafChapters(tree, scope.chapterIds);
-  const ownerOf = (no: number) => leaves.find((c) => c.pageStart <= no && no <= c.pageEnd);
+  const selected = tree.filter((c) => scope.chapterIds.includes(c.id)).sort((a, b) => b.level - a.level);
+  const covers = (c: ChapterNode, no: number) => c.pageStart <= no && no <= c.pageEnd;
+  // A parent's intro pages (before its first selected child) belong to the parent.
+  const ownerOf = (no: number) => leaves.find((c) => covers(c, no)) ?? selected.find((c) => covers(c, no));
   const out: UnitPiece[] = [];
   for (const no of pagesInRanges(scope.ranges)) {
     const owner = ownerOf(no);
@@ -29,7 +32,10 @@ function piecesOf(scope: LessonScope, tree: ChapterNode[], words: Map<number, nu
     if (last && last.chapterId === owner?.id && last.pages[last.pages.length - 1]!.no === no - 1) last.pages.push(page);
     else out.push({ title: owner?.title ?? "", ...(owner ? { chapterId: owner.id } : {}), pages: [page] });
   }
-  for (const p of out) if (!p.title) p.title = `pp. ${p.pages[0]!.no}–${p.pages[p.pages.length - 1]!.no}`;
+  for (const p of out) {
+    const [first, last] = [p.pages[0]!.no, p.pages[p.pages.length - 1]!.no];
+    if (!p.title) p.title = first === last ? `p. ${first}` : `pp. ${first}–${last}`;
+  }
   return out;
 }
 

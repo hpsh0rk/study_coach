@@ -109,6 +109,14 @@ describe("class tally", () => {
     expect(host.querySelector(".kj-tally-n")!.textContent).toBe("5 · 100%");
     p.setTally(1, [1, 1, 2]);
     expect(host.querySelectorAll(".kj-tally-n")[2]!.textContent).toBe("2 · 50%");
+    // Focus stays in the vote box; the clicker's PageDown must still reveal the distribution.
+    inputs[0]!.focus();
+    inputs[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(host.querySelector(".kj-player")!.getAttribute("data-step")).toBe("0");
+    inputs[1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "PageDown", bubbles: true }));
+    expect(host.querySelector(".kj-player")!.getAttribute("data-step")).toBe("1");
+    inputs[1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    expect(host.querySelector(".kj-player")!.getAttribute("data-step")).toBe("1");
     p.prev();
     p.next();
     expect(host.querySelectorAll(".kj-tally-n")[2]!.textContent).toBe("2 · 50%");

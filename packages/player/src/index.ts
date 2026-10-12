@@ -165,7 +165,12 @@ export class Player {
     btn("⛶", "Fullscreen · 全屏 (F)", () => this.toggleFullscreen());
 
     const onKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.metaKey || e.ctrlKey || e.altKey) return;
+      // A clicker only sends PageUp/PageDown: after typing votes it must still move on (Enter just leaves the box).
+      if (e.target instanceof HTMLInputElement && e.target.closest(".kj-tally-inputs") && ["PageDown", "PageUp", "Enter"].includes(e.key)) {
+        e.target.blur();
+        if (e.key === "Enter") return;
+      } else if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       const action = keyAction(e.key);
       if (!action) return;
       e.preventDefault();

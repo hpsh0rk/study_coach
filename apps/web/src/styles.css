@@ -941,6 +941,10 @@ button.link {
   width: 100%;
   aspect-ratio: 16 / 9;
 }
+/* Disabled buttons inside a thumbnail (quiz options, order cards) would swallow the click that selects it. */
+.slide-thumb * {
+  pointer-events: none;
+}
 .thumb-empty {
   display: grid;
   place-items: center;
