@@ -1,5 +1,5 @@
 /**
- * Runs eval scenarios through the planner → writer pipeline and writes one deck JSON per
+ * Runs eval scenarios through the outline → slide generation pipeline and writes one deck JSON per
  * scenario × run, in the format internal/eval/score.ts reads.
  *
  *   pnpm eval:run --eval-dir <dir with manifest.json + pdfs/> [--scenarios S01,S03 | --all]
@@ -12,13 +12,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createAiLayer, PROVIDER_PRESETS, type AiCallRecord, type AiConfig, type ProviderKind } from "@kj/ai";
-import { pagesInRanges, textForRanges } from "@kj/pdf-structure";
-import { draftOutline, stubOutline, type DraftInput, type PlannerSection } from "@kj/planner";
-import { LessonParams, type AblationFlags, type ConfirmedOutline, type Outline, type PageRange, type PageText, type SlideSpec } from "@kj/schema";
+import { draftOutline, OUTLINE_PROMPT_VERSION, OUTLINE_SOURCE_CHARS, SLIDE_PROMPT_VERSION, stubOutline, stubSlide, workedSpecFor, writeSlide, type DraftInput, type PlannerSection } from "@kj/generation";
+import { pagesInRanges, sourceForRanges } from "@kj/pdf-structure";
+import { LessonParams, Outline, type PageRange, type PageText, type SlideSpec } from "@kj/schema";
 import { layoutForPageType } from "@kj/templates";
-import { PROMPT_VERSION as WRITER_PROMPT, stubSlide, writeDeckDirect, writeSlide, DIRECT_PROMPT_VERSION } from "@kj/writer";
-import { PROMPT_VERSION as PLANNER_PROMPT } from "@kj/planner";
-import { parseArgs, parseFlags, readJson, writeJson } from "./common.ts";
+import { parseArgs, readJson, writeJson } from "./common.ts";
+import { DIRECT_PROMPT_VERSION, writeDeckDirect } from "./direct.ts";
+import { parseFlags, pipelineOptions, type AblationFlags } from "./flags.ts";
 
 interface ManifestSection {
   title: string;
@@ -130,7 +130,8 @@ export async function runScenario(o: RunOptions) {
     allowStubFallback: true,
   });
 
-  const draftInput: DraftInput = { lessonTitle, params, sections, pages, sourceText: textForRanges(allPages, ranges), ctx, flags };
+  const options = pipelineOptions(flags);
+  const draftInput: DraftInput = { lessonTitle, params, sections, pages, ctx, options };
   const started = Date.now();
   let outline: Outline | null = null;
   let slides: Record<string, unknown>[];
@@ -140,14 +141,15 @@ export async function runScenario(o: RunOptions) {
   if (!flags.autoConfirm) throw new Error("autoConfirm=false (A9) needs a teacher in the loop; run it through the web app");
 
   if (flags.outline === "skip") {
-    const res = await writeDeckDirect(ai, { lessonTitle, params, sourceText: draftInput.sourceText, validPages: pages.map((p) => p.no), ctx, flags }, () => {
+    const sourceText = sourceForRanges(allPages, ranges, OUTLINE_SOURCE_CHARS).text;
+    const res = await writeDeckDirect(ai, { lessonTitle, params, sourceText, validPages: pages.map((p) => p.no), ctx, options }, () => {
       const plan = stubOutline(draftInput);
       return {
         objectives: plan.objectives,
         slides: plan.slides.map((s, i) => {
           const spec = { ...s, id: `sp${i + 1}`, layout: layoutForPageType(s.pageType) } as SlideSpec;
           const own = pages.filter((p) => s.sourcePages.includes(p.no));
-          const written = stubSlide({ spec, outline: { objectives: plan.objectives, slides: [] }, lessonTitle, pages: own.length ? own : pages });
+          const written = stubSlide({ spec, outline: { objectives: plan.objectives, slides: [], glossary: plan.glossary, notCovered: [] }, lessonTitle, pages: own });
           return { pageType: s.pageType, minutes: s.minutes, sourcePages: s.sourcePages, content: written.content, notes: written.notes };
         }),
       };
@@ -157,19 +159,26 @@ export async function runScenario(o: RunOptions) {
     if (o.reuseDir) {
       const prev = readJson<{ outline?: Outline }>(path.join(o.reuseDir, `${scenario.id}-r${o.run}.json`));
       if (!prev.outline) throw new Error(`${o.reuseDir}: ${scenario.id}-r${o.run}.json has no outline to reuse`);
-      outline = prev.outline;
+      outline = Outline.parse(prev.outline);
     } else {
       const drafted = await draftOutline(ai, draftInput);
       outline = drafted.outline;
       warnings.push(...drafted.warnings.map((w) => `${w.code}: ${w.message}`));
     }
-    const confirmed = { versionId: `${ctx.lessonId}-v1`, lessonId: ctx.lessonId, outline, confirmedAt: Date.now() } as ConfirmedOutline;
+    const confirmed = outline;
     const specs = outline.slides;
     slides = new Array(specs.length);
-    await pool(specs, o.concurrency, async (spec, i) => {
-      const w = await writeSlide(ai, confirmed, spec.id, { lessonTitle, params, pages, ctx, flags });
+    const problems = new Map<string, string>();
+    const write = async (spec: SlideSpec) => {
+      const i = specs.indexOf(spec);
+      const worked = workedSpecFor(confirmed, spec.id);
+      const w = await writeSlide(ai, confirmed, spec.id, { lessonTitle, params, pages, ctx, options, workedProblem: worked ? problems.get(worked) : undefined });
+      if (w.content.layout === "steps" && spec.pageType === "worked") problems.set(spec.id, w.content.problem);
       slides[i] = { id: `s${i + 1}`, specId: spec.id, layout: spec.layout, pageType: spec.pageType, minutes: spec.minutes, content: w.content, notes: w.notes, sources: w.sources, warnings: w.warnings };
-    });
+    };
+    // Worked examples first, so faded/practice pages can mirror them (as in the web app's generate-all).
+    await pool(specs.filter((s) => s.pageType === "worked"), o.concurrency, write);
+    await pool(specs.filter((s) => s.pageType !== "worked"), o.concurrency, write);
   }
 
   const ok = calls.filter((c) => c.status === "ok");
@@ -181,7 +190,7 @@ export async function runScenario(o: RunOptions) {
       run: o.run,
       model: o.provider?.label ?? "stub",
       stub: ok.every((c) => c.providerId === "stub"),
-      promptVersions: { planner: PLANNER_PROMPT, writer: WRITER_PROMPT, direct: DIRECT_PROMPT_VERSION },
+      promptVersions: { planner: OUTLINE_PROMPT_VERSION, writer: SLIDE_PROMPT_VERSION, direct: DIRECT_PROMPT_VERSION },
       reusedOutlineFrom: o.reuseDir ?? null,
       tokensIn: calls.reduce((n, c) => n + c.inputTokens, 0),
       tokensOut: calls.reduce((n, c) => n + c.outputTokens, 0),

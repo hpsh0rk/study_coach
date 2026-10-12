@@ -33,13 +33,13 @@ export function resolveEmbed(id: string): EmbedEntry | undefined {
   return EMBED_CATALOG.find((e) => e.id === id);
 }
 
-/** Best catalog match for free text (used by planners/stubs to pick an experiment). */
-export function findEmbed(text: string): EmbedEntry | undefined {
+/** Best catalog match for free text: the entry with the most whole-word topic hits (at least `minHits`). */
+export function findEmbed(text: string, minHits = 1): EmbedEntry | undefined {
   const t = text.toLowerCase();
   let best: { entry: EmbedEntry; score: number } | undefined;
   for (const entry of EMBED_CATALOG) {
-    const score = entry.topics.filter((k) => t.includes(k)).length;
-    if (score > 0 && (!best || score > best.score)) best = { entry, score };
+    const score = entry.topics.filter((k) => new RegExp(`\\b${k}\\b`).test(t)).length;
+    if (score >= minHits && (!best || score > best.score)) best = { entry, score };
   }
   return best?.entry;
 }

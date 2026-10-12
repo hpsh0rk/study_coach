@@ -1,48 +1,25 @@
 import type { ExperimentSim, FunctionSpec, Outline, PageText, SlideContent, SlideSpec, VisualSpec } from "@kj/schema";
 import { BUDGETS } from "@kj/templates";
 import { findEmbed } from "@kj/widgets";
+import { clip, glossaryFrom, sentencesOf } from "./text.ts";
 
-const TERMS_ZH: Record<string, string> = {
-  wave: "波",
-  waves: "波",
-  energy: "能量",
-  amplitude: "振幅",
-  wavelength: "波长",
-  frequency: "频率",
-  period: "周期",
-  speed: "速度",
-  transverse: "横波",
-  longitudinal: "纵波",
-  compression: "压缩",
-  rarefaction: "稀疏",
-  medium: "介质",
-  vacuum: "真空",
-  echo: "回声",
-  ultrasound: "超声波",
-  pitch: "音调",
-  loudness: "响度",
-  reflection: "反射",
-  oscillation: "振动",
-  displacement: "位移",
-  spectrum: "光谱",
-  force: "力",
-  mass: "质量",
-  acceleration: "加速度",
+const PREDICT: Record<string, { question: string; options: string[]; observe: string[] }> = {
+  "wave-string": {
+    question: "What happens to the wavelength if frequency increases?",
+    options: ["It gets longer", "It gets shorter", "It stays the same"],
+    observe: ["Double the frequency", "Measure the new wavelength"],
+  },
+  pendulum: {
+    question: "What happens to the period with a longer string?",
+    options: ["It gets longer", "It gets shorter", "It stays the same"],
+    observe: ["Double the string length", "Time ten swings"],
+  },
 };
 
-export function sentencesOf(text: string): string[] {
-  return text
-    .replace(/\s+/g, " ")
-    .split(/(?<=[.!?。！？])\s*/)
-    .map((s) => s.trim())
-    .filter((s) => s.length >= 20 && s.length <= 260);
-}
-
-/** First `max` words (CJK: max × 1.7 characters), trailing punctuation removed. */
-export function clip(text: string, max: number): string {
-  const s = text.replace(/[.!?。！？;；,，:：]+$/, "").trim();
-  if (/[\u3400-\u9fff]/.test(s)) return s.slice(0, Math.floor(max * 1.7));
-  return s.split(/\s+/).slice(0, max).join(" ").replace(/[,;:]$/, "");
+function termsFor(text: string, outline: Outline, max: number): { term: string; zh: string }[] {
+  const lower = text.toLowerCase();
+  const fromGlossary = outline.glossary.filter((g) => lower.includes(g.term.toLowerCase())).map((g) => ({ term: g.term, zh: g.zh }));
+  return (fromGlossary.length ? fromGlossary : glossaryFrom(text, max)).slice(0, max);
 }
 
 function pad<T>(xs: T[], min: number, make: (i: number) => T): T[] {
@@ -67,16 +44,6 @@ export function findFormula(text: string): Formula | undefined {
   if (!m) return undefined;
   const [, lhs, a, b] = m as unknown as [string, string, string, string];
   return { lhs, a, b, tex: `${tex(lhs)} = ${tex(a)}${tex(b).startsWith("\\") ? "" : " \\times "}${tex(b)}` };
-}
-
-function termsFrom(text: string, max: number): { term: string; zh: string }[] {
-  const lower = text.toLowerCase();
-  const out: { term: string; zh: string }[] = [];
-  for (const [term, zh] of Object.entries(TERMS_ZH)) {
-    if (out.length >= max) break;
-    if (new RegExp(`\\b${term}\\b`).test(lower) && !out.some((t) => t.zh === zh)) out.push({ term, zh });
-  }
-  return out;
 }
 
 const waveFn = (params: boolean): FunctionSpec => ({
@@ -147,7 +114,7 @@ export function stubSlide(input: StubInput): { content: SlideContent; notes: str
       break;
     case "statement": {
       const bullets = pad(pts.slice(0, 3).map((p) => clip(p, 8)), 1, () => clip(spec.title, 8));
-      content = { layout: "statement", title, bullets, visual: visualFor(spec, source, bullets), terms: termsFrom(`${spec.title} ${bullets.join(" ")}`, 2) };
+      content = { layout: "statement", title, bullets, visual: visualFor(spec, source, bullets), terms: termsFor(`${spec.title} ${bullets.join(" ")}`, outline, 2) };
       break;
     }
     case "chart":
@@ -191,13 +158,14 @@ export function stubSlide(input: StubInput): { content: SlideContent; notes: str
     case "experiment": {
       const embed = findEmbed(`${spec.title} ${source}`);
       const sim: ExperimentSim = embed ? { kind: "sim", embedId: embed.id } : waveFn(true);
+      const p = PREDICT[embed?.id ?? "wave-string"]!;
       content = {
         layout: "experiment",
         title,
-        predict: { question: "What happens to the wavelength if frequency increases?", options: ["It gets longer", "It gets shorter", "It stays the same"] },
+        predict: { question: p.question, options: p.options },
         sim,
-        observe: pad(pts.slice(0, 2).map((p) => clip(p, 6)), 1, () => "Change one variable at a time"),
-        explain: clip(sentences.find((s) => /halve|increase|decrease|double/i.test(s)) ?? sentences[0] ?? spec.title, BUDGETS.experiment.explain.max),
+        observe: p.observe,
+        explain: clip(sentences.find((s) => /halve|increase|decrease|double|longer|shorter/i.test(s)) ?? sentences[0] ?? spec.title, 12),
       };
       break;
     }

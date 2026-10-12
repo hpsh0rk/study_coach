@@ -1,5 +1,5 @@
 import { checkSlide, type Violation } from "@kj/pedagogy";
-import type { SlideContent } from "@kj/schema";
+import type { GlossaryEntry, PageType, SlideContent } from "@kj/schema";
 import { BUDGETS, SLOT_SCHEMAS } from "@kj/templates";
 import { validateWidget, type WidgetIssue } from "@kj/widgets";
 
@@ -11,19 +11,27 @@ function widgetsOf(c: SlideContent) {
 }
 
 /** Everything that would make the slide wrong or over budget. */
-export function problemsOf(c: SlideContent): { errors: string[]; warnings: string[] } {
+export function problemsOf(c: SlideContent, pageType?: PageType): { errors: string[]; warnings: string[] } {
   const errors: string[] = [];
   const warnings: string[] = [];
   const strict = SLOT_SCHEMAS[c.layout].safeParse(c);
   if (!strict.success) for (const i of strict.error.issues.slice(0, 10)) errors.push(`${i.path.join(".")}: ${i.message}`);
   for (const w of widgetsOf(c)) for (const i of validateWidget(w) as WidgetIssue[]) (i.level === "error" ? errors : warnings).push(`widget: ${i.message}`);
   for (const v of checkSlide(c) as Violation[]) (v.level === "error" ? errors : warnings).push(v.message);
+  if (pageType === "faded" && c.layout === "steps" && !(c.fadeFrom !== undefined && c.fadeFrom >= 1 && c.fadeFrom <= c.steps.length - 1)) {
+    errors.push(`fadeFrom: a faded example hides the last steps (1 ≤ fadeFrom ≤ ${c.steps.length - 1})`);
+  }
   return { errors, warnings };
 }
 
 /** Last-resort, deterministic: trims list lengths to the hard maximum (never cuts sentences). */
-export function truncateLists(c: SlideContent): SlideContent {
+export function truncateLists(c: SlideContent, pageType?: PageType): SlideContent {
   const B = BUDGETS;
+  if (pageType === "faded" && c.layout === "steps" && c.steps.length >= 2) {
+    const steps = c.steps.slice(0, B.steps.steps.max);
+    const ok = c.fadeFrom !== undefined && c.fadeFrom >= 1 && c.fadeFrom <= steps.length - 1;
+    return { ...c, steps, fadeFrom: ok ? c.fadeFrom : steps.length - 1 };
+  }
   switch (c.layout) {
     case "title":
       return { ...c, objectives: c.objectives.slice(0, B.title.objectives.max) };
@@ -44,4 +52,11 @@ export function truncateLists(c: SlideContent): SlideContent {
     case "summary":
       return { ...c, nodes: c.nodes.slice(0, B.summary.nodes.max) };
   }
+}
+
+/** Replaces term translations with the lesson glossary's, so every slide uses the same wording. */
+export function applyGlossary(c: SlideContent, glossary: GlossaryEntry[]): SlideContent {
+  if (c.layout !== "statement" || !glossary.length) return c;
+  const zh = new Map(glossary.filter((g) => g.zh).map((g) => [g.term.toLowerCase(), g.zh]));
+  return { ...c, terms: c.terms.map((t) => ({ ...t, zh: zh.get(t.term.toLowerCase()) ?? t.zh })) };
 }

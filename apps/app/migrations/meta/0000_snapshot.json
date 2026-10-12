@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "98142cbb-7c37-45de-94ed-4f3342317e78",
+  "id": "3f6b2e55-a8bc-4585-85f4-e73800d3de7a",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "ai_calls": {
@@ -812,6 +812,27 @@
           "notNull": true,
           "autoincrement": false
         },
+        "params": {
+          "name": "params",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "scope": {
+          "name": "scope",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "spec_count": {
+          "name": "spec_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
         "total_minutes": {
           "name": "total_minutes",
           "type": "real",
@@ -893,6 +914,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
+          "autoincrement": false
+        },
+        "label": {
+          "name": "label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
           "autoincrement": false
         }
       },
@@ -1116,6 +1144,13 @@
           "notNull": true,
           "autoincrement": false
         },
+        "spec_hash": {
+          "name": "spec_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
         "layout": {
           "name": "layout",
           "type": "text",
@@ -1172,6 +1207,20 @@
           "notNull": true,
           "autoincrement": false
         },
+        "prev_content": {
+          "name": "prev_content",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "prev_notes": {
+          "name": "prev_notes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "updated_at": {
           "name": "updated_at",
           "type": "integer",
@@ -1188,6 +1237,14 @@
             "spec_id"
           ],
           "isUnique": true
+        },
+        "slides_lesson_hash_idx": {
+          "name": "slides_lesson_hash_idx",
+          "columns": [
+            "lesson_id",
+            "spec_hash"
+          ],
+          "isUnique": false
         }
       },
       "foreignKeys": {

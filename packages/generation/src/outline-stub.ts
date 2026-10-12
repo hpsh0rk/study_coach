@@ -1,7 +1,7 @@
-import type { PageText, PageType, VisualKind } from "@kj/schema";
-import { findEmbed } from "@kj/widgets";
-import { sentencesOf, shorten } from "./text.ts";
+import type { GlossaryEntry, PageText, PageType, VisualKind } from "@kj/schema";
+import { simFor } from "./sims.ts";
 import type { DraftInput, PlannerSection } from "./types.ts";
+import { clip as shorten, glossaryFrom, sentencesOf } from "./text.ts";
 
 interface DraftSlide {
   pageType: PageType;
@@ -53,7 +53,7 @@ function loopsOf(input: DraftInput): PlannerSection[] {
   }));
 }
 
-export function stubOutline(input: DraftInput): { objectives: string[]; slides: DraftSlide[] } {
+export function stubOutline(input: DraftInput): { objectives: string[]; slides: DraftSlide[]; glossary: GlossaryEntry[]; notCovered: string[] } {
   const sections = loopsOf(input);
   const slides: DraftSlide[] = [];
   const pagesOf = (s: PlannerSection) => {
@@ -76,6 +76,7 @@ export function stubOutline(input: DraftInput): { objectives: string[]; slides: 
     loop: 0,
   });
 
+  const sim = simFor(input);
   let experimentUsed = false;
   sections.forEach((s, i) => {
     const loop = i + 1;
@@ -100,10 +101,9 @@ export function stubOutline(input: DraftInput): { objectives: string[]; slides: 
     } else if (sentences.length > 4) {
       slides.push({ pageType: "data", title: shorten(sentences[4] ?? head, 12), purpose: `Show ${head} as a graph`, keyPoints: sentences.slice(4, 6).map((x) => shorten(x, 9)), visual: "function", minutes: 2.5, sourcePages: pages, loop });
     }
-    const embed = findEmbed(`${s.title} ${text}`);
-    if (embed && !experimentUsed) {
+    if (sim && !experimentUsed) {
       experimentUsed = true;
-      slides.push({ pageType: "experiment", title: `Investigate: ${embed.title.en}`, purpose: "Predict, observe, explain", keyPoints: points.slice(0, 2), visual: "sim", minutes: 7, sourcePages: pages, loop });
+      slides.push({ pageType: "experiment", title: `Investigate: ${sim.title.en}`, purpose: "Predict, observe, explain", keyPoints: points.slice(0, 2), visual: "sim", minutes: 7, sourcePages: pages, loop });
     }
     slides.push({ pageType: "check", title: `Check: ${head}`, purpose: "Hinge question", keyPoints: points.slice(0, 1).length ? points.slice(0, 1) : [head], visual: "none", minutes: 2, sourcePages: pages, loop });
   });
@@ -130,5 +130,7 @@ export function stubOutline(input: DraftInput): { objectives: string[]; slides: 
   return {
     objectives: objectives.length ? objectives : ["Understand the selected pages"],
     slides: slides.map((x) => ({ ...x, title: x.title.slice(0, 160), sourcePages: x.sourcePages.slice(0, 20) })),
+    glossary: input.params.language === "en+zh" ? glossaryFrom(input.pages.map((p) => p.text).join(" "), 12) : [],
+    notCovered: sectionsOf(input).length > sections.length ? sectionsOf(input).slice(sections.length).map((s) => s.title.slice(0, 200)).slice(0, 20) : [],
   };
 }

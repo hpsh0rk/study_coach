@@ -1,9 +1,9 @@
 import { z } from "zod";
 import { jsonSchemaOf, type AiLayer, type CallContext } from "@kj/ai";
+import { optionsOf, problemsOf, truncateLists, type PipelineOptions } from "@kj/generation";
 import { PAGE_TYPES } from "@kj/pedagogy";
-import { DEFAULT_FLAGS, Outline, PageType, SlideContent, type AblationFlags, type LessonParams } from "@kj/schema";
+import { Outline, PageType, SlideContent, type LessonParams } from "@kj/schema";
 import { BUDGETS, layoutForPageType } from "@kj/templates";
-import { problemsOf, truncateLists } from "./checks.ts";
 
 export const DIRECT_PROMPT_VERSION = "deck.direct@1";
 
@@ -23,7 +23,7 @@ export interface DirectInput {
   sourceText: string;
   validPages: number[];
   ctx: CallContext;
-  flags?: Partial<AblationFlags>;
+  options?: Partial<PipelineOptions>;
 }
 
 export interface DirectSlideResult {
@@ -36,7 +36,7 @@ export interface DirectSlideResult {
 }
 
 export function buildDirectMessages(input: DirectInput) {
-  const f = { ...DEFAULT_FLAGS, ...input.flags };
+  const f = optionsOf(input.options);
   const lang = input.params.language === "zh" ? "Simplified Chinese" : "English";
   const types = PageType.options.map((t) => `- ${t}: ${PAGE_TYPES[t].minutes} min, layout "${layoutForPageType(t)}"`).join("\n");
   const system = [
@@ -52,13 +52,13 @@ export function buildDirectMessages(input: DirectInput) {
     .join("\n");
   return [
     { role: "system" as const, content: system },
-    { role: "user" as const, content: `Lesson title: ${input.lessonTitle}\n\nSource text:\n${input.sourceText}` },
+    { role: "user" as const, content: `Lesson title: ${input.lessonTitle}\n\n<source>\n${input.sourceText}\n</source>` },
   ];
 }
 
-/** A2 ablation: no outline step; one call writes every slide straight into the layout slot schemas. */
+/** A2 ablation (outline=skip): no outline step; one call writes every slide straight into the layout slot schemas. */
 export async function writeDeckDirect(ai: AiLayer, input: DirectInput, stub: () => DirectDeck) {
-  const f = { ...DEFAULT_FLAGS, ...input.flags };
+  const f = optionsOf(input.options);
   const valid = new Set(input.validPages);
   const res = await ai.callStructured({
     capability: "slide.write",
@@ -72,10 +72,10 @@ export async function writeDeckDirect(ai: AiLayer, input: DirectInput, stub: () 
   });
   const slides: DirectSlideResult[] = res.output.slides.map((s) => {
     let content = s.content;
-    let found = problemsOf(content);
+    let found = problemsOf(content, s.pageType);
     if (found.errors.length && f.truncateFallback) {
-      content = truncateLists(content);
-      found = problemsOf(content);
+      content = truncateLists(content, s.pageType);
+      found = problemsOf(content, s.pageType);
     }
     const expected = layoutForPageType(s.pageType);
     const mismatch = content.layout !== expected ? [`layout ${content.layout} does not match page type ${s.pageType} (${expected})`] : [];

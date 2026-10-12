@@ -1,6 +1,6 @@
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { pagesInRanges } from "@kj/pdf-structure";
-import { LessonParams, LessonScope, Outline, SlideContent, type ConfirmedOutline, type PageText, type Slide } from "@kj/schema";
+import { LessonParams, LessonScope, newId, Outline, sha256Hex, SlideContent, type PageText, type Slide, type SlideSpec } from "@kj/schema";
 import { db } from "./auth/session.ts";
 import { documents, lessons, outlineVersions, pages, slides } from "./db/schema.ts";
 import type { Env, SessionUser } from "./env.ts";
@@ -8,6 +8,7 @@ import { HttpError } from "./http.ts";
 
 export type LessonRow = typeof lessons.$inferSelect;
 export type VersionRow = typeof outlineVersions.$inferSelect;
+export type SlideRow = typeof slides.$inferSelect;
 
 export async function ownedDocument(env: Env, user: SessionUser, id: string) {
   const row = (await db(env).select().from(documents).where(and(eq(documents.id, id), eq(documents.orgId, user.orgId), eq(documents.ownerId, user.id))).limit(1))[0];
@@ -23,6 +24,9 @@ export async function ownedLesson(env: Env, user: SessionUser, id: string): Prom
 
 export const lessonParams = (l: LessonRow) => LessonParams.parse(JSON.parse(l.params));
 export const lessonScope = (l: LessonRow) => LessonScope.parse(JSON.parse(l.scope));
+/** A version's own snapshot: later changes to the lesson settings never affect it. */
+export const versionParams = (v: VersionRow) => LessonParams.parse(JSON.parse(v.params));
+export const versionScope = (v: VersionRow) => LessonScope.parse(JSON.parse(v.scope));
 
 export async function versionOf(env: Env, lessonId: string, versionId: string): Promise<VersionRow> {
   const row = (await db(env).select().from(outlineVersions).where(and(eq(outlineVersions.id, versionId), eq(outlineVersions.lessonId, lessonId))).limit(1))[0];
@@ -35,34 +39,49 @@ export async function latestVersion(env: Env, lessonId: string): Promise<Version
 }
 
 export async function latestConfirmed(env: Env, lessonId: string): Promise<VersionRow | null> {
-  const rows = await db(env).select().from(outlineVersions).where(eq(outlineVersions.lessonId, lessonId)).orderBy(desc(outlineVersions.version));
-  return rows.find((r) => r.confirmedAt !== null) ?? null;
+  return (
+    (await db(env).select().from(outlineVersions).where(and(eq(outlineVersions.lessonId, lessonId), isNotNull(outlineVersions.confirmedAt))).orderBy(desc(outlineVersions.version)).limit(1))[0] ?? null
+  );
 }
 
 export const outlineOf = (v: VersionRow) => Outline.parse(JSON.parse(v.outline));
 
-/** The only constructor of ConfirmedOutline: generation code cannot get one for a draft. */
-export function confirmedOutline(v: VersionRow): ConfirmedOutline {
+/** Generation gate (with the slides_require_confirmed_insert trigger): drafts never produce slides. */
+export function confirmedOutline(v: VersionRow): Outline {
   if (v.confirmedAt === null) throw new HttpError(409, "OUTLINE_NOT_CONFIRMED", "Confirm the outline before generating slides · 请先确认大纲再生成");
-  return { versionId: v.id, lessonId: v.lessonId, outline: outlineOf(v), confirmedAt: v.confirmedAt } as ConfirmedOutline;
+  return outlineOf(v);
 }
 
-export async function scopePages(env: Env, lesson: LessonRow): Promise<PageText[]> {
-  const wanted = pagesInRanges(lessonScope(lesson).ranges);
+export async function scopePages(env: Env, documentId: string, scope: LessonScope): Promise<PageText[]> {
+  const wanted = pagesInRanges(scope.ranges);
   const out: PageText[] = [];
   for (let i = 0; i < wanted.length; i += 90) {
     const chunk = wanted.slice(i, i + 90);
     const rows = await db(env)
-      .select({ no: pages.no, text: pages.text })
+      .select({ no: pages.no, text: pages.text, label: pages.label })
       .from(pages)
-      .where(and(eq(pages.documentId, lesson.documentId), inArray(pages.no, chunk)))
+      .where(and(eq(pages.documentId, documentId), inArray(pages.no, chunk)))
       .orderBy(asc(pages.no));
-    out.push(...rows);
+    out.push(...rows.map((r) => ({ no: r.no, text: r.text, ...(r.label ? { label: r.label } : {}) })));
   }
   return out;
 }
 
-export function slideFromRow(r: typeof slides.$inferSelect): Slide {
+/** Printed page labels of a document (only pages whose label differs from the index). */
+export async function pageLabels(env: Env, documentId: string): Promise<Record<number, string>> {
+  const rows = await db(env)
+    .select({ no: pages.no, label: pages.label })
+    .from(pages)
+    .where(and(eq(pages.documentId, documentId), isNotNull(pages.label)));
+  return Object.fromEntries(rows.map((r) => [r.no, r.label!]));
+}
+
+export async function specHash(spec: SlideSpec, params: LessonParams): Promise<string> {
+  const { id: _id, ...rest } = spec;
+  return sha256Hex(JSON.stringify({ spec: rest, params }));
+}
+
+export function slideFromRow(r: SlideRow): Slide {
   return {
     id: r.id,
     specId: r.specId,
@@ -74,6 +93,7 @@ export function slideFromRow(r: typeof slides.$inferSelect): Slide {
     notes: r.notes,
     sources: JSON.parse(r.sources) as number[],
     warnings: JSON.parse(r.warnings) as string[],
+    canUndo: r.prevContent !== null,
   };
 }
 
@@ -87,10 +107,64 @@ export async function slidesOf(env: Env, version: VersionRow): Promise<Slide[]> 
     .map(slideFromRow);
 }
 
+/**
+ * Copies slides whose spec (and params) are unchanged from any earlier version of the lesson into
+ * `version`, so confirming a revised outline keeps every untouched — or hand-edited — slide.
+ */
+export async function carryOverSlides(env: Env, version: VersionRow): Promise<void> {
+  const params = versionParams(version);
+  const specs = outlineOf(version).slides;
+  const hashes = await Promise.all(specs.map((s) => specHash(s, params)));
+  const d = db(env);
+  const existing = new Set((await d.select({ specId: slides.specId }).from(slides).where(eq(slides.outlineVersionId, version.id))).map((r) => r.specId));
+  const candidates = await d
+    .select()
+    .from(slides)
+    .where(and(eq(slides.lessonId, version.lessonId), inArray(slides.specHash, [...new Set(hashes)])))
+    .orderBy(desc(slides.updatedAt));
+  const byHash = new Map<string, SlideRow>();
+  for (const r of candidates) if (!byHash.has(r.specHash)) byHash.set(r.specHash, r);
+  const rows = specs.flatMap((spec, i) => {
+    const src = byHash.get(hashes[i]!);
+    if (!src || existing.has(spec.id)) return [];
+    return [{ ...src, id: newId("sl"), outlineVersionId: version.id, specId: spec.id, prevContent: null, prevNotes: null, updatedAt: Date.now() }];
+  });
+  for (let i = 0; i < rows.length; i += 5) await d.insert(slides).values(rows.slice(i, i + 5));
+}
+
+/** Lesson list in one query: status and counts come from correlated subqueries, no outline JSON is parsed. */
+export async function lessonList(env: Env, user: SessionUser) {
+  const latest = sql`(SELECT v.confirmed_at IS NOT NULL FROM outline_versions v WHERE v.lesson_id = ${lessons.id} ORDER BY v.version DESC LIMIT 1)`;
+  const confirmedId = sql`(SELECT v.id FROM outline_versions v WHERE v.lesson_id = ${lessons.id} AND v.confirmed_at IS NOT NULL ORDER BY v.version DESC LIMIT 1)`;
+  const rows = await db(env)
+    .select({
+      id: lessons.id,
+      title: lessons.title,
+      updatedAt: lessons.updatedAt,
+      params: lessons.params,
+      latestConfirmed: sql<number | null>`${latest}`,
+      planned: sql<number>`COALESCE((SELECT v.spec_count FROM outline_versions v WHERE v.id = ${confirmedId}), 0)`,
+      slides: sql<number>`(SELECT COUNT(*) FROM slides s WHERE s.outline_version_id = ${confirmedId})`,
+    })
+    .from(lessons)
+    .where(and(eq(lessons.orgId, user.orgId), eq(lessons.ownerId, user.id)))
+    .orderBy(desc(lessons.updatedAt))
+    .limit(100);
+  return rows.map((r) => ({
+    id: r.id,
+    title: r.title,
+    updatedAt: r.updatedAt,
+    params: LessonParams.parse(JSON.parse(r.params)),
+    status: r.latestConfirmed === null ? "scoped" : !r.latestConfirmed ? "outline" : r.slides ? "slides" : "confirmed",
+    slides: r.slides,
+    planned: r.planned,
+  }));
+}
+
 /** Export shape shared with the eval tooling (internal/eval/score.ts reads it). */
-export function deckExport(lesson: LessonRow, version: VersionRow, list: Slide[], extra: { includeNotes: boolean }) {
-  const params = lessonParams(lesson);
-  const scope = lessonScope(lesson);
+export function deckExport(lesson: LessonRow, version: VersionRow, list: Slide[], extra: { includeNotes: boolean; pageLabels: Record<number, string> }) {
+  const params = versionParams(version);
+  const scope = versionScope(version);
   return {
     lesson: {
       id: lesson.id,
@@ -101,9 +175,10 @@ export function deckExport(lesson: LessonRow, version: VersionRow, list: Slide[]
       lessonType: params.lessonType,
       language: params.language,
       pageRanges: scope.ranges.map((r) => [r.start, r.end]),
+      pageLabels: extra.pageLabels,
     },
     meta: { outlineVersion: version.version, confirmedAt: version.confirmedAt },
     outline: outlineOf(version),
-    slides: list.map((s) => (extra.includeNotes ? s : { ...s, notes: "" })),
+    slides: list.map(({ canUndo: _u, ...s }) => (extra.includeNotes ? s : { ...s, notes: "" })),
   };
 }

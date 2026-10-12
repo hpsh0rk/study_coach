@@ -18,6 +18,8 @@ export const TocEntry: z.ZodType<TocEntry> = z.lazy(() =>
 export const PageText = z.object({
   no: z.number().int().min(1),
   text: z.string().max(40_000),
+  /** Printed page label from the PDF (e.g. "112", "xiv") when it differs from the page index. */
+  label: z.string().trim().min(1).max(20).optional(),
 });
 export type PageText = z.infer<typeof PageText>;
 

@@ -96,5 +96,7 @@ export const Slide = z.object({
   warnings: z.array(z.string()).default([]),
   /** Slot ids measured as overflowing in a browser (templates measureOverflow); absent = not measured. */
   overflow: z.array(z.string()).optional(),
+  /** The previous content (before the last edit or regeneration) can be restored. */
+  canUndo: z.boolean().optional(),
 });
 export type Slide = z.infer<typeof Slide>;

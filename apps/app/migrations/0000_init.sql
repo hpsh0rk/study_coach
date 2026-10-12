@@ -119,6 +119,9 @@ CREATE TABLE `outline_versions` (
 	`lesson_id` text NOT NULL,
 	`version` integer NOT NULL,
 	`outline` text NOT NULL,
+	`params` text NOT NULL,
+	`scope` text NOT NULL,
+	`spec_count` integer NOT NULL,
 	`total_minutes` real NOT NULL,
 	`ack_over_budget` integer DEFAULT false NOT NULL,
 	`confirmed_at` integer,
@@ -131,6 +134,7 @@ CREATE TABLE `pages` (
 	`document_id` text NOT NULL,
 	`no` integer NOT NULL,
 	`text` text NOT NULL,
+	`label` text,
 	PRIMARY KEY(`document_id`, `no`),
 	FOREIGN KEY (`document_id`) REFERENCES `documents`(`id`) ON UPDATE no action ON DELETE cascade
 );
@@ -163,6 +167,7 @@ CREATE TABLE `slides` (
 	`lesson_id` text NOT NULL,
 	`outline_version_id` text NOT NULL,
 	`spec_id` text NOT NULL,
+	`spec_hash` text NOT NULL,
 	`layout` text NOT NULL,
 	`page_type` text NOT NULL,
 	`minutes` real NOT NULL,
@@ -171,12 +176,15 @@ CREATE TABLE `slides` (
 	`sources` text NOT NULL,
 	`warnings` text NOT NULL,
 	`provider_id` text NOT NULL,
+	`prev_content` text,
+	`prev_notes` text,
 	`updated_at` integer NOT NULL,
 	FOREIGN KEY (`lesson_id`) REFERENCES `lessons`(`id`) ON UPDATE no action ON DELETE cascade,
 	FOREIGN KEY (`outline_version_id`) REFERENCES `outline_versions`(`id`) ON UPDATE no action ON DELETE no action
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `slides_version_spec_uq` ON `slides` (`outline_version_id`,`spec_id`);--> statement-breakpoint
+CREATE INDEX `slides_lesson_hash_idx` ON `slides` (`lesson_id`,`spec_hash`);--> statement-breakpoint
 CREATE TABLE `users` (
 	`id` text PRIMARY KEY NOT NULL,
 	`org_id` text NOT NULL,

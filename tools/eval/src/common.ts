@@ -1,6 +1,5 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { AblationFlags } from "@kj/schema";
 
 export function parseArgs(argv: string[]): { positional: string[]; opts: Record<string, string> } {
   const positional: string[] = [];
@@ -17,17 +16,6 @@ export function parseArgs(argv: string[]): { positional: string[]; opts: Record<
     else opts[k] = "true";
   }
   return { positional, opts };
-}
-
-/** "writerSource=none,slideCheckRetry=false" → validated AblationFlags (unspecified keys = full pipeline). */
-export function parseFlags(spec: string | undefined): AblationFlags {
-  const raw: Record<string, unknown> = {};
-  for (const part of (spec ?? "").split(",").map((s) => s.trim()).filter(Boolean)) {
-    const [k, v] = part.split("=", 2) as [string, string | undefined];
-    if (!(k in AblationFlags.shape)) throw new Error(`unknown flag "${k}"; known: ${Object.keys(AblationFlags.shape).join(", ")}`);
-    raw[k] = v === "true" ? true : v === "false" ? false : v;
-  }
-  return AblationFlags.parse(raw);
 }
 
 export function readJson<T>(file: string): T {

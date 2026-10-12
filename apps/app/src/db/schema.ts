@@ -69,6 +69,8 @@ export const pages = sqliteTable(
     documentId: text("document_id").notNull().references(() => documents.id, { onDelete: "cascade" }),
     no: integer("no").notNull(),
     text: text("text").notNull(),
+    /** Printed page label when it differs from the page index. */
+    label: text("label"),
   },
   (t) => [primaryKey({ columns: [t.documentId, t.no] })],
 );
@@ -116,6 +118,10 @@ export const outlineVersions = sqliteTable(
     lessonId: text("lesson_id").notNull().references(() => lessons.id, { onDelete: "cascade" }),
     version: integer("version").notNull(),
     outline: text("outline").notNull(),
+    /** LessonParams and LessonScope at the time the version was created; confirm and generate read these. */
+    params: text("params").notNull(),
+    scope: text("scope").notNull(),
+    specCount: integer("spec_count").notNull(),
     totalMinutes: real("total_minutes").notNull(),
     ackOverBudget: integer("ack_over_budget", { mode: "boolean" }).notNull().default(false),
     confirmedAt: integer("confirmed_at"),
@@ -131,6 +137,8 @@ export const slides = sqliteTable(
     lessonId: text("lesson_id").notNull().references(() => lessons.id, { onDelete: "cascade" }),
     outlineVersionId: text("outline_version_id").notNull().references(() => outlineVersions.id),
     specId: text("spec_id").notNull(),
+    /** sha256 of the spec (without id) and the version's params: identical specs reuse slides across versions. */
+    specHash: text("spec_hash").notNull(),
     layout: text("layout").notNull(),
     pageType: text("page_type").notNull(),
     minutes: real("minutes").notNull(),
@@ -139,9 +147,12 @@ export const slides = sqliteTable(
     sources: text("sources").notNull(),
     warnings: text("warnings").notNull(),
     providerId: text("provider_id").notNull(),
+    /** Content and notes before the last edit or regeneration (one level of undo). */
+    prevContent: text("prev_content"),
+    prevNotes: text("prev_notes"),
     updatedAt: integer("updated_at").notNull().$defaultFn(now),
   },
-  (t) => [uniqueIndex("slides_version_spec_uq").on(t.outlineVersionId, t.specId)],
+  (t) => [uniqueIndex("slides_version_spec_uq").on(t.outlineVersionId, t.specId), index("slides_lesson_hash_idx").on(t.lessonId, t.specHash)],
 );
 
 export const shareLinks = sqliteTable(

@@ -36,7 +36,6 @@ export interface Budget {
   tolerance: number;
   minMinutes: number;
   maxMinutes: number;
-  slideRange: [number, number];
 }
 
 export function planBudget(params: Pick<LessonParams, "minutes">): Budget {
@@ -46,7 +45,6 @@ export function planBudget(params: Pick<LessonParams, "minutes">): Budget {
     tolerance: TIME_TOLERANCE,
     minMinutes: Math.round(m * (1 - TIME_TOLERANCE) * 10) / 10,
     maxMinutes: Math.round(m * (1 + TIME_TOLERANCE) * 10) / 10,
-    slideRange: [Math.max(3, Math.round(m * 0.3)), Math.max(4, Math.round(m * 0.5))],
   };
 }
 
@@ -58,7 +56,6 @@ export interface Timing {
   /** Outside ±15%: confirming needs an explicit second click (F-03), enforced by the server. */
   needsAck: boolean;
   slideCount: number;
-  slideRange: [number, number];
   lectureShare: number;
   activityShare: number;
 }
@@ -77,9 +74,27 @@ export function outlineTiming(outline: Pick<Outline, "slides">, params: Pick<Les
     status: deviation > TIME_TOLERANCE ? "over" : deviation < -TIME_TOLERANCE ? "under" : "ok",
     needsAck: Math.abs(deviation) > TIME_TOLERANCE + 1e-9,
     slideCount: outline.slides.length,
-    slideRange: budget.slideRange,
     lectureShare: total ? round1((lecture / total) * 100) / 100 : 0,
     activityShare: total ? round1((activity / total) * 100) / 100 : 0,
+  };
+}
+
+/** Rough teaching time for a selection: about 6 minutes per 1000 words of textbook text (F-01). */
+export const MINUTES_PER_1000_WORDS = 6;
+
+export interface ScopeAdvice {
+  estimatedMinutes: number;
+  /** Lessons of the chosen length the selection would need. */
+  lessons: number;
+  tooMuch: boolean;
+}
+
+export function scopeAdvice(words: number, lessonMinutes: number): ScopeAdvice {
+  const estimatedMinutes = Math.round((words / 1000) * MINUTES_PER_1000_WORDS);
+  return {
+    estimatedMinutes,
+    lessons: Math.max(1, Math.ceil(estimatedMinutes / lessonMinutes - 0.2)),
+    tooMuch: estimatedMinutes > lessonMinutes * 1.2,
   };
 }
 
@@ -137,8 +152,6 @@ export function checkOutline(outline: Outline, params: LessonParams): Violation[
       message: `预计 ${timing.totalMinutes} 分钟，超出课时 ${params.minutes} 分钟的 ±15%（${budget.minMinutes}–${budget.maxMinutes}）· total time outside ±15% of the lesson`,
     });
   }
-  const [lo, hi] = timing.slideRange;
-  if (timing.slideCount < lo || timing.slideCount > hi) v.push({ level: "warning", code: "slide-count", message: `共 ${timing.slideCount} 页，建议 ${lo}–${hi} 页 · slide count outside the suggested range` });
 
   let run = 0;
   for (const s of outline.slides) {

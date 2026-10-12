@@ -82,8 +82,13 @@ export function issuesText(error: z.ZodError): string {
 }
 
 /** JSON Schema shown to the model; refinements (word budgets) are restated in the prompt text. */
+const jsonSchemas = new WeakMap<z.ZodType, unknown>();
+
+/** JSON Schema of a zod schema, computed once per schema object (Workers CPU budget). */
 export function jsonSchemaOf(schema: z.ZodType): unknown {
-  return z.toJSONSchema(schema, { io: "input", unrepresentable: "any" });
+  let json = jsonSchemas.get(schema);
+  if (json === undefined) jsonSchemas.set(schema, (json = z.toJSONSchema(schema, { io: "input", unrepresentable: "any" })));
+  return json;
 }
 
 /** The single entry point for every model call in the system. */

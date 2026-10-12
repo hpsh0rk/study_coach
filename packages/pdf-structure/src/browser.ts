@@ -42,6 +42,7 @@ export async function parsePdf(data: ArrayBuffer, fallbackTitle: string, onProgr
     const infoTitle = (meta?.info as { Title?: string } | undefined)?.Title?.trim();
     const outline = ((await pdf.getOutline()) ?? []) as unknown as RawOutline[];
     const toc = await readOutline(pdf, outline, 1);
+    const labels = ((await pdf.getPageLabels().catch(() => null)) ?? []) as string[];
     const pages: ParsedPdf["pages"] = [];
     for (let no = 1; no <= pdf.numPages; no++) {
       const page = await pdf.getPage(no);
@@ -52,7 +53,8 @@ export async function parsePdf(data: ArrayBuffer, fallbackTitle: string, onProgr
         text += item.str;
         text += item.hasEOL ? "\n" : " ";
       }
-      pages.push({ no, text: text.replace(/[ \t]+/g, " ").replace(/\s*\n\s*/g, "\n").trim().slice(0, 40_000) });
+      const label = labels[no - 1]?.trim().slice(0, 20);
+      pages.push({ no, text: text.replace(/[ \t]+/g, " ").replace(/\s*\n\s*/g, "\n").trim().slice(0, 40_000), ...(label && label !== String(no) ? { label } : {}) });
       page.cleanup();
       onProgress?.(no, pdf.numPages);
     }

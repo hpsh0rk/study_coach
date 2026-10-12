@@ -6,10 +6,11 @@ import { chapters, documents, pages } from "../db/schema.ts";
 import type { AppBindings } from "../env.ts";
 import { HttpError, parseJson } from "../http.ts";
 import { db, requireUser } from "../auth/session.ts";
-import { ownedDocument } from "../store.ts";
+import { ownedDocument, pageLabels } from "../store.ts";
 
 export const MAX_PAGES = 600;
-export const PAGE_BATCH = 50;
+/** 40 upserts + ownership check + count + update stay under D1's 50-queries-per-invocation limit. */
+export const PAGE_BATCH = 40;
 
 const CreateDocument = z.object({
   filename: z.string().trim().min(1).max(300),
@@ -49,7 +50,7 @@ export const documentRoutes = new Hono<AppBindings>()
     if (body.pages.some((p) => p.no > doc.pageCount)) throw new HttpError(400, "VALIDATION", "Page number beyond the document");
     const d = db(c.env);
     await d.batch(
-      body.pages.map((p) => d.insert(pages).values({ documentId: doc.id, no: p.no, text: p.text }).onConflictDoUpdate({ target: [pages.documentId, pages.no], set: { text: p.text } })) as [any, ...any[]],
+      body.pages.map((p) => d.insert(pages).values({ documentId: doc.id, no: p.no, text: p.text, label: p.label ?? null }).onConflictDoUpdate({ target: [pages.documentId, pages.no], set: { text: p.text, label: p.label ?? null } })) as [any, ...any[]],
     );
     const received = (await d.select({ n: count() }).from(pages).where(eq(pages.documentId, doc.id)))[0]!.n;
     await d.update(documents).set({ pagesReceived: received }).where(eq(documents.id, doc.id));
@@ -58,12 +59,12 @@ export const documentRoutes = new Hono<AppBindings>()
   .get("/:id", async (c) => {
     const doc = await ownedDocument(c.env, c.get("user"), c.req.param("id"));
     const tree = await db(c.env).select().from(chapters).where(eq(chapters.documentId, doc.id)).orderBy(chapters.ord);
-    return c.json({ document: doc, chapters: tree.map(({ documentId: _d, ...ch }) => ch) });
+    return c.json({ document: doc, chapters: tree.map(({ documentId: _d, ...ch }) => ch), pageLabels: await pageLabels(c.env, doc.id) });
   })
   .get("/:id/pages/:no", async (c) => {
     const doc = await ownedDocument(c.env, c.get("user"), c.req.param("id"));
     const no = Number(c.req.param("no"));
     const row = (await db(c.env).select().from(pages).where(and(eq(pages.documentId, doc.id), eq(pages.no, no))).limit(1))[0];
     if (!row) throw new HttpError(404, "NOT_FOUND", "Page not found");
-    return c.json({ no: row.no, text: row.text });
+    return c.json({ no: row.no, text: row.text, label: row.label });
   });

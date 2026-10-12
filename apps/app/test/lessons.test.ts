@@ -110,7 +110,7 @@ describe("outline gate", () => {
     expect(r.version).toBe(2);
     expect((await teacher.req("POST", `/api/lessons/${lessonId}/outline-versions/${r.id}/slides/${spec.id}/generate`)).status).toBe(409);
     await expect(
-      e.DB.prepare("INSERT INTO slides (id, lesson_id, outline_version_id, spec_id, layout, page_type, minutes, content, notes, sources, warnings, provider_id, updated_at) VALUES ('x', ?, ?, 'sp1', 'title', 'cover', 1, '{}', '', '[]', '[]', 'stub', 0)")
+      e.DB.prepare("INSERT INTO slides (id, lesson_id, outline_version_id, spec_id, spec_hash, layout, page_type, minutes, content, notes, sources, warnings, provider_id, updated_at) VALUES ('x', ?, ?, 'sp1', 'h', 'title', 'cover', 1, '{}', '', '[]', '[]', 'stub', 0)")
         .bind(lessonId, r.id)
         .run(),
     ).rejects.toThrow(/OUTLINE_NOT_CONFIRMED/);
@@ -135,5 +135,87 @@ describe("outline gate", () => {
     expect(created.status).toBe(201);
     expect(created.json.lesson.scope.ranges).toEqual([{ start: 3, end: 6 }]);
     expect((await teacher.req("POST", "/api/lessons", { documentId: docId })).status).toBe(400);
+  });
+});
+
+async function confirmedLesson(minutes = 40) {
+  const created = await teacher.req("POST", "/api/lessons", { documentId: docId, chapterIds: ["c1", "c2"] });
+  const lessonId = created.json.lesson.id as string;
+  await teacher.req("PATCH", `/api/lessons/${lessonId}`, { params: { minutes, level: "intermediate", lessonType: "new", language: "en+zh", focus: "" } });
+  const v = (await teacher.req("POST", `/api/lessons/${lessonId}/outline`)).json.version;
+  expect((await teacher.req("POST", `/api/lessons/${lessonId}/outline-versions/${v.id}/confirm`, {})).status).toBe(200);
+  return { lessonId, v };
+}
+
+const aiCalls = async (lessonId: string) => (await e.DB.prepare("SELECT COUNT(*) AS n FROM ai_calls WHERE lesson_id = ? AND capability = 'slide.write'").bind(lessonId).first<{ n: number }>())!.n;
+
+describe("slide reuse, editing and snapshots", () => {
+  it("generate is idempotent and revised versions keep unchanged slides", async () => {
+    const { lessonId, v } = await confirmedLesson();
+    const [a, b] = v.outline.slides.slice(1, 3);
+    const url = (vid: string, sid: string) => `/api/lessons/${lessonId}/outline-versions/${vid}/slides/${sid}/generate`;
+    const first = await teacher.req("POST", url(v.id, a.id));
+    await teacher.req("POST", url(v.id, b.id));
+    const calls = await aiCalls(lessonId);
+    const again = await teacher.req("POST", url(v.id, a.id));
+    expect(again.json.reused).toBe(true);
+    expect(again.json.slide.id).toBe(first.json.slide.id);
+    expect(await aiCalls(lessonId)).toBe(calls);
+
+    // Revise: retitle slide b only, confirm. Slide a carries over without a model call; b does not.
+    const r = (await teacher.req("POST", `/api/lessons/${lessonId}/outline-versions/${v.id}/revise`)).json.version;
+    const outline = { ...r.outline, slides: r.outline.slides.map((s: any) => (s.id === b.id ? { ...s, title: `${s.title} (edited)` } : s)) };
+    await teacher.req("PUT", `/api/lessons/${lessonId}/outline-versions/${r.id}`, { outline });
+    const confirmed = await teacher.req("POST", `/api/lessons/${lessonId}/outline-versions/${r.id}/confirm`, {});
+    expect(confirmed.json.slides.map((s: any) => s.specId)).toEqual([a.id]);
+    expect(confirmed.json.slides[0].content).toEqual(first.json.slide.content);
+    expect((await teacher.req("POST", url(r.id, a.id))).json.reused).toBe(true);
+    expect(await aiCalls(lessonId)).toBe(calls);
+    expect((await teacher.req("POST", url(r.id, b.id))).json.reused).toBe(false);
+    expect(await aiCalls(lessonId)).toBe(calls + 1);
+  });
+
+  it("edits slots with validation, regenerates on request and undoes one level", async () => {
+    const { lessonId, v } = await confirmedLesson();
+    const spec = v.outline.slides.find((s: any) => s.layout === "statement") ?? v.outline.slides[1];
+    const url = `/api/lessons/${lessonId}/outline-versions/${v.id}/slides/${spec.id}/generate`;
+    const slide = (await teacher.req("POST", url)).json.slide;
+    expect(slide.canUndo).toBe(false);
+
+    const bad = await teacher.req("PATCH", `/api/lessons/${lessonId}/slides/${slide.id}`, { content: { ...slide.content, layout: "quiz" } });
+    expect(bad.status).toBe(422);
+    const content = { ...slide.content, title: "Hand-edited title" };
+    const edited = await teacher.req("PATCH", `/api/lessons/${lessonId}/slides/${slide.id}`, { content, notes: "My notes" });
+    expect(edited.status).toBe(200);
+    expect(edited.json.slide.content.title).toBe("Hand-edited title");
+    expect(edited.json.slide.notes).toBe("My notes");
+    expect(edited.json.slide.canUndo).toBe(true);
+
+    const undone = await teacher.req("POST", `/api/lessons/${lessonId}/slides/${slide.id}/undo`);
+    expect(undone.json.slide.content.title).toBe(slide.content.title);
+    const redone = await teacher.req("POST", `/api/lessons/${lessonId}/slides/${slide.id}/undo`);
+    expect(redone.json.slide.content.title).toBe("Hand-edited title");
+
+    const regen = await teacher.req("POST", url, { regenerate: true });
+    expect(regen.json.reused).toBe(false);
+    expect(regen.json.slide.canUndo).toBe(true);
+    const back = await teacher.req("POST", `/api/lessons/${lessonId}/slides/${slide.id}/undo`);
+    expect(back.json.slide.content.title).toBe("Hand-edited title");
+  });
+
+  it("confirm and generate read the version's params snapshot, not later lesson settings", async () => {
+    const { lessonId, v } = await confirmedLesson(40);
+    expect(v.params.minutes).toBe(40);
+    await teacher.req("PATCH", `/api/lessons/${lessonId}`, { params: { minutes: 90, level: "advanced", lessonType: "new", language: "en", focus: "" } });
+    const view = (await teacher.req("GET", `/api/lessons/${lessonId}`)).json;
+    expect(view.version.params.minutes).toBe(40);
+    expect(view.version.timing.needsAck).toBe(false);
+    const gen = await teacher.req("POST", `/api/lessons/${lessonId}/outline-versions/${v.id}/slides/${v.outline.slides[1].id}/generate`);
+    expect(gen.status).toBe(200);
+    const list = (await teacher.req("GET", "/api/lessons")).json.lessons;
+    const row = list.find((l: any) => l.id === lessonId);
+    expect(row.status).toBe("slides");
+    expect(row.slides).toBe(1);
+    expect(row.planned).toBe(v.outline.slides.length);
   });
 });

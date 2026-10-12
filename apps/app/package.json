@@ -13,12 +13,11 @@
   },
   "dependencies": {
     "@kj/ai": "workspace:*",
+    "@kj/generation": "workspace:*",
     "@kj/pdf-structure": "workspace:*",
     "@kj/pedagogy": "workspace:*",
-    "@kj/planner": "workspace:*",
     "@kj/schema": "workspace:*",
     "@kj/templates": "workspace:*",
-    "@kj/writer": "workspace:*",
     "drizzle-orm": "^0.45.0",
     "hono": "^4.10.0",
     "zod": "^4.4.3"

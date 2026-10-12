@@ -1,6 +1,6 @@
 /** Module boundaries for the core slice (docs/architecture.md). Run with `pnpm lint:deps`. */
 const BROWSER_ONLY = "^(packages/(templates|widgets)/src/render|packages/player|packages/pdf-structure/src/browser\\.ts|apps/web)|node_modules/(react|react-dom|react-router|echarts|zrender|katex|pdfjs-dist)/";
-const MODEL_CALLERS = "^packages/(planner|writer)/";
+const GENERATION = "^packages/generation/";
 
 module.exports = {
   forbidden: [
@@ -22,34 +22,29 @@ module.exports = {
       name: "server-code-is-dom-free",
       comment: "The Worker, model callers and rules must not pull in DOM renderers, the player, pdf.js or React.",
       severity: "error",
-      from: { path: "^(apps/app|packages/(ai|planner|writer|pedagogy|schema)|packages/(templates|widgets|pdf-structure)/src/(?!render|browser))" },
+      from: { path: "^(apps/app|packages/(ai|generation|pedagogy|schema)|packages/(templates|widgets|pdf-structure)/src/(?!render|browser))" },
       to: { path: BROWSER_ONLY },
     },
     {
       name: "model-calls-stay-on-the-server",
-      comment: "The browser never imports the AI layer, planner or writer.",
+      comment: "The browser never imports the AI layer or the generation pipeline.",
       severity: "error",
       from: { path: "^(apps/web|packages/player)" },
-      to: { path: "^packages/(ai|planner|writer)/" },
+      to: { path: "^packages/(ai|generation)/" },
     },
     {
       name: "only-the-server-and-evals-orchestrate",
-      comment: "Planner and writer are called by the Worker routes and the eval runner, nobody else.",
+      comment: "The generation pipeline is called by the Worker routes and tools/eval, nobody else.",
       severity: "error",
-      from: { path: "^packages/", pathNot: MODEL_CALLERS },
-      to: { path: MODEL_CALLERS },
+      from: { path: "^packages/", pathNot: GENERATION },
+      to: { path: GENERATION },
     },
     {
-      name: "planner-and-writer-are-independent",
+      name: "product-code-never-imports-tools",
+      comment: "tools/eval (ablation driver, renderer) lives outside the product.",
       severity: "error",
-      from: { path: "^packages/planner/" },
-      to: { path: "^packages/writer/" },
-    },
-    {
-      name: "writer-does-not-plan",
-      severity: "error",
-      from: { path: "^packages/writer/" },
-      to: { path: "^packages/planner/" },
+      from: { path: "^(apps|packages)/" },
+      to: { path: "^tools/" },
     },
     {
       name: "ai-layer-is-generic",
@@ -62,7 +57,7 @@ module.exports = {
       name: "pedagogy-has-no-io",
       severity: "error",
       from: { path: "^packages/pedagogy/" },
-      to: { path: "^packages/(ai|planner|writer|player|pdf-structure)/" },
+      to: { path: "^packages/(ai|generation|player|pdf-structure)/" },
     },
   ],
   options: {

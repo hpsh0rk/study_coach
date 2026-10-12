@@ -1,5 +1,6 @@
 import type { CallContext } from "@kj/ai";
-import type { AblationFlags, LessonParams, PageText } from "@kj/schema";
+import type { LessonParams, PageText } from "@kj/schema";
+import type { PipelineOptions } from "./options.ts";
 
 export interface PlannerSection {
   title: string;
@@ -12,11 +13,8 @@ export interface DraftInput {
   params: LessonParams;
   /** Selected chapters (leaf sections) in reading order; empty when the teacher picked raw page ranges. */
   sections: PlannerSection[];
-  /** Selected pages with text. */
+  /** Pages of the selection, with text. */
   pages: PageText[];
-  /** Source text with [p.N] markers (pdf-structure textForRanges). */
-  sourceText: string;
   ctx: CallContext;
-  /** Ablation switches; omitted = full pipeline. */
-  flags?: Partial<AblationFlags>;
+  options?: Partial<PipelineOptions>;
 }

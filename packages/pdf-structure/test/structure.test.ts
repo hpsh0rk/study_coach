@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TocEntry } from "@kj/schema";
-import { buildChapterTree, countPages, detectTextLayer, normalizeRanges, rangesForChapters, subtreeIds, textForRanges } from "../src/index.ts";
+import { buildChapterTree, countPages, detectTextLayer, normalizeRanges, rangesForChapters, subtreeIds, sourceForRanges, formatPages, pageForLabel } from "../src/index.ts";
 
 const toc: TocEntry[] = [
   {
@@ -75,14 +75,27 @@ describe("ranges", () => {
   });
 });
 
-describe("textForRanges", () => {
-  it("prefixes page markers and trims proportionally", () => {
-    const text = textForRanges(pages, [{ start: 2, end: 3 }], 10_000);
-    expect(text.split("\n")[0]).toMatch(/^\[p\.2\] word/);
-    expect(text).toContain("[p.3]");
-    const short = textForRanges(pages, [{ start: 1, end: 8 }], 400);
-    expect(short.split("\n")).toHaveLength(8);
-    expect(short.length).toBeLessThan(1400);
+describe("sourceForRanges", () => {
+  it("keeps whole pages in order and reports the rest as omitted", () => {
+    const all = sourceForRanges(pages, [{ start: 2, end: 3 }], 10_000);
+    expect(all.text.split("\n")[0]).toMatch(/^\[p\.2\] word/);
+    expect(all.text).toContain("[p.3]");
+    expect(all.omitted).toEqual([]);
+    const short = sourceForRanges(pages, [{ start: 1, end: 8 }], 400);
+    expect(short.included.length).toBeGreaterThan(0);
+    expect(short.included.length + short.omitted.length).toBe(8);
+    expect(short.omitted[0]).toBe(short.included.at(-1)! + 1);
+    for (const line of short.text.split("\n")) expect(pages.some((p) => line.endsWith(p.text.replace(/\s+/g, " ").trim()))).toBe(true);
+  });
+});
+
+describe("page labels", () => {
+  it("maps printed labels to page indexes and formats ranges", () => {
+    const labels = new Map([[3, "112"], [4, "113"], [5, "114"]]);
+    expect(pageForLabel(labels, "113", 10)).toBe(4);
+    expect(pageForLabel(labels, "7", 10)).toBe(7);
+    expect(pageForLabel(labels, "99", 10)).toBeNull();
+    expect(formatPages([3, 4, 5, 8], labels)).toBe("112–114, 8");
   });
 });
 

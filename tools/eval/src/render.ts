@@ -12,7 +12,7 @@ import type { AddressInfo } from "node:net";
 import { chromium } from "@playwright/test";
 import { deckFiles, parseArgs, readJson, writeJson } from "./common.ts";
 
-const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
+const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../../..");
 const DIST = path.join(ROOT, "apps/web/dist");
 const TYPES: Record<string, string> = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css", ".woff": "font/woff", ".woff2": "font/woff2", ".ttf": "font/ttf", ".svg": "image/svg+xml" };
 
@@ -27,6 +27,7 @@ function serveDist(): Promise<http.Server> {
   return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve(server)));
 }
 
+type Measure = (slides: { content: unknown; sources: number[] }[], theme: string) => Promise<(string[] | { error: string })[]>;
 type Deck = { lesson?: { theme?: string }; slides: { content: unknown; sources?: number[]; overflow?: string[]; overflowError?: string }[] };
 
 async function main(argv: string[]) {
@@ -50,7 +51,7 @@ async function main(argv: string[]) {
       const deck = readJson<Deck>(file);
       const theme = (opts.theme ?? deck.lesson?.theme ?? "classic") as string;
       const input = deck.slides.map((s) => ({ content: s.content, sources: s.sources ?? [] }));
-      const results = await page.evaluate(([slides, t]) => window.kjMeasure!(slides as never, t as never), [input, theme] as const);
+      const results = await page.evaluate(([slides, t]) => (window as unknown as { kjMeasure: Measure }).kjMeasure(slides, t), [input, theme] as const);
       let bad = 0;
       deck.slides.forEach((s, i) => {
         const r = results[i]!;

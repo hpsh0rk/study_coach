@@ -1,31 +1,38 @@
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
-import { normalizeRanges, rangesForChapters, textForRanges } from "@kj/pdf-structure";
+import { draftOutline, problemsOf, SpecNotFoundError, workedSpecFor, writeSlide, type PlannerSection } from "@kj/generation";
+import { normalizeRanges, rangesForChapters } from "@kj/pdf-structure";
 import { checkOutline, outlineTiming } from "@kj/pedagogy";
-import { draftOutline, type PlannerSection } from "@kj/planner";
-import { DEFAULT_PARAMS, LessonParams, newId, Outline, PageRange, randomToken, sha256Hex, ThemeId, type ChapterNode, type LessonScope } from "@kj/schema";
-import { layoutForPageType } from "@kj/templates";
-import { SpecNotFoundError, writeSlide } from "@kj/writer";
+import { DEFAULT_PARAMS, LessonParams, newId, Outline, PageRange, randomToken, sha256Hex, SlideContent, ThemeId, type ChapterNode, type LessonScope } from "@kj/schema";
+import { layoutForPageType, SLOT_SCHEMAS } from "@kj/templates";
 import { makeAi } from "../ai.ts";
 import { chapters, lessons, outlineVersions, shareLinks, slides } from "../db/schema.ts";
 import type { AppBindings, Env, SessionUser } from "../env.ts";
 import { HttpError, parseJson } from "../http.ts";
 import { db, requireUser } from "../auth/session.ts";
 import {
+  carryOverSlides,
   confirmedOutline,
   deckExport,
   latestConfirmed,
   latestVersion,
+  lessonList,
   lessonParams,
   lessonScope,
   outlineOf,
   ownedDocument,
   ownedLesson,
+  pageLabels,
   scopePages,
+  slideFromRow,
   slidesOf,
+  specHash,
   versionOf,
+  versionParams,
+  versionScope,
   type LessonRow,
+  type SlideRow,
   type VersionRow,
 } from "../store.ts";
 
@@ -55,12 +62,15 @@ function sectionsOf(tree: ChapterNode[], scope: LessonScope): PlannerSection[] {
   return leaves.map((c) => ({ title: c.title, pageStart: c.pageStart, pageEnd: c.pageEnd }));
 }
 
-function versionView(v: VersionRow, params: LessonParams) {
+function versionView(v: VersionRow) {
   const outline = outlineOf(v);
+  const params = versionParams(v);
   return {
     id: v.id,
     version: v.version,
     outline,
+    params,
+    scope: versionScope(v),
     confirmedAt: v.confirmedAt,
     ackOverBudget: v.ackOverBudget,
     timing: outlineTiming(outline, params),
@@ -89,41 +99,38 @@ function immutableGuard(err: unknown): never {
   throw err;
 }
 
-async function insertVersion(env: Env, lessonId: string, outline: Outline): Promise<VersionRow> {
-  const prev = await latestVersion(env, lessonId);
+async function insertVersion(env: Env, lesson: LessonRow, outline: Outline): Promise<VersionRow> {
+  const prev = await latestVersion(env, lesson.id);
   const id = newId("ov");
   const totalMinutes = outline.slides.reduce((n, s) => n + s.minutes, 0);
-  await db(env).insert(outlineVersions).values({ id, lessonId, version: (prev?.version ?? 0) + 1, outline: JSON.stringify(outline), totalMinutes });
-  return versionOf(env, lessonId, id);
+  await db(env)
+    .insert(outlineVersions)
+    .values({ id, lessonId: lesson.id, version: (prev?.version ?? 0) + 1, outline: JSON.stringify(outline), params: lesson.params, scope: lesson.scope, specCount: outline.slides.length, totalMinutes });
+  return versionOf(env, lesson.id, id);
 }
 
 async function lessonView(env: Env, lesson: LessonRow) {
-  const params = lessonParams(lesson);
-  const [latest, confirmed] = await Promise.all([latestVersion(env, lesson.id), latestConfirmed(env, lesson.id)]);
+  const [latest, confirmed, labels] = await Promise.all([latestVersion(env, lesson.id), latestConfirmed(env, lesson.id), pageLabels(env, lesson.documentId)]);
   const share = (await db(env).select({ id: shareLinks.id }).from(shareLinks).where(and(eq(shareLinks.lessonId, lesson.id), isNull(shareLinks.revokedAt))).limit(1))[0];
   return {
-    lesson: { id: lesson.id, title: lesson.title, documentId: lesson.documentId, theme: lesson.theme, params, scope: lessonScope(lesson), createdAt: lesson.createdAt, updatedAt: lesson.updatedAt },
-    version: latest ? versionView(latest, params) : null,
+    lesson: { id: lesson.id, title: lesson.title, documentId: lesson.documentId, theme: lesson.theme, params: lessonParams(lesson), scope: lessonScope(lesson), createdAt: lesson.createdAt, updatedAt: lesson.updatedAt },
+    version: latest ? versionView(latest) : null,
     confirmedVersionId: confirmed?.id ?? null,
     slides: confirmed ? await slidesOf(env, confirmed) : [],
+    pageLabels: labels,
     shared: !!share,
   };
 }
 
+async function ownedSlide(env: Env, lessonId: string, slideId: string): Promise<SlideRow> {
+  const row = (await db(env).select().from(slides).where(and(eq(slides.id, slideId), eq(slides.lessonId, lessonId))).limit(1))[0];
+  if (!row) throw new HttpError(404, "NOT_FOUND", "Slide not found");
+  return row;
+}
+
 export const lessonRoutes = new Hono<AppBindings>()
   .use(requireUser())
-  .get("/", async (c) => {
-    const u = c.get("user");
-    const rows = await db(c.env).select().from(lessons).where(and(eq(lessons.orgId, u.orgId), eq(lessons.ownerId, u.id))).orderBy(desc(lessons.updatedAt)).limit(100);
-    const out = [];
-    for (const l of rows) {
-      const v = await latestVersion(c.env, l.id);
-      const conf = await latestConfirmed(c.env, l.id);
-      const n = conf ? (await slidesOf(c.env, conf)).length : 0;
-      out.push({ id: l.id, title: l.title, updatedAt: l.updatedAt, params: lessonParams(l), status: !v ? "scoped" : !v.confirmedAt ? "outline" : n ? "slides" : "confirmed", slides: n, planned: conf ? outlineOf(conf).slides.length : 0 });
-    }
-    return c.json({ lessons: out });
-  })
+  .get("/", async (c) => c.json({ lessons: await lessonList(c.env, c.get("user")) }))
   .post("/", async (c) => {
     const body = await parseJson(c, z.object({ documentId: z.string(), chapterIds: z.array(z.string()).max(200).default([]), ranges: z.array(PageRange).max(50).default([]), title: z.string().trim().max(200).optional() }));
     const u = c.get("user");
@@ -159,20 +166,18 @@ export const lessonRoutes = new Hono<AppBindings>()
   .post("/:id/outline", async (c) => {
     const u = c.get("user");
     const lesson = await ownedLesson(c.env, u, c.req.param("id"));
-    const params = lessonParams(lesson);
     const scope = lessonScope(lesson);
-    const [pageTexts, tree] = await Promise.all([scopePages(c.env, lesson), treeOf(c.env, lesson.documentId)]);
+    const [pageTexts, tree] = await Promise.all([scopePages(c.env, lesson.documentId, scope), treeOf(c.env, lesson.documentId)]);
     const res = await draftOutline(makeAi(c.env, u.orgId), {
       lessonTitle: lesson.title,
-      params,
+      params: lessonParams(lesson),
       sections: sectionsOf(tree, scope),
       pages: pageTexts,
-      sourceText: textForRanges(pageTexts, scope.ranges),
       ctx: { orgId: u.orgId, userId: u.id, lessonId: lesson.id },
     });
-    const v = await insertVersion(c.env, lesson.id, res.outline);
+    const v = await insertVersion(c.env, lesson, res.outline);
     await db(c.env).update(lessons).set({ updatedAt: Date.now() }).where(eq(lessons.id, lesson.id));
-    return c.json({ version: versionView(v, params), providerId: res.providerId }, 201);
+    return c.json({ version: versionView(v), providerId: res.providerId }, 201);
   })
   .put("/:id/outline-versions/:vid", async (c) => {
     const lesson = await ownedLesson(c.env, c.get("user"), c.req.param("id"));
@@ -182,51 +187,72 @@ export const lessonRoutes = new Hono<AppBindings>()
     if (v.confirmedAt !== null) immutableGuard(new Error("OUTLINE_VERSION_IMMUTABLE"));
     await db(c.env)
       .update(outlineVersions)
-      .set({ outline: JSON.stringify(outline), totalMinutes: outline.slides.reduce((n, s) => n + s.minutes, 0) })
+      .set({ outline: JSON.stringify(outline), specCount: outline.slides.length, totalMinutes: outline.slides.reduce((n, s) => n + s.minutes, 0) })
       .where(eq(outlineVersions.id, v.id))
       .catch(immutableGuard);
-    return c.json({ version: versionView(await versionOf(c.env, lesson.id, v.id), lessonParams(lesson)) });
+    return c.json({ version: versionView(await versionOf(c.env, lesson.id, v.id)) });
   })
   .post("/:id/outline-versions/:vid/confirm", async (c) => {
     const lesson = await ownedLesson(c.env, c.get("user"), c.req.param("id"));
     const v = await versionOf(c.env, lesson.id, c.req.param("vid"));
     const body = await parseJson(c, z.object({ ackOverBudget: z.boolean().default(false) }));
-    const params = lessonParams(lesson);
-    if (v.confirmedAt !== null) return c.json({ version: versionView(v, params) });
+    if (v.confirmedAt !== null) return c.json({ version: versionView(v) });
+    const params = versionParams(v);
     const timing = outlineTiming(outlineOf(v), params);
     if (timing.needsAck && !body.ackOverBudget) {
       throw new HttpError(409, "OVER_BUDGET_ACK_REQUIRED", `Outline is ${timing.totalMinutes} min for a ${params.minutes}-min lesson (beyond ±15%); confirm again to accept · 大纲时长超出 ±15%，请再次确认`, timing);
     }
     await db(c.env).update(outlineVersions).set({ confirmedAt: Date.now(), ackOverBudget: timing.needsAck }).where(eq(outlineVersions.id, v.id)).catch(immutableGuard);
-    return c.json({ version: versionView(await versionOf(c.env, lesson.id, v.id), params) });
+    const confirmed = await versionOf(c.env, lesson.id, v.id);
+    await carryOverSlides(c.env, confirmed);
+    return c.json({ version: versionView(confirmed), slides: await slidesOf(c.env, confirmed) });
   })
   .post("/:id/outline-versions/:vid/revise", async (c) => {
     const lesson = await ownedLesson(c.env, c.get("user"), c.req.param("id"));
     const v = await versionOf(c.env, lesson.id, c.req.param("vid"));
-    const next = await insertVersion(c.env, lesson.id, outlineOf(v));
-    return c.json({ version: versionView(next, lessonParams(lesson)) }, 201);
+    const next = await insertVersion(c.env, lesson, outlineOf(v));
+    return c.json({ version: versionView(next) }, 201);
   })
+  /**
+   * Idempotent: returns the existing slide, else reuses an identical spec's slide from another
+   * version, else calls the model. `regenerate: true` always calls the model and keeps the old
+   * content for one level of undo.
+   */
   .post("/:id/outline-versions/:vid/slides/:specId/generate", async (c) => {
     const u = c.get("user");
     const lesson = await ownedLesson(c.env, u, c.req.param("id"));
     const v = await versionOf(c.env, lesson.id, c.req.param("vid"));
-    const confirmed = confirmedOutline(v);
-    const params = lessonParams(lesson);
-    if (outlineTiming(confirmed.outline, params).needsAck && !v.ackOverBudget) throw new HttpError(409, "OVER_BUDGET_ACK_REQUIRED", "Over-budget outline was not acknowledged");
+    const outline = confirmedOutline(v);
+    const body = await parseJson(c, z.object({ regenerate: z.boolean().default(false) }).default({ regenerate: false }));
     const specId = c.req.param("specId");
-    const spec = confirmed.outline.slides.find((s) => s.id === specId);
+    const spec = outline.slides.find((s) => s.id === specId);
     if (!spec) throw new HttpError(404, "NOT_FOUND", new SpecNotFoundError(specId).message);
-    const res = await writeSlide(makeAi(c.env, u.orgId), confirmed, specId, {
+    const d = db(c.env);
+    const existing = (await d.select().from(slides).where(and(eq(slides.outlineVersionId, v.id), eq(slides.specId, specId))).limit(1))[0];
+    if (existing && !body.regenerate) return c.json({ slide: slideFromRow(existing), reused: true });
+    if (!existing) {
+      await carryOverSlides(c.env, v);
+      const carried = (await d.select().from(slides).where(and(eq(slides.outlineVersionId, v.id), eq(slides.specId, specId))).limit(1))[0];
+      if (carried && !body.regenerate) return c.json({ slide: slideFromRow(carried), reused: true });
+    }
+    const params = versionParams(v);
+    const worked = workedSpecFor(outline, specId);
+    const workedRow = worked ? (await d.select({ content: slides.content }).from(slides).where(and(eq(slides.outlineVersionId, v.id), eq(slides.specId, worked))).limit(1))[0] : undefined;
+    const workedContent = workedRow ? SlideContent.parse(JSON.parse(workedRow.content)) : undefined;
+    const res = await writeSlide(makeAi(c.env, u.orgId), outline, specId, {
       lessonTitle: lesson.title,
       params,
-      pages: await scopePages(c.env, lesson),
+      pages: await scopePages(c.env, lesson.documentId, versionScope(v)),
+      workedProblem: workedContent?.layout === "steps" ? workedContent.problem : undefined,
       ctx: { orgId: u.orgId, userId: u.id, lessonId: lesson.id },
     });
+    const current = (await d.select().from(slides).where(and(eq(slides.outlineVersionId, v.id), eq(slides.specId, specId))).limit(1))[0];
     const row = {
       id: newId("sl"),
       lessonId: lesson.id,
       outlineVersionId: v.id,
       specId,
+      specHash: await specHash(spec, params),
       layout: spec.layout,
       pageType: spec.pageType,
       minutes: spec.minutes,
@@ -235,18 +261,53 @@ export const lessonRoutes = new Hono<AppBindings>()
       sources: JSON.stringify(res.sources),
       warnings: JSON.stringify(res.warnings),
       providerId: res.providerId,
+      prevContent: current?.content ?? null,
+      prevNotes: current?.notes ?? null,
       updatedAt: Date.now(),
     };
     const { id: _id, ...update } = row;
-    await db(c.env).insert(slides).values(row).onConflictDoUpdate({ target: [slides.outlineVersionId, slides.specId], set: update });
-    const saved = (await slidesOf(c.env, v)).find((s) => s.specId === specId)!;
-    return c.json({ slide: saved });
+    await d.insert(slides).values(row).onConflictDoUpdate({ target: [slides.outlineVersionId, slides.specId], set: update });
+    const saved = (await d.select().from(slides).where(and(eq(slides.outlineVersionId, v.id), eq(slides.specId, specId))).limit(1))[0]!;
+    return c.json({ slide: slideFromRow(saved), reused: false });
+  })
+  /** Slot-form edit: content must match the slide's layout and hard budgets; the old content is kept for undo. */
+  .patch("/:id/slides/:slideId", async (c) => {
+    const lesson = await ownedLesson(c.env, c.get("user"), c.req.param("id"));
+    const row = await ownedSlide(c.env, lesson.id, c.req.param("slideId"));
+    const body = await parseJson(c, z.object({ content: z.unknown().optional(), notes: z.string().max(4000).optional() }));
+    let content = JSON.parse(row.content) as SlideContent;
+    if (body.content !== undefined) {
+      const parsed = SLOT_SCHEMAS[row.layout as SlideContent["layout"]].safeParse(body.content);
+      if (!parsed.success) {
+        throw new HttpError(422, "INVALID_CONTENT", parsed.error.issues.slice(0, 5).map((i) => `${i.path.join(".")}: ${i.message}`).join("; "), parsed.error.issues.slice(0, 20));
+      }
+      content = parsed.data as SlideContent;
+    }
+    const found = problemsOf(content, row.pageType as Parameters<typeof problemsOf>[1]);
+    await db(c.env)
+      .update(slides)
+      .set({ content: JSON.stringify(content), notes: body.notes ?? row.notes, warnings: JSON.stringify([...found.errors, ...found.warnings]), prevContent: row.content, prevNotes: row.notes, updatedAt: Date.now() })
+      .where(eq(slides.id, row.id));
+    return c.json({ slide: slideFromRow(await ownedSlide(c.env, lesson.id, row.id)) });
+  })
+  /** Swaps current and previous content, so undoing twice restores the edit. */
+  .post("/:id/slides/:slideId/undo", async (c) => {
+    const lesson = await ownedLesson(c.env, c.get("user"), c.req.param("id"));
+    const row = await ownedSlide(c.env, lesson.id, c.req.param("slideId"));
+    if (row.prevContent === null) throw new HttpError(409, "NOTHING_TO_UNDO", "Nothing to undo · 没有可撤销的修改");
+    const content = SlideContent.parse(JSON.parse(row.prevContent));
+    const found = problemsOf(content, row.pageType as Parameters<typeof problemsOf>[1]);
+    await db(c.env)
+      .update(slides)
+      .set({ content: row.prevContent, notes: row.prevNotes ?? row.notes, warnings: JSON.stringify([...found.errors, ...found.warnings]), prevContent: row.content, prevNotes: row.notes, updatedAt: Date.now() })
+      .where(eq(slides.id, row.id));
+    return c.json({ slide: slideFromRow(await ownedSlide(c.env, lesson.id, row.id)) });
   })
   .get("/:id/deck", async (c) => {
     const lesson = await ownedLesson(c.env, c.get("user"), c.req.param("id"));
     const v = await latestConfirmed(c.env, lesson.id);
     if (!v) throw new HttpError(409, "OUTLINE_NOT_CONFIRMED", "No confirmed outline yet");
-    return c.json(deckExport(lesson, v, await slidesOf(c.env, v), { includeNotes: true }));
+    return c.json(deckExport(lesson, v, await slidesOf(c.env, v), { includeNotes: true, pageLabels: await pageLabels(c.env, lesson.documentId) }));
   })
   .post("/:id/share", async (c) => {
     const u = c.get("user");

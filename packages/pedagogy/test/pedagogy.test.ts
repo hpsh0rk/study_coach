@@ -17,7 +17,7 @@ const spec = (pageType: SlideSpec["pageType"], minutes: number, extra: Partial<S
   ...extra,
 });
 const params = { minutes: 40, level: "intermediate", lessonType: "new", language: "en", focus: "" } as const;
-const outline = (slides: SlideSpec[]): Outline => ({ objectives: ["Describe waves"], slides });
+const outline = (slides: SlideSpec[]): Outline => ({ objectives: ["Describe waves"], slides, glossary: [], notCovered: [] });
 
 describe("time budget (L-03)", () => {
   it("allows ±15% and asks for acknowledgement beyond it", () => {

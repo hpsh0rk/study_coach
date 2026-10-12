@@ -87,23 +87,64 @@ export function countPages(ranges: PageRange[]): number {
   return ranges.reduce((n, r) => n + r.end - r.start + 1, 0);
 }
 
+export interface SourceText {
+  /** Pages prefixed with "[p.N]" (N = page index) so outputs can cite pages. */
+  text: string;
+  included: number[];
+  /** Selected pages left out because the character budget ran out. */
+  omitted: number[];
+}
+
 /**
- * Source text for the model, each page prefixed with "[p.N]" so outputs can cite pages.
- * When over budget every page is trimmed proportionally rather than dropping later pages.
+ * Source text for the model. Pages are kept whole, in order, until the budget runs out; the
+ * remaining pages are reported as omitted instead of trimming every page (examples and
+ * summaries sit at the end of a page).
  */
-export function textForRanges(pages: PageText[], ranges: PageRange[], maxChars = 24_000): string {
+export function sourceForRanges(pages: PageText[], ranges: PageRange[], maxChars = 24_000): SourceText {
   const wanted = new Set(pagesInRanges(ranges));
   const selected = pages.filter((p) => wanted.has(p.no)).sort((a, b) => a.no - b.no);
-  const clean = selected.map((p) => ({ no: p.no, text: p.text.replace(/\s+/g, " ").trim() }));
-  const total = clean.reduce((n, p) => n + p.text.length, 0);
-  const ratio = total > maxChars ? maxChars / total : 1;
-  return clean
-    .map((p) => {
-      const limit = Math.max(80, Math.floor(p.text.length * ratio));
-      const t = p.text.length > limit ? `${p.text.slice(0, limit)}…` : p.text;
-      return `[p.${p.no}] ${t}`;
-    })
-    .join("\n");
+  const parts: string[] = [];
+  const included: number[] = [];
+  const omitted: number[] = [];
+  let used = 0;
+  for (const p of selected) {
+    const line = `[p.${p.no}] ${p.text.replace(/\s+/g, " ").trim()}`;
+    if (omitted.length || (used + line.length > maxChars && included.length)) {
+      omitted.push(p.no);
+      continue;
+    }
+    parts.push(line.slice(0, maxChars));
+    included.push(p.no);
+    used += line.length + 1;
+  }
+  return { text: parts.join("\n"), included, omitted };
+}
+
+/** Printed label of a page (falls back to the page index). */
+export function labelOf(pages: Pick<PageText, "no" | "label">[] | Map<number, string>, no: number): string {
+  const label = pages instanceof Map ? pages.get(no) : pages.find((p) => p.no === no)?.label;
+  return label ?? String(no);
+}
+
+/** "12–15, 20" in printed labels for a sorted list of page indexes. */
+export function formatPages(nos: number[], labels: Map<number, string> = new Map()): string {
+  const out: string[] = [];
+  for (let i = 0; i < nos.length; i++) {
+    let j = i;
+    while (j + 1 < nos.length && nos[j + 1] === nos[j]! + 1) j++;
+    const a = labelOf(labels, nos[i]!);
+    out.push(j > i ? `${a}–${labelOf(labels, nos[j]!)}` : a);
+    i = j;
+  }
+  return out.join(", ");
+}
+
+/** Page index for a typed page reference: a printed label when the PDF has labels, else the index. */
+export function pageForLabel(labels: Map<number, string>, token: string, pageCount: number): number | null {
+  const t = token.trim();
+  for (const [no, label] of labels) if (label.toLowerCase() === t.toLowerCase()) return no;
+  const n = Number(t);
+  return Number.isInteger(n) && n >= 1 && n <= pageCount ? n : null;
 }
 
 export function detectTextLayer(pages: PageText[], pageCount: number): boolean {

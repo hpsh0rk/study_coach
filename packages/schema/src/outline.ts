@@ -27,19 +27,18 @@ export const SlideSpec = z.object({
 });
 export type SlideSpec = z.infer<typeof SlideSpec>;
 
+/** One translation per term for the whole lesson, so every slide uses the same wording (Q-22). */
+export const GlossaryEntry = z.object({
+  term: z.string().trim().min(1).max(60),
+  zh: z.string().trim().max(30).default(""),
+});
+export type GlossaryEntry = z.infer<typeof GlossaryEntry>;
+
 export const Outline = z.object({
   objectives: z.array(z.string().trim().min(1).max(160)).min(1).max(3),
   slides: z.array(SlideSpec).min(1).max(40),
+  glossary: z.array(GlossaryEntry).max(30).default([]),
+  /** Parts of the selection the lesson does not cover (time or source-length limits). */
+  notCovered: z.array(z.string().trim().min(1).max(200)).max(20).default([]),
 });
 export type Outline = z.infer<typeof Outline>;
-
-/**
- * An outline version the teacher has confirmed. Only the server's store constructs it
- * (after checking confirmed_at), so generation code cannot run on an unconfirmed outline.
- */
-export type ConfirmedOutline = {
-  readonly versionId: string;
-  readonly lessonId: string;
-  readonly outline: Outline;
-  readonly confirmedAt: number;
-} & { readonly __brand: "ConfirmedOutline" };
