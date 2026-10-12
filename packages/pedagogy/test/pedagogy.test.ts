@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Outline, SlideSpec } from "@kj/schema";
-import { layoutForPageType } from "@kj/templates";
+import { layoutForPageType } from "@kj/schema";
 import { checkOutline, checkSlide, densityOf, outlineTiming, planBudget, scopeAdvice } from "../src/index.ts";
 
 const spec = (pageType: SlideSpec["pageType"], minutes: number, extra: Partial<SlideSpec> = {}): SlideSpec => ({

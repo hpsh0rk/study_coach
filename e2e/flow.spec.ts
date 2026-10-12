@@ -18,6 +18,21 @@ async function shotOf(el: Locator, name: string) {
 
 const positionOf = async (player: Locator) => `${await player.getAttribute("data-index")}.${await player.getAttribute("data-step")}`;
 
+/** No visible source chip reaches the player's control bar (it floats over the slide's bottom edge). */
+async function expectChipsClear(page: Page) {
+  const under = await page.evaluate(() => {
+    const bar = document.querySelector(".kj-controls")!.getBoundingClientRect();
+    return [...document.querySelectorAll<HTMLElement>(".kj-slide .kj-source")]
+      .filter((c) => !c.hidden)
+      .filter((c) => {
+        const r = c.getBoundingClientRect();
+        return r.right > bar.left && r.bottom > bar.top && r.top < bar.bottom;
+      })
+      .map((c) => c.textContent);
+  });
+  expect(under).toEqual([]);
+}
+
 /** Chapters → settings. The mini fixture PDFs are far below one lesson, so the m3-10 "仍然继续" second click is expected. */
 async function toSettings(page: Page, thinShot?: string) {
   await page.getByTestId("chapters-next").click();
@@ -207,6 +222,7 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
   await student.goto(shareUrl);
   await expect(student.locator(".kj-player")).toBeVisible();
   await expect(student.locator(".kj-notes")).toBeHidden();
+  await expectChipsClear(student);
   const pubUrl = shareUrl.replace("/s/", "/api/share/");
   const pub = await (await student.request.get(pubUrl)).json();
   expect(pub.slides).toHaveLength(count);
@@ -435,6 +451,7 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
     await off.goto(`file://${file}`);
     await expect(off.locator("body"), `offline page errors: ${errors.join(" | ")}`).toHaveAttribute("data-ready", "1");
     await expect(off.locator(".kj-counter")).toContainText(`1 / ${count}`);
+    await expectChipsClear(off);
     const fonts = await off.evaluate(async () => {
       const zh = await document.fonts.load('400 48px "Noto Sans SC"', "波长频率");
       const latin = await document.fonts.load('700 48px "Arimo"', "Wave");

@@ -162,3 +162,15 @@ describe("withoutAnswers (课前预习 student copies)", () => {
     expect(withoutAnswers(sampleContent("summary"))).toEqual(sampleContent("summary"));
   });
 });
+
+describe("source chips", () => {
+  it("merges consecutive pages into one chip", async () => {
+    const { sourceRuns } = await import("../src/render/index.ts");
+    expect(sourceRuns([9, 3, 4, 5, 5, 12, 13])).toEqual([
+      [3, 5],
+      [9, 9],
+      [12, 13],
+    ]);
+    expect(sourceRuns([])).toEqual([]);
+  });
+});

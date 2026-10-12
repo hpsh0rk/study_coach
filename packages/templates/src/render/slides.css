@@ -850,6 +850,12 @@
   background: transparent;
   cursor: pointer;
 }
+.kj-source[hidden] {
+  display: none;
+}
+.kj-source-more {
+  cursor: default;
+}
 .kj-source:disabled {
   cursor: default;
 }

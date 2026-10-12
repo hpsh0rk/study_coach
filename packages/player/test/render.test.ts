@@ -67,4 +67,10 @@ describe("built-in labels", () => {
       r.dispose();
     }
   });
+
+  it("consecutive source pages share one chip, with printed page labels", () => {
+    const r = renderSlide({ content: sampleContent("statement"), sources: [8, 5, 6, 7, 12, 20, 21] }, { theme: "classic", interactive: false, pageLabels: { 20: "xx", 21: "xxi" } });
+    expect([...r.el.querySelectorAll(".kj-source")].map((c) => c.textContent)).toEqual(["p.5–8", "p.12", "p.xx–xxi"]);
+    r.dispose();
+  });
 });

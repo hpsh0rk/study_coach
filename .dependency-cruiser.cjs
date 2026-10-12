@@ -13,6 +13,14 @@ module.exports = {
       to: { path: "^(packages|apps)/", pathNot: "^packages/schema/" },
     },
     {
+      name: "pedagogy-rules-do-not-import-templates",
+      comment: "Teaching rules sit below the slide templates: shared budgets and the page-type → layout map come from @kj/schema (review #3 D-10).",
+      severity: "error",
+      from: { path: "^packages/pedagogy/" },
+      // The bare name catches the import even before someone re-adds the workspace dependency.
+      to: { path: "^(packages/templates/|@kj/templates)" },
+    },
+    {
       name: "packages-never-import-apps",
       severity: "error",
       from: { path: "^packages/" },

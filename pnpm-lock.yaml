@@ -202,9 +202,6 @@ importers:
       '@kj/schema':
         specifier: workspace:*
         version: link:../schema
-      '@kj/templates':
-        specifier: workspace:*
-        version: link:../templates
     devDependencies:
       vitest:
         specifier: ~4.1.11

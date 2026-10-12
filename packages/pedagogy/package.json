@@ -11,8 +11,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@kj/schema": "workspace:*",
-    "@kj/templates": "workspace:*"
+    "@kj/schema": "workspace:*"
   },
   "devDependencies": {
     "vitest": "~4.1.11"

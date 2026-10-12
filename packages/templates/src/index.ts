@@ -46,25 +46,7 @@ export const LAYOUTS: Record<LayoutId, LayoutDef> = {
   summary: { id: "summary", label: { zh: "结构小结", en: "Summary map" }, visual: "none" },
 };
 
-const PAGE_TYPE_LAYOUT: Record<PageType, LayoutId> = {
-  cover: "title",
-  retrieval: "questions",
-  concept: "statement",
-  process: "statement",
-  data: "chart",
-  worked: "steps",
-  faded: "steps",
-  practice: "questions",
-  sequence: "order",
-  experiment: "experiment",
-  check: "quiz",
-  summary: "summary",
-  exit: "questions",
-};
-
-export function layoutForPageType(pageType: PageType): LayoutId {
-  return PAGE_TYPE_LAYOUT[pageType];
-}
+export { layoutForPageType } from "@kj/schema";
 
 /** Visual kinds a page type may use; the first is the default. */
 export const PAGE_TYPE_VISUALS: Record<PageType, VisualKind[]> = {

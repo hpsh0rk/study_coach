@@ -1,5 +1,4 @@
-import { countWords, type LayoutId, type LessonParams, type Outline, type PageType, type SlideContent, type SlideSpec } from "@kj/schema";
-import { BUDGETS, layoutForPageType, type ListBudget } from "@kj/templates";
+import { BUDGETS, countWords, layoutForPageType, type LayoutId, type ListBudget, type LessonParams, type Outline, type PageType, type SlideContent, type SlideSpec } from "@kj/schema";
 
 export interface PageTypeDef {
   id: PageType;
