@@ -9,8 +9,8 @@ import type { StepKey } from "./wizard/Stepper.tsx";
 
 /** Furthest step a lesson has reached, so the stepper can link back to earlier steps. */
 export function reachedStep(v: LessonView): StepKey {
-  if (v.confirmedVersionId) return "slides";
-  if (v.version) return "outline";
+  if (v.confirmed) return "slides";
+  if (v.draft || v.drafting) return "outline";
   return "settings";
 }
 
@@ -40,7 +40,7 @@ export function LessonPage() {
     case "outline":
       return <OutlineStep view={view} reached={reached} onChanged={load} />;
     case "slides":
-      return <GenerateStep key={view.confirmedVersionId ?? "none"} view={view} reached={reached} />;
+      return <GenerateStep key={view.confirmed?.id ?? "none"} view={view} reached={reached} />;
     default:
       return <Navigate to={`/lessons/${id}/${reached}`} replace />;
   }

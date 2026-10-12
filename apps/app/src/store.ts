@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, gte, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
-import { pagesInRanges } from "@kj/pdf-structure";
-import { checkSourceText, slideKey, sourceUnverified } from "@kj/generation";
-import { verifyNumbers } from "@kj/pedagogy";
+import { checkSourceText, slideKey, sourceUnverified, suspiciousContent } from "@kj/generation";
+import { isEmptyPage, MIN_PAGE_WORDS, pagesInRanges, sourceCut } from "@kj/pdf-structure";
+import { OUTLINE_SOURCE_CHARS, verifyNumbers } from "@kj/pedagogy";
 import { LessonParams, LessonScope, newId, Outline, SlideContent, type PageText, type PageType, type Slide, type Unverified } from "@kj/schema";
 import { db } from "./auth/session.ts";
 import { documents, lessons, outlineVersions, pages, slides } from "./db/schema.ts";
@@ -54,6 +54,7 @@ export function confirmedOutline(v: VersionRow): Outline {
   return outlineOf(v);
 }
 
+/** Text of the scope's pages that have any (pages without text never reach the model). */
 export async function scopePages(env: Env, documentId: string, scope: LessonScope): Promise<PageText[]> {
   return pagesByNo(env, documentId, pagesInRanges(scope.ranges));
 }
@@ -65,21 +66,36 @@ export async function pagesByNo(env: Env, documentId: string, wanted: number[]):
     const rows = await db(env)
       .select({ no: pages.no, text: pages.text, label: pages.label })
       .from(pages)
-      .where(and(eq(pages.documentId, documentId), inArray(pages.no, chunk)))
+      .where(and(eq(pages.documentId, documentId), inArray(pages.no, chunk), gte(pages.words, MIN_PAGE_WORDS)))
       .orderBy(asc(pages.no));
     out.push(...rows.map((r) => ({ no: r.no, text: r.text, ...(r.label ? { label: r.label } : {}) })));
   }
   return out;
 }
 
-/** Word count of a scope (for the "this needs about N minutes" estimate). */
-export async function scopeWords(env: Env, documentId: string, scope: LessonScope): Promise<number> {
+export interface ScopeStats {
+  /** Word count (for the "this needs about N minutes" estimate). */
+  words: number;
+  /** Pages without usable text (scanned images): never sent to the model. */
+  emptyPages: number[];
+  /** Pages with text beyond OUTLINE_SOURCE_CHARS: the outline planner cannot read them. */
+  unreadPages: number[];
+}
+
+/** One query over the scope's page sizes; texts are not loaded (LENGTH() predicts the source cut). */
+export async function scopeStats(env: Env, documentId: string, scope: LessonScope): Promise<ScopeStats> {
   const inRanges = or(...scope.ranges.map((r) => and(gte(pages.no, r.start), lte(pages.no, r.end))));
-  const row = await db(env)
-    .select({ n: sql<number>`COALESCE(SUM(${pages.words}), 0)` })
+  const rows = await db(env)
+    .select({ no: pages.no, words: pages.words, chars: sql<number>`LENGTH(${pages.text})` })
     .from(pages)
-    .where(and(eq(pages.documentId, documentId), inRanges));
-  return row[0]?.n ?? 0;
+    .where(and(eq(pages.documentId, documentId), inRanges))
+    .orderBy(asc(pages.no));
+  const withText = rows.filter((r) => !isEmptyPage(r.words));
+  return {
+    words: rows.reduce((n, r) => n + r.words, 0),
+    emptyPages: rows.filter((r) => isEmptyPage(r.words)).map((r) => r.no),
+    unreadPages: sourceCut(withText, OUTLINE_SOURCE_CHARS).omitted,
+  };
 }
 
 /** Printed page labels of a document (only pages whose label differs from the index). */
@@ -120,14 +136,42 @@ export async function unverifiedFor(env: Env, documentId: string, row: SlideRow,
   return [...(spec ? sourceUnverified(spec) : []), ...verifyNumbers(content, checkSourceText(sources, list), { pageType: row.pageType as PageType, notes })].slice(0, 10);
 }
 
-/** Slides of a version in outline order (missing specs are simply not generated yet). */
-export async function slidesOf(env: Env, version: VersionRow): Promise<Slide[]> {
+async function slideRowsOf(env: Env, version: VersionRow): Promise<SlideRow[]> {
   const rows = await db(env).select().from(slides).where(eq(slides.outlineVersionId, version.id));
   const order = new Map(outlineOf(version).slides.map((s, i) => [s.id, i]));
-  return rows
-    .filter((r) => order.has(r.specId))
-    .sort((a, b) => order.get(a.specId)! - order.get(b.specId)!)
-    .map(slideFromRow);
+  return rows.filter((r) => order.has(r.specId)).sort((a, b) => order.get(a.specId)! - order.get(b.specId)!);
+}
+
+/** Slides of a version in outline order (missing specs are simply not generated yet). */
+export async function slidesOf(env: Env, version: VersionRow): Promise<Slide[]> {
+  return (await slideRowsOf(env, version)).map(slideFromRow);
+}
+
+/** Pages whose student-visible text has links, e-mails, downloads or instruction-like text. */
+export function flaggedSlides(list: Slide[], outline: Outline) {
+  const order = new Map(outline.slides.map((s, i) => [s.id, i]));
+  return list.flatMap((s) => {
+    const issues = suspiciousContent(studentSlide(s).content);
+    return issues.length ? [{ page: (order.get(s.specId) ?? 0) + 1, title: "title" in s.content ? s.content.title : s.content.question, issues }] : [];
+  });
+}
+
+/**
+ * What a share link shows: flagged slides generated or edited after the teacher last shared (and
+ * so reviewed) the deck are held back until the teacher shares again.
+ */
+export async function sharedSlides(env: Env, version: VersionRow, reviewedAt: number): Promise<{ slides: Slide[]; held: number[] }> {
+  const rows = await slideRowsOf(env, version);
+  const late = new Set(rows.filter((r) => r.updatedAt > reviewedAt).map((r) => r.id));
+  const list = rows.map(slideFromRow);
+  const held = new Set(
+    flaggedSlides(
+      list.filter((s) => late.has(s.id)),
+      outlineOf(version),
+    ).map((f) => f.page),
+  );
+  const order = new Map(outlineOf(version).slides.map((s, i) => [s.id, i + 1]));
+  return { slides: list.filter((s) => !held.has(order.get(s.specId)!)), held: [...held] };
 }
 
 /**
@@ -156,6 +200,20 @@ export async function carryOverSlides(env: Env, version: VersionRow): Promise<vo
   for (let i = 0; i < rows.length; i += 5) await d.insert(slides).values(rows.slice(i, i + 5));
 }
 
+/**
+ * The version students get when a link is created: the newest confirmed version whose slides are
+ * all generated, else the newest confirmed version with any slide.
+ */
+export async function shareableVersion(env: Env, lessonId: string): Promise<VersionRow | null> {
+  const rows = await db(env)
+    .select({ id: outlineVersions.id, specCount: outlineVersions.specCount, slides: sql<number>`(SELECT COUNT(*) FROM slides s WHERE s.outline_version_id = outline_versions.id)` })
+    .from(outlineVersions)
+    .where(and(eq(outlineVersions.lessonId, lessonId), isNotNull(outlineVersions.confirmedAt)))
+    .orderBy(desc(outlineVersions.version));
+  const pick = rows.find((r) => r.slides >= r.specCount) ?? rows.find((r) => r.slides > 0);
+  return pick ? versionOf(env, lessonId, pick.id) : null;
+}
+
 /** Lesson list in one query: status and counts come from correlated subqueries, no outline JSON is parsed. */
 export async function lessonList(env: Env, user: SessionUser) {
   const latest = sql`(SELECT v.confirmed_at IS NOT NULL FROM outline_versions v WHERE v.lesson_id = ${lessons.id} ORDER BY v.version DESC LIMIT 1)`;
@@ -179,10 +237,16 @@ export async function lessonList(env: Env, user: SessionUser) {
     title: r.title,
     updatedAt: r.updatedAt,
     params: LessonParams.parse(JSON.parse(r.params)),
-    status: r.latestConfirmed === null ? "scoped" : !r.latestConfirmed ? "outline" : r.slides ? "slides" : "confirmed",
+    status: r.latestConfirmed === null ? "scoped" : r.slides ? "slides" : !r.latestConfirmed ? "outline" : "confirmed",
     slides: r.slides,
     planned: r.planned,
   }));
+}
+
+/** What students may see of a slide: no speaker notes, checks, 待核实 flags or misconception labels on quiz options. */
+export function studentSlide({ canUndo: _u, ...s }: Slide) {
+  const content = s.content.layout === "quiz" ? { ...s.content, options: s.content.options.map((o) => ({ ...o, misconception: "" })) } : s.content;
+  return { ...s, content, notes: "", warnings: [], unverified: [] };
 }
 
 /** Export shape shared with the eval tooling (internal/eval/score.ts reads it). */
@@ -203,6 +267,6 @@ export function deckExport(lesson: LessonRow, version: VersionRow, list: Slide[]
     },
     meta: { outlineVersion: version.version, confirmedAt: version.confirmedAt },
     outline: outlineOf(version),
-    slides: list.map(({ canUndo: _u, ...s }) => (extra.includeNotes ? s : { ...s, notes: "", unverified: [] })),
+    slides: list.map((s) => (extra.includeNotes ? (({ canUndo: _u, ...rest }) => rest)(s) : studentSlide(s))),
   };
 }

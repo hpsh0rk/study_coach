@@ -1,10 +1,10 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, lt, or } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { checkSourcePages, draftOutline, problemsOf, slideKey, SpecNotFoundError, workedSpecFor, writeSlide, type PlannerSection } from "@kj/generation";
 import { normalizeRanges, rangesForChapters } from "@kj/pdf-structure";
 import { checkOutline, outlineTiming } from "@kj/pedagogy";
-import { DEFAULT_PARAMS, LessonParams, newId, Outline, PageRange, randomToken, sha256Hex, SlideContent, ThemeId, type ChapterNode, type LessonScope } from "@kj/schema";
+import { DEFAULT_PARAMS, LessonParams, newId, Outline, PageRange, sha256Hex, SlideContent, ThemeId, type ChapterNode, type LessonScope } from "@kj/schema";
 import { layoutForPageType, SLOT_SCHEMAS } from "@kj/templates";
 import { describeIssue, slotIssues, widgetIssues } from "@kj/templates/issues";
 import { makeAi } from "../ai.ts";
@@ -12,10 +12,12 @@ import { chapters, lessons, outlineVersions, shareLinks, slides } from "../db/sc
 import type { AppBindings, Env, SessionUser } from "../env.ts";
 import { HttpError, parseJson } from "../http.ts";
 import { db, requireUser } from "../auth/session.ts";
+import { shareToken } from "./share.ts";
 import {
   carryOverSlides,
   confirmedOutline,
   deckExport,
+  flaggedSlides,
   latestConfirmed,
   latestVersion,
   lessonList,
@@ -26,7 +28,9 @@ import {
   ownedLesson,
   pageLabels,
   scopePages,
-  scopeWords,
+  scopeStats,
+  shareableVersion,
+  sharedSlides,
   slideFromRow,
   unverifiedFor,
   slidesOf,
@@ -73,6 +77,7 @@ function versionView(v: VersionRow) {
     outline,
     params,
     scope: versionScope(v),
+    rev: v.rev,
     confirmedAt: v.confirmedAt,
     ackOverBudget: v.ackOverBudget,
     timing: outlineTiming(outline, params),
@@ -114,35 +119,73 @@ async function recheckSources(env: Env, lesson: LessonRow, v: VersionRow, outlin
   };
 }
 
-function immutableGuard(err: unknown): never {
-  if (err instanceof Error && /OUTLINE_VERSION_IMMUTABLE/.test(`${err.message} ${(err as { cause?: Error }).cause?.message ?? ""}`)) {
-    throw new HttpError(409, "OUTLINE_VERSION_IMMUTABLE", "A confirmed outline cannot be changed; start a new version · 已确认的大纲不能修改，请新建版本");
-  }
-  throw err;
+/** Why a write was refused: the version was confirmed meanwhile, or someone saved a newer edit. */
+async function staleVersion(env: Env, lessonId: string, versionId: string): Promise<never> {
+  const now = await versionOf(env, lessonId, versionId);
+  if (now.confirmedAt !== null) throw new HttpError(409, "OUTLINE_VERSION_IMMUTABLE", "这一版大纲已经确认，不能再改；请点“修改大纲（新版本）”· A confirmed outline cannot be changed");
+  throw new HttpError(409, "OUTLINE_CHANGED", "这份大纲刚在别处（另一个标签页或设备）改过。你这次的修改还没有保存：请先复制要保留的内容，再刷新页面 · The outline was changed elsewhere; reload before saving", { rev: now.rev });
 }
 
 /** `snapshot` defaults to the lesson's current settings; a revision copies its source version's snapshot instead. */
 async function insertVersion(env: Env, lesson: LessonRow, outline: Outline, snapshot: { params: string; scope: string } = lesson): Promise<VersionRow> {
   const prev = await latestVersion(env, lesson.id);
   const id = newId("ov");
-  const totalMinutes = outline.slides.reduce((n, s) => n + s.minutes, 0);
   await db(env)
     .insert(outlineVersions)
-    .values({ id, lessonId: lesson.id, version: (prev?.version ?? 0) + 1, outline: JSON.stringify(outline), params: snapshot.params, scope: snapshot.scope, specCount: outline.slides.length, totalMinutes });
+    .values({ id, lessonId: lesson.id, version: (prev?.version ?? 0) + 1, outline: JSON.stringify(outline), params: snapshot.params, scope: snapshot.scope, specCount: outline.slides.length });
   return versionOf(env, lesson.id, id);
 }
 
+/** A draft holds this long at most: a request that dies mid-draft (closed tab, Worker limit) frees the lesson on its own. */
+export const DRAFT_LOCK_MS = 150_000;
+
+async function activeShare(env: Env, lessonId: string) {
+  return (await db(env).select().from(shareLinks).where(and(eq(shareLinks.lessonId, lessonId), isNull(shareLinks.revokedAt))).limit(1))[0] ?? null;
+}
+
+/** `held`: pages students do not see until the teacher shares again (flagged after the last review). */
+async function shareView(env: Env, lessonId: string) {
+  const link = await activeShare(env, lessonId);
+  if (!link?.versionId) return null;
+  const v = await versionOf(env, lessonId, link.versionId);
+  const { held } = await sharedSlides(env, v, link.reviewedAt);
+  return { path: `/s/${await shareToken(env, link.id)}`, versionId: v.id, version: v.version, held };
+}
+
+/**
+ * `confirmed` (newest confirmed version and its slides) is what step 5 presents and shares; `draft`
+ * is a newer unconfirmed outline, if any. A draft never hides the generated deck.
+ */
 async function lessonView(env: Env, lesson: LessonRow) {
   const scope = lessonScope(lesson);
-  const [latest, confirmed, labels, words] = await Promise.all([latestVersion(env, lesson.id), latestConfirmed(env, lesson.id), pageLabels(env, lesson.documentId), scopeWords(env, lesson.documentId, scope)]);
-  const share = (await db(env).select({ id: shareLinks.id }).from(shareLinks).where(and(eq(shareLinks.lessonId, lesson.id), isNull(shareLinks.revokedAt))).limit(1))[0];
+  const [latest, confirmed, labels, stats, share] = await Promise.all([
+    latestVersion(env, lesson.id),
+    latestConfirmed(env, lesson.id),
+    pageLabels(env, lesson.documentId),
+    scopeStats(env, lesson.documentId, scope),
+    shareView(env, lesson.id),
+  ]);
+  const drafting = lesson.draftingUntil !== null && lesson.draftingUntil > Date.now();
   return {
-    lesson: { id: lesson.id, title: lesson.title, documentId: lesson.documentId, theme: lesson.theme, params: lessonParams(lesson), scope, scopeWords: words, createdAt: lesson.createdAt, updatedAt: lesson.updatedAt },
-    version: latest ? versionView(latest) : null,
-    confirmedVersionId: confirmed?.id ?? null,
+    lesson: {
+      id: lesson.id,
+      title: lesson.title,
+      documentId: lesson.documentId,
+      theme: lesson.theme,
+      params: lessonParams(lesson),
+      scope,
+      scopeWords: stats.words,
+      emptyPages: stats.emptyPages,
+      unreadPages: stats.unreadPages,
+      createdAt: lesson.createdAt,
+      updatedAt: lesson.updatedAt,
+    },
+    draft: latest && latest.confirmedAt === null ? versionView(latest) : null,
+    confirmed: confirmed ? versionView(confirmed) : null,
     slides: confirmed ? await slidesOf(env, confirmed) : [],
     pageLabels: labels,
-    shared: !!share,
+    share,
+    drafting: drafting ? { startedAt: lesson.draftingUntil! - DRAFT_LOCK_MS } : null,
   };
 }
 
@@ -192,41 +235,69 @@ export const lessonRoutes = new Hono<AppBindings>()
     const lesson = await ownedLesson(c.env, u, c.req.param("id"));
     const scope = lessonScope(lesson);
     const [pageTexts, tree] = await Promise.all([scopePages(c.env, lesson.documentId, scope), treeOf(c.env, lesson.documentId)]);
-    const res = await draftOutline(makeAi(c.env, u.orgId), {
-      lessonTitle: lesson.title,
-      params: lessonParams(lesson),
-      sections: sectionsOf(tree, scope),
-      pages: pageTexts,
-      ctx: { orgId: u.orgId, userId: u.id, lessonId: lesson.id },
-    });
-    const v = await insertVersion(c.env, lesson, res.outline);
-    await db(c.env).update(lessons).set({ updatedAt: Date.now() }).where(eq(lessons.id, lesson.id));
-    return c.json({ version: versionView(v), providerId: res.providerId }, 201);
+    if (!pageTexts.length) {
+      throw new HttpError(422, "NO_SOURCE_TEXT", "所选页面都没有可读的文字（可能是扫描图），不能凭空起草。请回到“选章节”，为这些页粘贴文字 · The selected pages have no text; paste it on the chapters step");
+    }
+    const now = Date.now();
+    const locked = await db(c.env)
+      .update(lessons)
+      .set({ draftingUntil: now + DRAFT_LOCK_MS })
+      .where(and(eq(lessons.id, lesson.id), or(isNull(lessons.draftingUntil), lt(lessons.draftingUntil, now))))
+      .returning({ id: lessons.id });
+    if (!locked.length) throw new HttpError(409, "DRAFT_IN_PROGRESS", "这节课的大纲正在生成中，请稍候（通常 30–90 秒）· An outline draft is already running");
+    const run = (async () => {
+      try {
+        const res = await draftOutline(makeAi(c.env, u.orgId), {
+          lessonTitle: lesson.title,
+          params: lessonParams(lesson),
+          sections: sectionsOf(tree, scope),
+          pages: pageTexts,
+          ctx: { orgId: u.orgId, userId: u.id, lessonId: lesson.id },
+        });
+        return { v: await insertVersion(c.env, lesson, res.outline), providerId: res.providerId };
+      } finally {
+        await db(c.env).update(lessons).set({ draftingUntil: null, updatedAt: Date.now() }).where(eq(lessons.id, lesson.id));
+      }
+    })();
+    // A refresh or closed tab must not cancel a draft that is already billed.
+    try {
+      c.executionCtx.waitUntil(run.catch(() => undefined));
+    } catch {}
+    const { v, providerId } = await run;
+    return c.json({ version: versionView(v), providerId }, 201);
   })
   .put("/:id/outline-versions/:vid", async (c) => {
     const lesson = await ownedLesson(c.env, c.get("user"), c.req.param("id"));
     const v = await versionOf(c.env, lesson.id, c.req.param("vid"));
-    const body = await parseJson(c, z.object({ outline: Outline }));
-    if (v.confirmedAt !== null) immutableGuard(new Error("OUTLINE_VERSION_IMMUTABLE"));
+    const body = await parseJson(c, z.object({ outline: Outline, rev: z.number().int().min(0) }));
+    if (v.confirmedAt !== null) await staleVersion(c.env, lesson.id, v.id);
     const outline = await recheckSources(c.env, lesson, v, normalizeEdited(body.outline));
-    await db(c.env)
+    const saved = await db(c.env)
       .update(outlineVersions)
-      .set({ outline: JSON.stringify(outline), specCount: outline.slides.length, totalMinutes: outline.slides.reduce((n, s) => n + s.minutes, 0) })
-      .where(eq(outlineVersions.id, v.id))
-      .catch(immutableGuard);
+      .set({ outline: JSON.stringify(outline), specCount: outline.slides.length, rev: body.rev + 1 })
+      .where(and(eq(outlineVersions.id, v.id), isNull(outlineVersions.confirmedAt), eq(outlineVersions.rev, body.rev)))
+      .returning({ id: outlineVersions.id });
+    if (!saved.length) await staleVersion(c.env, lesson.id, v.id);
     return c.json({ version: versionView(await versionOf(c.env, lesson.id, v.id)) });
   })
   .post("/:id/outline-versions/:vid/confirm", async (c) => {
     const lesson = await ownedLesson(c.env, c.get("user"), c.req.param("id"));
     const v = await versionOf(c.env, lesson.id, c.req.param("vid"));
-    const body = await parseJson(c, z.object({ ackOverBudget: z.boolean().default(false) }));
-    if (v.confirmedAt !== null) return c.json({ version: versionView(v) });
+    const body = await parseJson(c, z.object({ ackOverBudget: z.boolean().default(false), rev: z.number().int().min(0).optional() }));
+    if (v.confirmedAt !== null) return c.json({ version: versionView(v), slides: await slidesOf(c.env, v) });
+    if (body.rev !== undefined && body.rev !== v.rev) await staleVersion(c.env, lesson.id, v.id);
     const params = versionParams(v);
     const timing = outlineTiming(outlineOf(v), params);
     if (timing.needsAck && !body.ackOverBudget) {
       throw new HttpError(409, "OVER_BUDGET_ACK_REQUIRED", `Outline is ${timing.totalMinutes} min for a ${params.minutes}-min lesson (beyond ±15%); confirm again to accept · 大纲时长超出 ±15%，请再次确认`, timing);
     }
-    await db(c.env).update(outlineVersions).set({ confirmedAt: Date.now(), ackOverBudget: timing.needsAck }).where(eq(outlineVersions.id, v.id)).catch(immutableGuard);
+    // Confirms exactly the outline whose timing was just checked: a concurrent save bumps rev and loses this race.
+    const done = await db(c.env)
+      .update(outlineVersions)
+      .set({ confirmedAt: Date.now(), ackOverBudget: timing.needsAck })
+      .where(and(eq(outlineVersions.id, v.id), isNull(outlineVersions.confirmedAt), eq(outlineVersions.rev, v.rev)))
+      .returning({ id: outlineVersions.id });
+    if (!done.length) await staleVersion(c.env, lesson.id, v.id);
     const confirmed = await versionOf(c.env, lesson.id, v.id);
     await carryOverSlides(c.env, confirmed);
     return c.json({ version: versionView(confirmed), slides: await slidesOf(c.env, confirmed) });
@@ -342,13 +413,33 @@ export const lessonRoutes = new Hono<AppBindings>()
     if (!v) throw new HttpError(409, "OUTLINE_NOT_CONFIRMED", "No confirmed outline yet");
     return c.json(deckExport(lesson, v, await slidesOf(c.env, v), { includeNotes: true, pageLabels: await pageLabels(c.env, lesson.documentId) }));
   })
+  /**
+   * Shares a frozen version. With a link already active this keeps the same URL (on the same
+   * version unless `versionId` moves it). Every share is a review: pages with links or
+   * instruction-like text need `ack`.
+   */
   .post("/:id/share", async (c) => {
     const u = c.get("user");
     const lesson = await ownedLesson(c.env, u, c.req.param("id"));
-    await db(c.env).update(shareLinks).set({ revokedAt: Date.now() }).where(and(eq(shareLinks.lessonId, lesson.id), isNull(shareLinks.revokedAt)));
-    const token = randomToken(24);
-    await db(c.env).insert(shareLinks).values({ id: newId("shr"), tokenHash: await sha256Hex(token), lessonId: lesson.id, createdBy: u.id });
-    return c.json({ token, path: `/s/${token}` }, 201);
+    const body = await parseJson(c, z.object({ versionId: z.string().optional(), ack: z.boolean().default(false) }).default({ ack: false }));
+    const link = await activeShare(c.env, lesson.id);
+    const targetId = body.versionId ?? link?.versionId;
+    const target = targetId ? await versionOf(c.env, lesson.id, targetId) : await shareableVersion(c.env, lesson.id);
+    const list = target?.confirmedAt ? await slidesOf(c.env, target) : [];
+    if (!target || !list.length) throw new HttpError(409, "NOTHING_TO_SHARE", "还没有生成好的页面可以分享 · Generate slides before sharing");
+    const flagged = flaggedSlides(list, outlineOf(target));
+    if (flagged.length && !body.ack) {
+      throw new HttpError(409, "SHARE_REVIEW_REQUIRED", `第 ${flagged.map((f) => f.page).join("、")} 页含有网址、邮箱或像指令的文字，学生会看到。请检查后再分享 · Check these pages before sharing`, flagged);
+    }
+    if (link) {
+      await db(c.env).update(shareLinks).set({ versionId: target.id, reviewedAt: Date.now() }).where(eq(shareLinks.id, link.id));
+      return c.json(await shareView(c.env, lesson.id));
+    }
+    const id = newId("shr");
+    await db(c.env)
+      .insert(shareLinks)
+      .values({ id, tokenHash: await sha256Hex(await shareToken(c.env, id)), lessonId: lesson.id, versionId: target.id, reviewedAt: Date.now(), createdBy: u.id });
+    return c.json(await shareView(c.env, lesson.id), 201);
   })
   .delete("/:id/share", async (c) => {
     const lesson = await ownedLesson(c.env, c.get("user"), c.req.param("id"));

@@ -417,10 +417,7 @@ export interface NoisyAi {
 export function createNoisyAi(noise: NoiseConfig, runKey: string, meter: Meter, seed = "kj"): NoisyAi {
   const log: FaultEvent[] = [];
   let requests = 0;
-  const config: AiConfig = {
-    providers: [{ id: "noisy", kind: "custom", name: "noisy-stub", baseUrl: "http://noisy.invalid/v1", apiKey: "none", enabled: true }],
-    routes: { default: { primary: { providerId: "noisy", model: `noisy:${noise.profile}` } } },
-  };
+  const config: AiConfig = { active: { provider: { id: "noisy", kind: "custom", name: "noisy-stub", baseUrl: "http://noisy.invalid/v1", apiKey: "none" }, model: `noisy:${noise.profile}` } };
 
   const fakeFetch = async (_url: string, init: RequestInit): Promise<Response> => {
     requests++;

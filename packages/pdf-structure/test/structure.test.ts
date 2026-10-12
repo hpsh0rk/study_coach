@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TocEntry } from "@kj/schema";
-import { buildChapterTree, countPages, detectTextLayer, normalizeRanges, rangesForChapters, subtreeIds, sourceForRanges, formatPages, pageForLabel } from "../src/index.ts";
+import { buildChapterTree, countPages, distributeText, formatPages, isEmptyPage, normalizeRanges, pageForLabel, rangesForChapters, sourceCut, sourceForRanges, subtreeIds } from "../src/index.ts";
 
 const toc: TocEntry[] = [
   {
@@ -99,9 +99,35 @@ describe("page labels", () => {
   });
 });
 
-describe("detectTextLayer", () => {
-  it("flags scanned PDFs", () => {
-    expect(detectTextLayer(pages, 8)).toBe(true);
-    expect(detectTextLayer([{ no: 1, text: "12" }], 10)).toBe(false);
+describe("empty pages and the source cut", () => {
+  it("treats pages with almost no words as having no text", () => {
+    expect(isEmptyPage(0)).toBe(true);
+    expect(isEmptyPage(3)).toBe(true);
+    expect(isEmptyPage(12)).toBe(false);
+  });
+
+  it("predicts exactly the pages sourceForRanges omits, from lengths alone", () => {
+    const texts = Array.from({ length: 10 }, (_, i) => ({ no: i + 1, text: `page ${i + 1} `.repeat(30 + i * 7).trim() }));
+    for (const max of [500, 1500, 4000, 100_000]) {
+      const real = sourceForRanges(texts, [{ start: 1, end: 10 }], max);
+      expect(sourceCut(texts.map((p) => ({ no: p.no, chars: p.text.length })), max)).toEqual({ included: real.included, omitted: real.omitted });
+    }
+  });
+});
+
+describe("distributeText", () => {
+  it("splits pasted text over pages at sentence ends, losing nothing", () => {
+    const text = Array.from({ length: 12 }, (_, i) => `Sentence number ${i + 1} explains one idea.`).join(" ");
+    const parts = distributeText(text, 3);
+    expect(parts).toHaveLength(3);
+    expect(parts.every((p) => p.endsWith("."))).toBe(true);
+    expect(parts.join(" ")).toBe(text);
+    const lengths = parts.map((p) => p.length);
+    expect(Math.max(...lengths) - Math.min(...lengths)).toBeLessThan(60);
+  });
+
+  it("handles Chinese and more pages than sentences", () => {
+    expect(distributeText("牛顿第一定律。惯性是物体的属性。", 2)).toEqual(["牛顿第一定律。", "惯性是物体的属性。"]);
+    expect(distributeText("短。", 3)).toEqual(["短。", "", ""]);
   });
 });

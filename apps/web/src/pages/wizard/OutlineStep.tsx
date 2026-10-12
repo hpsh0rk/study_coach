@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { labelOf } from "@kj/pdf-structure";
 import { checkOutline, densityOf, outlineTiming, PAGE_TYPES, planBudget, TIME_TOLERANCE } from "@kj/pedagogy";
@@ -7,7 +7,9 @@ import { layoutForPageType, LAYOUTS, PAGE_TYPE_VISUALS } from "@kj/templates";
 import { ApiError } from "../../api.ts";
 import { UnverifiedBadge } from "../../components/Unverified.tsx";
 import { lessonApi, type LessonView, type VersionView } from "../../lessonApi.ts";
+import { DraftingProgress } from "./drafting.tsx";
 import { Stepper, StepIntro, type StepKey } from "./Stepper.tsx";
+import { UNSAVED_MESSAGE, useUnsavedGuard } from "./unsaved.ts";
 
 const VISUAL_LABEL: Record<VisualKind, string> = { none: "无 None", chart: "图表 Chart", function: "函数图 Plot", flow: "流程 Flow", formula: "公式 Formula", sim: "模拟实验 Sim", table: "表格 Table" };
 /** On layouts that always show a visual, "none" renders the 图示待补 placeholder. */
@@ -147,21 +149,32 @@ function Row({
 
 export function OutlineStep({ view, reached, onChanged }: { view: LessonView; reached: StepKey; onChanged: () => Promise<void> }) {
   const nav = useNavigate();
-  const [version, setVersion] = useState<VersionView | null>(view.version);
-  const [outline, setOutline] = useState<Outline | null>(view.version?.outline ?? null);
+  const current = view.draft ?? view.confirmed;
+  const [version, setVersion] = useState<VersionView | null>(current);
+  const [outline, setOutline] = useState<Outline | null>(current?.outline ?? null);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const [conflict, setConflict] = useState(false);
   const [needAck, setNeedAck] = useState<string | null>(null);
+  const [draftingSince, setDraftingSince] = useState<number | null>(view.drafting?.startedAt ?? null);
   const params = version?.params ?? view.lesson.params;
   const readOnly = !!version?.confirmedAt;
   const labels = useMemo(() => new Map(Object.entries(view.pageLabels).map(([k, v]) => [Number(k), v])), [view.pageLabels]);
+  useUnsavedGuard(dirty);
 
   useEffect(() => {
-    setVersion(view.version);
-    setOutline(view.version?.outline ?? null);
+    setVersion(current);
+    setOutline(current?.outline ?? null);
     setDirty(false);
-  }, [view.version]);
+    setConflict(false);
+  }, [current]);
+  useEffect(() => setDraftingSince(view.drafting?.startedAt ?? null), [view.drafting]);
+  const drafted = useCallback(async () => {
+    setDraftingSince(null);
+    await onChanged();
+  }, [onChanged]);
+  const leave = (to: string) => (!dirty || window.confirm(UNSAVED_MESSAGE)) && nav(to);
 
   const warnings = useMemo(() => (outline ? checkOutline(outline, params) : []), [outline, params]);
   const flagged = useMemo(() => new Map(view.slides.map((s) => [s.specId, s.unverified?.length ?? 0])), [view.slides]);
@@ -180,7 +193,11 @@ export function OutlineStep({ view, reached, onChanged }: { view: LessonView; re
       return await fn();
     } catch (e) {
       if (e instanceof ApiError && e.code === "OVER_BUDGET_ACK_REQUIRED") setNeedAck(e.message);
-      else setError(e instanceof ApiError ? e.message : (e as Error).message);
+      else if (e instanceof ApiError && e.code === "DRAFT_IN_PROGRESS") setDraftingSince((s) => s ?? Date.now());
+      else {
+        setConflict(e instanceof ApiError && (e.code === "OUTLINE_CHANGED" || e.code === "OUTLINE_VERSION_IMMUTABLE"));
+        setError(e instanceof ApiError ? e.message : (e as Error).message);
+      }
       return undefined;
     } finally {
       setBusy("");
@@ -190,7 +207,7 @@ export function OutlineStep({ view, reached, onChanged }: { view: LessonView; re
   async function save(): Promise<VersionView | null> {
     if (!version || !outline) return null;
     const cleaned = { ...outline, slides: outline.slides.map((s) => ({ ...s, title: s.title.trim() || "Untitled", keyPoints: s.keyPoints.map((k) => k.trim()).filter(Boolean) })) };
-    const r = await lessonApi.save(view.lesson.id, version.id, cleaned);
+    const r = await lessonApi.save(view.lesson.id, version.id, cleaned, version.rev);
     setVersion(r.version);
     setOutline(r.version.outline);
     setDirty(false);
@@ -201,7 +218,7 @@ export function OutlineStep({ view, reached, onChanged }: { view: LessonView; re
     const ok = await run("confirm", async () => {
       const v = dirty ? await save() : version;
       if (!v) return false;
-      await lessonApi.confirm(view.lesson.id, v.id, ack);
+      await lessonApi.confirm(view.lesson.id, v.id, v.rev, ack);
       return true;
     });
     if (ok) {
@@ -210,17 +227,44 @@ export function OutlineStep({ view, reached, onChanged }: { view: LessonView; re
     }
   }
 
+  async function reload() {
+    setDirty(false);
+    setError("");
+    setConflict(false);
+    await onChanged();
+  }
+
   if (!version || !outline) {
     return (
       <div className="wizard">
         <Stepper current="outline" reached={reached} lessonId={view.lesson.id} />
         <StepIntro step="outline" />
-        <div className="card center">
-          <p>还没有大纲 · No outline yet</p>
-          <button className="btn primary" disabled={!!busy} onClick={() => run("draft", async () => (await lessonApi.draft(view.lesson.id), await onChanged()))}>
-            {busy ? "正在生成… Drafting" : "生成大纲 Draft outline"}
-          </button>
-        </div>
+        {draftingSince !== null ? (
+          <DraftingProgress lessonId={view.lesson.id} startedAt={draftingSince} onDone={drafted} />
+        ) : (
+          <div className="card center">
+            <p>还没有大纲 · No outline yet</p>
+            <button
+              className="btn primary"
+              disabled={!!busy}
+              onClick={() =>
+                run("draft", async () => {
+                  setDraftingSince(Date.now());
+                  try {
+                    await lessonApi.draft(view.lesson.id);
+                    await drafted();
+                  } catch (e) {
+                    if (!(e instanceof ApiError && e.code === "DRAFT_IN_PROGRESS")) setDraftingSince(null);
+                    throw e;
+                  }
+                })
+              }
+            >
+              生成大纲 Draft outline
+            </button>
+          </div>
+        )}
+        {error && <div className="alert error">{error}</div>}
       </div>
     );
   }
@@ -237,6 +281,14 @@ export function OutlineStep({ view, reached, onChanged }: { view: LessonView; re
             <p className="muted small">
               大纲第 {version.version} 版 · {readOnly ? "已确认（不可修改）· confirmed" : "草稿，可直接修改 · draft, edit freely"}
             </p>
+            {!readOnly && view.confirmed && (
+              <p className="muted small" data-testid="draft-note">
+                已确认的第 {view.confirmed.version} 版和它的幻灯片照常可以放映、分享；这份草稿确认后才会替换它。· The confirmed version stays available until this draft is confirmed.{" "}
+                <button className="link" onClick={() => leave(`/lessons/${view.lesson.id}/slides`)}>
+                  去第 {view.confirmed.version} 版的幻灯片 →
+                </button>
+              </p>
+            )}
           </div>
           <div className="objectives">
             {outline.objectives.map((o, i) => (
@@ -293,7 +345,18 @@ export function OutlineStep({ view, reached, onChanged }: { view: LessonView; re
           />
         ))}
       </ol>
-      {error && <div className="alert error">{error}</div>}
+      {error && (
+        <div className="alert error" role="alert" data-testid="outline-error">
+          {error}
+          {conflict && (
+            <div>
+              <button className="btn small" onClick={reload} data-testid="outline-reload">
+                放弃我的修改，载入最新版 · Discard my edits and reload
+              </button>
+            </div>
+          )}
+        </div>
+      )}
       {needAck && (
         <div className="alert warn" role="alert" data-testid="ack-box">
           <p>{needAck}</p>
@@ -303,7 +366,7 @@ export function OutlineStep({ view, reached, onChanged }: { view: LessonView; re
         </div>
       )}
       <div className="wizard-actions sticky">
-        <button className="btn ghost" onClick={() => nav(`/lessons/${view.lesson.id}/settings`)}>
+        <button className="btn ghost" onClick={() => leave(`/lessons/${view.lesson.id}/settings`)}>
           ← 返回 Back
         </button>
         {readOnly ? (

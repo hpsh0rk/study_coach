@@ -1,8 +1,10 @@
 import { countWords, type ChapterNode, type PageRange, type PageText, type TocEntry } from "@kj/schema";
 
 export const MAX_TREE_DEPTH = 3;
-/** Average characters per page below which a PDF is treated as scanned (no text layer). */
-export const MIN_CHARS_PER_PAGE = 40;
+/** Pages with fewer words carry no usable text (scanned images, figure-only pages, blank pages). */
+export const MIN_PAGE_WORDS = 5;
+
+export const isEmptyPage = (words: number) => words < MIN_PAGE_WORDS;
 
 interface FlatEntry {
   title: string;
@@ -95,29 +97,75 @@ export interface SourceText {
   omitted: number[];
 }
 
+const sourceLine = (p: Pick<PageText, "no" | "text">) => `[p.${p.no}] ${p.text.replace(/\s+/g, " ").trim()}`;
+
+/**
+ * Which pages fit a character budget, from each page's text length alone (no text needed, so the
+ * server can predict the cut from `LENGTH(text)`). Pages are kept whole, in order, until the budget
+ * runs out; everything after is omitted. A first page longer than the budget is still included (cut).
+ */
+export function sourceCut(pages: { no: number; chars: number }[], maxChars: number): { included: number[]; omitted: number[] } {
+  const included: number[] = [];
+  const omitted: number[] = [];
+  let used = 0;
+  for (const p of [...pages].sort((a, b) => a.no - b.no)) {
+    const line = `[p.${p.no}] `.length + p.chars;
+    if (omitted.length || (used + line > maxChars && included.length)) {
+      omitted.push(p.no);
+      continue;
+    }
+    included.push(p.no);
+    used += line + 1;
+  }
+  return { included, omitted };
+}
+
 /**
  * Source text for the model. Pages are kept whole, in order, until the budget runs out; the
  * remaining pages are reported as omitted instead of trimming every page (examples and
  * summaries sit at the end of a page).
  */
-export function sourceForRanges(pages: PageText[], ranges: PageRange[], maxChars = 24_000): SourceText {
+export function sourceForRanges(pages: PageText[], ranges: PageRange[], maxChars: number): SourceText {
   const wanted = new Set(pagesInRanges(ranges));
-  const selected = pages.filter((p) => wanted.has(p.no)).sort((a, b) => a.no - b.no);
-  const parts: string[] = [];
-  const included: number[] = [];
-  const omitted: number[] = [];
-  let used = 0;
-  for (const p of selected) {
-    const line = `[p.${p.no}] ${p.text.replace(/\s+/g, " ").trim()}`;
-    if (omitted.length || (used + line.length > maxChars && included.length)) {
-      omitted.push(p.no);
-      continue;
+  const lines = new Map(pages.filter((p) => wanted.has(p.no)).map((p) => [p.no, sourceLine(p)]));
+  const cut = sourceCut([...lines].map(([no, line]) => ({ no, chars: line.length - `[p.${no}] `.length })), maxChars);
+  return { text: cut.included.map((no) => lines.get(no)!.slice(0, maxChars)).join("\n"), ...cut };
+}
+
+/** Normalizes pasted or extracted page text the way the browser parser does (single spaces, single newlines). */
+export function normalizePageText(text: string): string {
+  return text.replace(/[ \t\u00a0]+/g, " ").replace(/\s*\n\s*/g, "\n").trim();
+}
+
+/**
+ * Splits text a teacher pasted for several pages into `n` consecutive chunks of similar length,
+ * cutting after a sentence end or line break where possible, so each page gets its share for citations.
+ */
+export function distributeText(text: string, n: number): string[] {
+  const t = normalizePageText(text);
+  if (n <= 1) return [t];
+  const out: string[] = [];
+  let rest = t;
+  const nearest = (s: string, re: RegExp, target: number) => {
+    let best = -1;
+    for (const m of s.matchAll(re)) {
+      const at = m.index + m[0].length;
+      if (at > 0 && at < s.length && (best < 0 || Math.abs(at - target) < Math.abs(best - target))) best = at;
     }
-    parts.push(line.slice(0, maxChars));
-    included.push(p.no);
-    used += line.length + 1;
+    return best;
+  };
+  for (let left = n; left > 1 && rest; left--) {
+    const target = Math.ceil(rest.length / left);
+    let at = nearest(rest, /[。！？.!?]+|\n/g, target);
+    if (at < 0) at = nearest(rest, /\s+/g, target);
+    if (at < 0 && target < 200) break;
+    if (at < 0) at = target;
+    out.push(rest.slice(0, at).trim());
+    rest = rest.slice(at).trim();
   }
-  return { text: parts.join("\n"), included, omitted };
+  out.push(rest);
+  while (out.length < n) out.push("");
+  return out;
 }
 
 /** Printed label of a page (falls back to the page index). */
@@ -145,12 +193,6 @@ export function pageForLabel(labels: Map<number, string>, token: string, pageCou
   for (const [no, label] of labels) if (label.toLowerCase() === t.toLowerCase()) return no;
   const n = Number(t);
   return Number.isInteger(n) && n >= 1 && n <= pageCount ? n : null;
-}
-
-export function detectTextLayer(pages: PageText[], pageCount: number): boolean {
-  if (pageCount === 0) return false;
-  const chars = pages.reduce((n, p) => n + p.text.replace(/\s+/g, "").length, 0);
-  return chars / pageCount >= MIN_CHARS_PER_PAGE;
 }
 
 /** Children lookup for rendering the tree. */

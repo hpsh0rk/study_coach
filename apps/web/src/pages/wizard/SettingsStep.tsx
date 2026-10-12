@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { useNavigate } from "react-router";
 import { countPages } from "@kj/pdf-structure";
 import { LANGUAGE_LABEL, LESSON_TYPE_LABEL, LEVEL_LABEL, planBudget, scopeAdvice, type ScopeAdvice } from "@kj/pedagogy";
@@ -6,15 +6,23 @@ import type { LessonParams, ThemeId } from "@kj/schema";
 import { THEMES } from "@kj/templates/render";
 import { ApiError } from "../../api.ts";
 import { lessonApi, type LessonView } from "../../lessonApi.ts";
+import { fmtPages } from "./ChaptersStep.tsx";
+import { DraftingProgress } from "./drafting.tsx";
 import { Stepper, StepIntro, type StepKey } from "./Stepper.tsx";
 
 const MINUTE_CHOICES = [30, 35, 40, 45, 60, 80, 90];
 
-/** Selection size vs lesson length (words-based estimate); drives the hint before any model call. */
-export function pacing(minutes: number, words: number): ScopeAdvice & { level: "dense" | "ok" | "light"; text: string } {
-  const a = scopeAdvice(words, minutes);
+/**
+ * Selection size vs lesson length (words-based estimate); drives the hint before any model call.
+ * `unread`: pages the outline cannot read (formatted), which rules out "good fit".
+ */
+export function pacing(minutes: number, words: number, unreadPages = 0, unread = ""): ScopeAdvice & { level: "dense" | "ok" | "light"; text: string } {
+  const a = scopeAdvice(words, minutes, unreadPages);
+  if (a.unreadPages > 0) {
+    return { ...a, level: "dense", text: `第 ${unread} 页读不进大纲（所选内容超过一份大纲能读的量），这些页不会被覆盖。建议拆成 ${a.lessons} 课时 · Some pages will not be read: split the lesson` };
+  }
   if (a.tooMuch) return { ...a, level: "dense", text: `内容偏多：约需 ${a.lessons} 节课，建议拆成 ${a.lessons} 课时或少选几节 · Too much for one lesson: split it` };
-  if (a.estimatedMinutes < minutes * 0.5) return { ...a, level: "light", text: "内容偏少：课时会有大量练习时间，可以多选几页 · Light: you could add pages" };
+  if (a.estimatedMinutes < minutes * 0.5) return { ...a, level: "light", text: "内容偏少：多出来的时间会安排成练习和讨论 · Light: the extra time goes to practice" };
   return { ...a, level: "ok", text: "内容量合适 · Good fit" };
 }
 
@@ -23,28 +31,45 @@ export function SettingsStep({ view, reached }: { view: LessonView; reached: Ste
   const [params, setParams] = useState<LessonParams>(view.lesson.params);
   const [theme, setTheme] = useState<ThemeId>(view.lesson.theme);
   const [title, setTitle] = useState(view.lesson.title);
-  const [busy, setBusy] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [draftingSince, setDraftingSince] = useState<number | null>(view.drafting?.startedAt ?? null);
   const [error, setError] = useState("");
   const pages = countPages(view.lesson.scope.ranges);
-  const p = pacing(params.minutes, view.lesson.scopeWords);
-  const v = view.version;
+  const labels = new Map(Object.entries(view.pageLabels).map(([k, v]) => [Number(k), v]));
+  const { emptyPages, unreadPages, scopeWords } = view.lesson;
+  const noText = scopeWords === 0 && emptyPages.length > 0;
+  const p = pacing(params.minutes, scopeWords, unreadPages.length, fmtPages(unreadPages, labels));
+  const v = view.draft ?? view.confirmed;
   const stale = !!v && (JSON.stringify(v.params) !== JSON.stringify(params) || JSON.stringify(v.scope.ranges) !== JSON.stringify(view.lesson.scope.ranges));
   const budget = planBudget(params);
   const set = <K extends keyof LessonParams>(k: K, v: LessonParams[K]) => setParams({ ...params, [k]: v });
 
+  const drafted = useCallback(
+    (fresh: LessonView) => {
+      setDraftingSince(null);
+      if (fresh.draft) nav(`/lessons/${view.lesson.id}/outline`);
+      else setError("大纲没有生成成功，请再试一次 · Drafting did not finish; try again");
+    },
+    [nav, view.lesson.id],
+  );
+
   async function go(redraft: boolean) {
     setError("");
+    setBusy(true);
     try {
-      setBusy("save");
       await lessonApi.patch(view.lesson.id, { params, theme, title });
-      if (redraft || !view.version) {
-        setBusy("draft");
+      if (redraft || !v) {
+        setDraftingSince(Date.now());
         await lessonApi.draft(view.lesson.id);
       }
       nav(`/lessons/${view.lesson.id}/outline`);
     } catch (e) {
+      // Another tab or an earlier click is already drafting: keep showing progress until it ends.
+      if (e instanceof ApiError && e.code === "DRAFT_IN_PROGRESS") return;
+      setDraftingSince(null);
       setError(e instanceof ApiError ? e.message : (e as Error).message);
-      setBusy("");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -136,23 +161,35 @@ export function SettingsStep({ view, reached }: { view: LessonView; reached: Ste
           </p>
         </aside>
       </div>
+      {noText ? (
+        <div className="alert error" data-testid="no-text">
+          所选的页都没有可读的文字（可能是扫描图），不能凭空起草大纲。请回到“选章节”，为这些页粘贴文字。· The selected pages have no text: paste it on the chapters step.
+        </div>
+      ) : (
+        emptyPages.length > 0 && (
+          <div className="alert warn" data-testid="empty-pages">
+            第 {fmtPages(emptyPages, labels)} 页没有文字（可能是扫描图），起草时会跳过；可以回到“选章节”粘贴这些页的文字。· Pages without text are skipped.
+          </div>
+        )
+      )}
       {stale && (
         <div className="alert warn" data-testid="stale-outline">
           课时设置或教材范围改了：现有大纲仍按创建时的设置，点“重新生成大纲”才会按新设置来 · The current outline keeps the settings it was drafted with; re-draft to apply changes.
         </div>
       )}
+      {draftingSince !== null && <DraftingProgress lessonId={view.lesson.id} startedAt={draftingSince} onDone={drafted} />}
       {error && <div className="alert error">{error}</div>}
       <div className="wizard-actions">
         <button className="btn ghost" onClick={() => nav(`/lessons/${view.lesson.id}/chapters`)}>
           ← 返回 Back
         </button>
-        {view.version && (
-          <button className="btn ghost" disabled={!!busy} onClick={() => go(true)}>
+        {v && (
+          <button className="btn ghost" disabled={busy || draftingSince !== null || noText} onClick={() => go(true)}>
             重新生成大纲 Re-draft outline
           </button>
         )}
-        <button className="btn primary" disabled={!!busy} onClick={() => go(false)}>
-          {busy === "draft" ? "正在生成大纲… Drafting" : view.version ? "下一步：大纲 Next →" : "生成大纲 Draft outline →"}
+        <button className="btn primary" disabled={busy || draftingSince !== null || (noText && !v)} onClick={() => go(false)}>
+          {draftingSince !== null ? "正在生成大纲… Drafting" : v ? "下一步：大纲 Next →" : "生成大纲 Draft outline →"}
         </button>
       </div>
     </div>

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
-import { countPages, labelOf, normalizeRanges, pageForLabel, pagesInRanges, rangesForChapters, subtreeIds } from "@kj/pdf-structure";
-import { scopeAdvice } from "@kj/pedagogy";
+import { countPages, isEmptyPage, labelOf, normalizeRanges, pageForLabel, pagesInRanges, rangesForChapters, sourceCut, subtreeIds } from "@kj/pdf-structure";
+import { OUTLINE_SOURCE_CHARS, scopeAdvice } from "@kj/pedagogy";
 import type { ChapterNode, PageRange } from "@kj/schema";
 import { ApiError } from "../../api.ts";
 import { documentApi, lessonApi, type DocumentRow, type LessonView } from "../../lessonApi.ts";
@@ -28,10 +28,10 @@ export function parseRanges(text: string, pageCount: number, labels: Map<number,
 const fmtRanges = (r: PageRange[], labels: Map<number, string>) =>
   r.map((x) => (x.start === x.end ? labelOf(labels, x.start) : `${labelOf(labels, x.start)}–${labelOf(labels, x.end)}`)).join(", ");
 
-/** Estimated teaching time of the selection against the lesson length, so teachers see the volume while ticking chapters. */
-function VolumeMeter({ estimated, lessonMinutes }: { estimated: number; lessonMinutes: number }) {
+/** Estimated teaching time of the selection against the lesson length, so teachers see the volume while ticking chapters. Never "fits" while pages are left unread. */
+function VolumeMeter({ estimated, lessonMinutes, dropped }: { estimated: number; lessonMinutes: number; dropped: boolean }) {
   const scale = lessonMinutes * 1.6;
-  const state = estimated > lessonMinutes * 1.2 ? "over" : estimated < lessonMinutes * 0.6 ? "under" : "ok";
+  const state = dropped || estimated > lessonMinutes * 1.2 ? "over" : estimated < lessonMinutes * 0.6 ? "under" : "ok";
   const text = {
     over: "内容偏多 · more than one lesson",
     under: "内容偏少 · 课上会多出练习时间 · leaves time for practice",
@@ -50,12 +50,63 @@ function VolumeMeter({ estimated, lessonMinutes }: { estimated: number; lessonMi
   );
 }
 
+export const runsOf = (pages: number[]): PageRange[] => normalizeRanges(pages.map((p) => ({ start: p, end: p })), Math.max(1, ...pages));
+export const fmtPages = (pages: number[], labels: Map<number, string>) => fmtRanges(runsOf(pages), labels);
+
+/** What the outline will and will not read from the selected pages. */
+export function selectionStats(selected: number[], pageWords: number[], pageChars: number[]) {
+  const empty = selected.filter((p) => isEmptyPage(pageWords[p - 1] ?? 0));
+  const withText = selected.filter((p) => !isEmptyPage(pageWords[p - 1] ?? 0));
+  return {
+    words: withText.reduce((n, p) => n + (pageWords[p - 1] ?? 0), 0),
+    empty,
+    unread: sourceCut(
+      withText.map((no) => ({ no, chars: pageChars[no - 1] ?? 0 })),
+      OUTLINE_SOURCE_CHARS,
+    ).omitted,
+  };
+}
+
+/** Teachers paste the text of scanned pages; it is spread over the empty pages of the range. */
+function PastePanel({ documentId, run, labels, onDone }: { documentId: string; run: PageRange; labels: Map<number, string>; onDone: (pages: { no: number; words: number; chars: number }[]) => void }) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const span = run.start === run.end ? `p. ${labelOf(labels, run.start)}` : `p. ${labelOf(labels, run.start)}–${labelOf(labels, run.end)}`;
+  async function save() {
+    setBusy(true);
+    setError("");
+    try {
+      onDone((await documentApi.paste(documentId, run.start, run.end, text)).pages);
+      setText("");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="paste-panel" data-testid="paste-panel">
+      <label>
+        粘贴 {span} 的文字（从电子版、OCR 或手打都行）· Paste the text of {span}
+        <textarea rows={5} value={text} onChange={(e) => setText(e.target.value)} data-testid="paste-text" />
+      </label>
+      {error && <div className="alert error">{error}</div>}
+      <button className="btn" disabled={busy || text.trim().length < 20} onClick={save} data-testid="paste-save">
+        {busy ? "保存中… Saving" : "保存文字 Save text"}
+      </button>
+    </div>
+  );
+}
+
 export function ChaptersStep({ documentId, lesson, reached }: { documentId: string; lesson?: LessonView; reached: StepKey }) {
   const nav = useNavigate();
   const [doc, setDoc] = useState<DocumentRow | null>(null);
   const [tree, setTree] = useState<ChapterNode[]>([]);
   const [labels, setLabels] = useState<Map<number, string>>(new Map());
   const [pageWords, setPageWords] = useState<number[]>([]);
+  const [pageChars, setPageChars] = useState<number[]>([]);
+  const [pasting, setPasting] = useState<PageRange | null>(null);
   const [preview, setPreview] = useState<{ start: string; end: string } | null>(null);
   const [picked, setPicked] = useState<Set<string>>(new Set(lesson?.lesson.scope.chapterIds ?? []));
   const [rangeText, setRangeText] = useState("");
@@ -72,6 +123,7 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
         setTree(r.chapters);
         setLabels(map);
         setPageWords(r.pageWords);
+        setPageChars(r.pageChars);
         setCollapsed(new Set(r.chapters.filter((c) => c.level >= 2 && r.chapters.some((k) => k.parentId === c.id)).map((c) => c.id)));
         if (lesson && !lesson.lesson.scope.chapterIds.length) setRangeText(fmtRanges(lesson.lesson.scope.ranges, map));
       })
@@ -83,10 +135,22 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
   const ranges = useMemo(() => normalizeRanges([...rangesForChapters(tree, [...picked], pageCount || 1), ...(extra ?? [])], pageCount || 1), [tree, picked, extra, pageCount]);
   const pages = countPages(ranges);
   const lessonMinutes = lesson?.lesson.params.minutes ?? 40;
-  const advice = scopeAdvice(
-    pagesInRanges(ranges).reduce((n, p) => n + (pageWords[p - 1] ?? 0), 0),
-    lessonMinutes,
-  );
+  const stats = useMemo(() => selectionStats(pagesInRanges(ranges), pageWords, pageChars), [ranges, pageWords, pageChars]);
+  const advice = scopeAdvice(stats.words, lessonMinutes, stats.unread.length);
+  const emptyRuns = runsOf(stats.empty);
+  const emptyIn = (c: ChapterNode) => pagesInRanges([{ start: c.pageStart, end: c.pageEnd }]).filter((p) => isEmptyPage(pageWords[p - 1] ?? 0)).length;
+
+  function pasted(rows: { no: number; words: number; chars: number }[]) {
+    const words = [...pageWords];
+    const chars = [...pageChars];
+    for (const r of rows) {
+      words[r.no - 1] = r.words;
+      chars[r.no - 1] = r.chars;
+    }
+    setPageWords(words);
+    setPageChars(chars);
+    setPasting(null);
+  }
 
   // First line of the first and last typed page, so teachers can check the numbers match their book.
   useEffect(() => {
@@ -165,12 +229,41 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
               还没选内容：勾选下面的章节，或在下方输入页码。· Nothing selected yet: tick chapters below or type page ranges.
             </div>
           ) : (
-            <VolumeMeter estimated={advice.estimatedMinutes} lessonMinutes={lessonMinutes} />
+            <VolumeMeter estimated={advice.estimatedMinutes} lessonMinutes={lessonMinutes} dropped={stats.unread.length > 0} />
+          )}
+          {pages > 0 && stats.empty.length > 0 && (
+            <div className="alert warn" data-testid="empty-pages">
+              {stats.empty.length === pages ? (
+                <>所选的页都没有可读的文字（可能是扫描图），没法据此起草大纲。请把这些页的文字粘贴进来，或换别的章节。</>
+              ) : (
+                <>
+                  第 {fmtRanges(emptyRuns, labels)} 页没有可读的文字（可能是扫描图），起草大纲时会跳过这些页。如果这些页要讲，请把文字粘贴进来。
+                </>
+              )}{" "}
+              · Pages without text (scans) are skipped; paste their text to include them.
+              <div className="row wrap">
+                {emptyRuns.map((r) => (
+                  <button key={r.start} className="btn small" onClick={() => setPasting(r)} data-testid="paste-open">
+                    为 p. {r.start === r.end ? labelOf(labels, r.start) : `${labelOf(labels, r.start)}–${labelOf(labels, r.end)}`} 粘贴文字
+                  </button>
+                ))}
+              </div>
+              {pasting && <PastePanel key={pasting.start} documentId={documentId} run={pasting} labels={labels} onDone={pasted} />}
+            </div>
           )}
           {pages > 0 && advice.tooMuch && (
             <div className="alert warn" data-testid="split-hint">
-              内容偏多：按 {lessonMinutes} 分钟一节，大约需要 {advice.lessons} 节课。建议拆成 {advice.lessons} 课时，或只选前面几节；放不下的内容会列在大纲顶部的“未覆盖”里。· About {advice.lessons} lessons of {lessonMinutes} min:
-              consider splitting the selection.
+              {stats.unread.length > 0 ? (
+                <>
+                  内容超出一份大纲能读的量：第 {fmtRanges(runsOf(stats.unread), labels)} 页读不进去，大纲不会覆盖这些页。建议拆成 {advice.lessons} 课时，或少选几节。· Pages beyond what one outline can read are left out: split the
+                  selection.
+                </>
+              ) : (
+                <>
+                  内容偏多：按 {lessonMinutes} 分钟一节，大约需要 {advice.lessons} 节课。建议拆成 {advice.lessons} 课时，或只选前面几节；放不下的内容会列在大纲顶部的“未覆盖”里。· About {advice.lessons} lessons of {lessonMinutes} min:
+                  consider splitting the selection.
+                </>
+              )}
             </div>
           )}
           {tree.length > 0 && (
@@ -201,6 +294,11 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
                       <span className="muted small">
                         p.{labelOf(labels, c.pageStart)}–{labelOf(labels, c.pageEnd)} · {c.pageEnd - c.pageStart + 1} 页
                       </span>
+                      {pageWords.length > 0 && emptyIn(c) > 0 && (
+                        <span className="badge warn" data-testid="chapter-empty" title="这些页没有文字层，可能是扫描图 · No text layer">
+                          {emptyIn(c)} 页无文字
+                        </span>
+                      )}
                     </label>
                   </li>
                 );

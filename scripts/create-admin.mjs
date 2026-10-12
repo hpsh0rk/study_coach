@@ -23,7 +23,7 @@ const password = values.password ?? `${randomBytes(9).toString("base64url")}7a`;
 if (password.length < 8 || !/[A-Za-z]/.test(password) || !/\d/.test(password)) throw new Error("password needs 8+ chars with letters and digits");
 
 // Must match apps/app/src/auth/password.ts.
-const ITERATIONS = 100_000;
+const ITERATIONS = 15_000;
 const b64 = (u8) => Buffer.from(u8).toString("base64").replace(/=+$/, "");
 const salt = randomBytes(16);
 const hash = pbkdf2Sync(password, salt, ITERATIONS, 32, "sha256");

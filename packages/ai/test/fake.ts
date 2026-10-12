@@ -7,10 +7,7 @@ export function fakeAi(replies: unknown[]) {
   let i = 0;
   const ai = createAiLayer({
     config: {
-      load: async () => ({
-        providers: [{ id: "p", kind: "custom", name: "Fake", baseUrl: "http://fake.test/v1", apiKey: "k", enabled: true }],
-        routes: { default: { primary: { providerId: "p", model: "fake-1" } } },
-      }),
+      load: async () => ({ active: { provider: { id: "p", kind: "custom", name: "Fake", baseUrl: "http://fake.test/v1", apiKey: "k" }, model: "fake-1" } }),
     },
     meter: { record: async (r) => void calls.push(r) },
     allowStubFallback: false,

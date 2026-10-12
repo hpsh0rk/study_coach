@@ -160,6 +160,38 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
     await shotOf(page.locator(".preview-pane .slide-preview"), "08-table-slide");
   });
 
+  // Share: one stable link, students get no speaker notes; unsharing kills the link.
+  const lessonUrl = page.url();
+  await page.getByTestId("share").click();
+  const shareUrl = (await page.getByTestId("share-url").textContent())!;
+  expect(shareUrl).toMatch(/\/s\/[\w-]+$/);
+  await shot(page, "06b-shared");
+  const student = await page.context().newPage();
+  await student.goto(shareUrl);
+  await expect(student.locator(".kj-player")).toBeVisible();
+  await expect(student.locator(".kj-notes")).toBeHidden();
+  const pub = await (await student.request.get(shareUrl.replace("/s/", "/api/share/"))).json();
+  expect(pub.slides).toHaveLength(count);
+  expect(pub.slides.every((s: { notes: string }) => s.notes === "")).toBe(true);
+
+  // A new, unconfirmed outline draft does not hide the confirmed deck or its link.
+  await page.goto(lessonUrl.replace(/\/slides$/, "/outline"));
+  await page.getByRole("button", { name: /修改大纲（新版本）/ }).click();
+  await expect(page.getByTestId("draft-note")).toBeVisible();
+  await page.getByTestId("draft-note").getByRole("button").click();
+  await page.waitForURL(/\/slides$/);
+  await expect(page.getByTestId("draft-banner")).toBeVisible();
+  await expect(page.getByTestId("gen-progress")).toContainText(`已生成 ${count} / ${count}`);
+  await expect(page.getByTestId("present")).toBeEnabled();
+  await expect(page.getByTestId("share-url")).toHaveText(shareUrl);
+
+  page.once("dialog", (d) => void d.accept());
+  await page.getByTestId("unshare").click();
+  await expect(page.getByTestId("share")).toBeVisible();
+  await student.reload();
+  await expect(student.getByText("链接无效或已撤销")).toBeVisible();
+  await student.close();
+
   const sim = await page.request.get("/sims/wave-string.html");
   expect(sim.status()).toBe(200);
   expect(await sim.text()).toContain("<canvas");
@@ -212,7 +244,7 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
 
   await test.step("offline single-file export runs with the network blocked", async () => {
     await page.goto(`/lessons/${lessonId}/slides`);
-    await page.getByText("导出 / 分享 Export").click();
+    await page.getByText("导出 Export").click();
     const [download] = await Promise.all([page.waitForEvent("download"), page.getByTestId("export-offline").click()]);
     const file = path.join(os.tmpdir(), `kj-offline-${Date.now()}.html`);
     await download.saveAs(file);
@@ -250,4 +282,61 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
     expect(errors).toEqual([]);
     await ctx.close();
   });
+});
+
+test("Chinese CID-font PDF: text is extracted, scanned pages are flagged and can be pasted", async ({ page }) => {
+  await login(page);
+  await page.getByTestId("new-lesson").click();
+  await page.getByTestId("pdf-input").setInputFiles(path.resolve("fixtures/pdfs/newton-zh-cid.pdf"));
+  await page.waitForURL(/\/new\/[^/]+$/);
+  const docId = page.url().split("/").pop()!;
+  expect((await (await page.request.get(`/api/documents/${docId}/pages/2`)).json()).text).toContain("牛顿第一定律");
+
+  const scanned = page.getByRole("treeitem").filter({ hasText: "4.4 习题" });
+  await expect(scanned.getByTestId("chapter-empty")).toHaveText("2 页无文字");
+  await expect(page.getByRole("treeitem").filter({ hasText: "4.2 牛顿第一定律" }).getByTestId("chapter-empty")).toHaveCount(0);
+  await scanned.locator("input[type=checkbox]").check();
+  await expect(page.getByTestId("empty-pages")).toContainText("都没有可读的文字");
+  await page.getByTestId("paste-open").click();
+  await page
+    .getByTestId("paste-text")
+    .fill("习题一：质量为 3 kg 的物体受到 12 N 的合力，求加速度。习题二：汽车刹车时乘客向前倾，用惯性解释这一现象。习题三：同一个力作用在质量不同的两个物体上，哪个加速度更大？为什么？");
+  await shot(page, "08-paste-scanned");
+  await page.getByTestId("paste-save").click();
+  await expect(page.getByTestId("empty-pages")).toHaveCount(0);
+  await expect(scanned.getByTestId("chapter-empty")).toHaveCount(0);
+  await page.getByRole("button", { name: /下一步：课时设置/ }).click();
+
+  await page.waitForURL(/\/settings$/);
+  await expect(page.getByTestId("no-text")).toHaveCount(0);
+  await page.getByRole("button", { name: /生成大纲 Draft outline/ }).click();
+  await page.waitForURL(/\/outline$/);
+  await expect(page.getByTestId("outline-row").first()).toBeVisible();
+
+  // Two tabs on the same draft: the second save is refused instead of overwriting the first.
+  const other = await page.context().newPage();
+  await other.goto(page.url());
+  await page.getByTestId("outline-row").first().getByLabel("标题 Title").fill("标签页 A 的标题");
+  await page.getByRole("button", { name: "保存修改 Save" }).click();
+  await expect(page.getByRole("button", { name: "已保存 Saved" })).toBeVisible();
+  await other.getByTestId("outline-row").first().getByLabel("标题 Title").fill("标签页 B 的标题");
+  await other.getByRole("button", { name: "保存修改 Save" }).click();
+  await expect(other.getByTestId("outline-error")).toContainText("另一个标签页");
+  await shot(other, "09-outline-conflict");
+
+  // Unsaved edits: in-app links ask first, closing the tab warns.
+  let asked = "";
+  other.once("dialog", (d) => {
+    asked = d.message();
+    void d.dismiss();
+  });
+  await other.locator('.stepper [data-step="settings"] a').click();
+  await expect.poll(() => asked).toContain("还没保存");
+  await expect(other).toHaveURL(/\/outline$/);
+  const closing = new Promise<string>((resolve) => other.once("dialog", (d) => (resolve(d.type()), void d.accept())));
+  await other.close({ runBeforeUnload: true });
+  expect(await closing).toBe("beforeunload");
+
+  await page.reload();
+  await expect(page.getByTestId("outline-row").first().getByLabel("标题 Title")).toHaveValue("标签页 A 的标题");
 });
