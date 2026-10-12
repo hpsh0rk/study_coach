@@ -7,7 +7,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { galleryCells } from "@kj/templates";
+import { galleryCells } from "@kj/templates/testing";
 import type { ThemeId } from "@kj/schema";
 import { exportPptx, type PptxDeck } from "../src/index.ts";
 
