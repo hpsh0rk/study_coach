@@ -363,6 +363,22 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
     await ctx.close();
   });
 
+  await test.step("editable PPTX export: one slide per deck slide, with speaker notes", async () => {
+    await page.goto(`/lessons/${lessonId}/slides`);
+    await page.getByText("导出 Export").click();
+    const [download] = await Promise.all([page.waitForEvent("download"), page.getByTestId("export-pptx").click()]);
+    const file = path.join(os.tmpdir(), `kj-${Date.now()}.pptx`);
+    await download.saveAs(file);
+    expect(download.suggestedFilename()).toMatch(/\.pptx$/);
+    const zip = fs.readFileSync(file).toString("latin1");
+    expect(zip.startsWith("PK")).toBe(true);
+    const names = (re: RegExp) => new Set(zip.match(re) ?? []).size;
+    const slides = await page.getByTestId("thumb").count();
+    expect(slides).toBeGreaterThan(3);
+    expect(names(/ppt\/slides\/slide\d+\.xml/g)).toBe(slides);
+    expect(names(/ppt\/notesSlides\/notesSlide\d+\.xml/g)).toBe(slides);
+  });
+
   await test.step("复制这节课到新学期: the copy keeps the confirmed outline and every slide", async () => {
     await page.goto("/");
     await page.getByTestId(`duplicate-${lessonId}`).click();
