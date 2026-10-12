@@ -5,6 +5,7 @@ import type { Slide, SlideSpec } from "@kj/schema";
 import { ApiError } from "../../api.ts";
 import { SlotEditor } from "../../components/SlotEditor.tsx";
 import { SlidePreview, SlideThumb } from "../../components/SlideView.tsx";
+import { UnverifiedBadge, UnverifiedBox } from "../../components/Unverified.tsx";
 import { documentApi, lessonApi, type LessonView } from "../../lessonApi.ts";
 import { Stepper, StepIntro, type StepKey } from "./Stepper.tsx";
 
@@ -164,6 +165,7 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
                     {i + 1}. {PAGE_TYPES[s.pageType].label.zh} · {s.minutes} 分钟
                   </span>
                   <span className="thumb-title">{s.title}</span>
+                  {slide && <UnverifiedBadge count={slide.unverified?.length ?? 0} />}
                 </div>
               </li>
             );
@@ -196,6 +198,7 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
                 key={selSlide.id}
                 content={selSlide.content}
                 notes={selSlide.notes}
+                unverified={selSlide.unverified}
                 onCancel={() => setEditing(false)}
                 onSave={async (content, notes) => {
                   replaceSlide((await lessonApi.editSlide(view.lesson.id, selSlide.id, { content, notes })).slide);
@@ -205,6 +208,7 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
             ) : selSlide ? (
               <>
                 <SlidePreview slide={selSlide} theme={theme} onSourceClick={openSource} pageLabels={labels} />
+                <UnverifiedBox items={selSlide.unverified ?? []} sources={selSlide.sources} onSourceClick={openSource} />
                 <h3>讲稿 Speaker notes</h3>
                 <p className="notes">{selSlide.notes || "—"}</p>
                 {selSlide.warnings.length > 0 && (

@@ -15,6 +15,13 @@
       "when": 1791822360460,
       "tag": "0001_gate_and_seed",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1791825182266,
+      "tag": "0002_slides_unverified",
+      "breakpoints": true
     }
   ]
 }

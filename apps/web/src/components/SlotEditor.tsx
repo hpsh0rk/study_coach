@@ -1,5 +1,6 @@
-import { useState } from "react";
-import type { SlideContent } from "@kj/schema";
+import { useContext, useState } from "react";
+import type { SlideContent, Unverified } from "@kj/schema";
+import { FlagContext, isFlagged, UnverifiedBox } from "./Unverified.tsx";
 
 type Value = string | number | boolean | null | undefined | Value[] | { [k: string]: Value };
 type Path = (string | number)[];
@@ -77,9 +78,10 @@ function JsonField({ value, onChange }: { value: Value; onChange: (v: Value) => 
 
 function Field({ name, value, path, onChange }: { name: string | number; value: Value; path: Path; onChange: (p: Path, v: Value) => void }) {
   const set = (v: Value) => onChange(path, v);
+  const flags = useContext(FlagContext);
   if (value && typeof value === "object" && !Array.isArray(value) && "kind" in value) {
     return (
-      <label className="slot-field">
+      <label className={`slot-field ${isFlagged(flags, JSON.stringify(value)) ? "flagged" : ""}`}>
         <span>{label(name)}</span>
         <JsonField value={value} onChange={set} />
       </label>
@@ -87,7 +89,7 @@ function Field({ name, value, path, onChange }: { name: string | number; value: 
   }
   if (typeof value === "string") {
     return (
-      <label className="slot-field">
+      <label className={`slot-field ${isFlagged(flags, value) ? "flagged" : ""}`}>
         <span>{label(name)}</span>
         <textarea rows={Math.min(4, Math.max(1, Math.ceil(value.length / 60)))} value={value} onChange={(e) => set(e.target.value)} data-slot-path={path.join(".")} />
       </label>
@@ -152,11 +154,13 @@ function Field({ name, value, path, onChange }: { name: string | number; value: 
 export function SlotEditor({
   content,
   notes,
+  unverified = [],
   onSave,
   onCancel,
 }: {
   content: SlideContent;
   notes: string;
+  unverified?: Unverified[];
   onSave: (content: SlideContent, notes: string) => Promise<void>;
   onCancel: () => void;
 }) {
@@ -182,11 +186,14 @@ export function SlotEditor({
         }
       }}
     >
-      {Object.entries(draft as Record<string, Value>)
-        .filter(([k]) => k !== "layout")
-        .map(([k, v]) => (
-          <Field key={k} name={k} value={v} path={[k]} onChange={change} />
-        ))}
+      <UnverifiedBox items={unverified} />
+      <FlagContext.Provider value={unverified.map((u) => u.text)}>
+        {Object.entries(draft as Record<string, Value>)
+          .filter(([k]) => k !== "layout")
+          .map(([k, v]) => (
+            <Field key={k} name={k} value={v} path={[k]} onChange={change} />
+          ))}
+      </FlagContext.Provider>
       <label className="slot-field">
         <span>讲稿 Speaker notes</span>
         <textarea rows={5} value={noteDraft} onChange={(e) => setNoteDraft(e.target.value)} />

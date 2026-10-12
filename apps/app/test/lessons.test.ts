@@ -205,6 +205,21 @@ describe("slide reuse, editing and snapshots", () => {
     expect(back.json.slide.content.title).toBe("Hand-edited title");
   });
 
+  it("flags numbers that are not on the cited pages (待核实) and re-checks after edits and undo", async () => {
+    const { lessonId, v } = await confirmedLesson();
+    const spec = v.outline.slides.find((s: any) => s.layout === "statement");
+    const slide = (await teacher.req("POST", `/api/lessons/${lessonId}/outline-versions/${v.id}/slides/${spec.id}/generate`)).json.slide;
+    expect(Array.isArray(slide.unverified)).toBe(true);
+    const content = { ...slide.content, bullets: ["Sound travels at 343 m/s in air"] };
+    const edited = (await teacher.req("PATCH", `/api/lessons/${lessonId}/slides/${slide.id}`, { content, notes: "Check: d = 343 × 2 = 600 m" })).json.slide;
+    expect(edited.unverified.map((u: any) => u.kind).sort()).toEqual(["calc", "number"]);
+    expect(edited.unverified.find((u: any) => u.kind === "number").text).toBe("343");
+    const deck = (await teacher.req("GET", `/api/lessons/${lessonId}/deck`)).json;
+    expect(deck.slides.find((s: any) => s.id === slide.id).unverified).toHaveLength(2);
+    const undone = (await teacher.req("POST", `/api/lessons/${lessonId}/slides/${slide.id}/undo`)).json.slide;
+    expect(undone.unverified).toEqual(slide.unverified);
+  });
+
   it("confirm and generate read the version's params snapshot, not later lesson settings", async () => {
     const { lessonId, v } = await confirmedLesson(40);
     expect(v.params.minutes).toBe(40);

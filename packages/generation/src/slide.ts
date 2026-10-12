@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { jsonSchemaOf, type AiLayer, type CallContext } from "@kj/ai";
-import { PAGE_TYPES } from "@kj/pedagogy";
-import { LAYOUT_IDS, SlideContent, type GlossaryEntry, type LayoutId, type LessonParams, type Outline, type PageText, type SlideSpec } from "@kj/schema";
+import { PAGE_TYPES, verifyNumbers } from "@kj/pedagogy";
+import { LAYOUT_IDS, SlideContent, type GlossaryEntry, type LayoutId, type LessonParams, type Outline, type PageText, type SlideSpec, type Unverified } from "@kj/schema";
 import { BUDGETS, LAYOUTS, SLOT_SCHEMAS } from "@kj/templates";
 import { findEmbed } from "@kj/widgets";
 import { applyGlossary, problemsOf, truncateLists } from "./checks.ts";
@@ -45,7 +45,16 @@ export interface WriteResult {
   notes: string;
   sources: number[];
   warnings: string[];
+  /** 待核实: numbers, formulas and calculations the source check could not confirm. */
+  unverified: Unverified[];
   providerId: string;
+}
+
+/** The text a slide is checked against: its cited pages, or the whole selection when it cites none. */
+export function checkSourceText(sourcePages: number[], pages: PageText[]): string {
+  const cited = new Set(sourcePages);
+  const picked = cited.size ? pages.filter((p) => cited.has(p.no)) : pages;
+  return picked.map((p) => p.text).join("\n");
 }
 
 export class SpecNotFoundError extends Error {
@@ -199,11 +208,13 @@ export async function writeSlide(ai: AiLayer, outline: Outline, specId: string, 
     content = truncateLists(content, spec.pageType);
     found = problemsOf(content, spec.pageType);
   }
+  const notes = res.output.notes.slice(0, NOTES_MAX);
   return {
     content,
-    notes: res.output.notes.slice(0, NOTES_MAX),
+    notes,
     sources: spec.sourcePages,
     warnings: [...found.errors, ...found.warnings],
+    unverified: verifyNumbers(content, checkSourceText(spec.sourcePages, input.pages), { pageType: spec.pageType, notes }),
     providerId: res.providerId,
   };
 }

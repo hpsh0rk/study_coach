@@ -1106,3 +1106,46 @@ label {
 .range-preview {
   margin: 6px 0 0;
 }
+
+/* ---- 待核实 (number-source check) ---- */
+.unverified-box {
+  margin: 12px 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #fef9c3;
+  border: 1px solid #eab308;
+  color: #713f12;
+  font-size: 14px;
+}
+.unverified-box p {
+  margin: 4px 0 8px;
+}
+.unverified-box ul {
+  margin: 0 0 8px;
+  padding-left: 18px;
+}
+.unverified-box code {
+  background: #fff;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+.unverified-kind {
+  font-weight: 600;
+}
+.badge-unverified {
+  display: inline-block;
+  align-self: flex-start;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #fde047;
+  color: #713f12;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.slot-field.flagged textarea,
+.slot-field.flagged .slot-json {
+  border-color: #eab308;
+  background: #fefce8;
+  box-shadow: 0 0 0 2px #fde04780;
+}

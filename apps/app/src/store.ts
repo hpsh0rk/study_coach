@@ -1,6 +1,8 @@
 import { and, asc, desc, eq, gte, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
 import { pagesInRanges } from "@kj/pdf-structure";
-import { LessonParams, LessonScope, newId, Outline, sha256Hex, SlideContent, type PageText, type Slide, type SlideSpec } from "@kj/schema";
+import { checkSourceText } from "@kj/generation";
+import { verifyNumbers } from "@kj/pedagogy";
+import { LessonParams, LessonScope, newId, Outline, sha256Hex, SlideContent, type PageText, type PageType, type Slide, type SlideSpec, type Unverified } from "@kj/schema";
 import { db } from "./auth/session.ts";
 import { documents, lessons, outlineVersions, pages, slides } from "./db/schema.ts";
 import type { Env, SessionUser } from "./env.ts";
@@ -53,7 +55,10 @@ export function confirmedOutline(v: VersionRow): Outline {
 }
 
 export async function scopePages(env: Env, documentId: string, scope: LessonScope): Promise<PageText[]> {
-  const wanted = pagesInRanges(scope.ranges);
+  return pagesByNo(env, documentId, pagesInRanges(scope.ranges));
+}
+
+export async function pagesByNo(env: Env, documentId: string, wanted: number[]): Promise<PageText[]> {
   const out: PageText[] = [];
   for (let i = 0; i < wanted.length; i += 90) {
     const chunk = wanted.slice(i, i + 90);
@@ -103,8 +108,18 @@ export function slideFromRow(r: SlideRow): Slide {
     notes: r.notes,
     sources: JSON.parse(r.sources) as number[],
     warnings: JSON.parse(r.warnings) as string[],
+    unverified: JSON.parse(r.unverified) as Unverified[],
     canUndo: r.prevContent !== null,
   };
+}
+
+/** Re-runs the 待核实 check for edited content against the slide's cited pages (or the version's whole selection). */
+export async function unverifiedFor(env: Env, documentId: string, row: SlideRow, content: SlideContent, notes: string): Promise<Unverified[]> {
+  const sources = JSON.parse(row.sources) as number[];
+  const list = sources.length
+    ? await pagesByNo(env, documentId, sources)
+    : await scopePages(env, documentId, versionScope(await versionOf(env, row.lessonId, row.outlineVersionId)));
+  return verifyNumbers(content, checkSourceText(sources, list), { pageType: row.pageType as PageType, notes });
 }
 
 /** Slides of a version in outline order (missing specs are simply not generated yet). */
@@ -189,6 +204,6 @@ export function deckExport(lesson: LessonRow, version: VersionRow, list: Slide[]
     },
     meta: { outlineVersion: version.version, confirmedAt: version.confirmedAt },
     outline: outlineOf(version),
-    slides: list.map(({ canUndo: _u, ...s }) => (extra.includeNotes ? s : { ...s, notes: "" })),
+    slides: list.map(({ canUndo: _u, ...s }) => (extra.includeNotes ? s : { ...s, notes: "", unverified: [] })),
   };
 }

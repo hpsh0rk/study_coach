@@ -27,6 +27,7 @@ import {
   scopePages,
   scopeWords,
   slideFromRow,
+  unverifiedFor,
   slidesOf,
   specHash,
   versionOf,
@@ -262,6 +263,7 @@ export const lessonRoutes = new Hono<AppBindings>()
       notes: res.notes,
       sources: JSON.stringify(res.sources),
       warnings: JSON.stringify(res.warnings),
+      unverified: JSON.stringify(res.unverified),
       providerId: res.providerId,
       prevContent: current?.content ?? null,
       prevNotes: current?.notes ?? null,
@@ -286,9 +288,11 @@ export const lessonRoutes = new Hono<AppBindings>()
       content = parsed.data as SlideContent;
     }
     const found = problemsOf(content, row.pageType as Parameters<typeof problemsOf>[1]);
+    const notes = body.notes ?? row.notes;
+    const unverified = await unverifiedFor(c.env, lesson.documentId, row, content, notes);
     await db(c.env)
       .update(slides)
-      .set({ content: JSON.stringify(content), notes: body.notes ?? row.notes, warnings: JSON.stringify([...found.errors, ...found.warnings]), prevContent: row.content, prevNotes: row.notes, updatedAt: Date.now() })
+      .set({ content: JSON.stringify(content), notes, warnings: JSON.stringify([...found.errors, ...found.warnings]), unverified: JSON.stringify(unverified), prevContent: row.content, prevNotes: row.notes, updatedAt: Date.now() })
       .where(eq(slides.id, row.id));
     return c.json({ slide: slideFromRow(await ownedSlide(c.env, lesson.id, row.id)) });
   })
@@ -299,9 +303,11 @@ export const lessonRoutes = new Hono<AppBindings>()
     if (row.prevContent === null) throw new HttpError(409, "NOTHING_TO_UNDO", "Nothing to undo · 没有可撤销的修改");
     const content = SlideContent.parse(JSON.parse(row.prevContent));
     const found = problemsOf(content, row.pageType as Parameters<typeof problemsOf>[1]);
+    const notes = row.prevNotes ?? row.notes;
+    const unverified = await unverifiedFor(c.env, lesson.documentId, row, content, notes);
     await db(c.env)
       .update(slides)
-      .set({ content: row.prevContent, notes: row.prevNotes ?? row.notes, warnings: JSON.stringify([...found.errors, ...found.warnings]), prevContent: row.content, prevNotes: row.notes, updatedAt: Date.now() })
+      .set({ content: row.prevContent, notes, warnings: JSON.stringify([...found.errors, ...found.warnings]), unverified: JSON.stringify(unverified), prevContent: row.content, prevNotes: row.notes, updatedAt: Date.now() })
       .where(eq(slides.id, row.id));
     return c.json({ slide: slideFromRow(await ownedSlide(c.env, lesson.id, row.id)) });
   })
