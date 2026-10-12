@@ -20,18 +20,19 @@ function okResponse(content: unknown) {
   });
 }
 
-const provider = (id: string) => ({ id, kind: "deepseek" as const, name: id, baseUrl: `https://${id}.example/v1`, apiKey: "sk-test-123456", enabled: true });
+const provider = (id: string) => ({ id, kind: "deepseek" as const, name: id, baseUrl: `https://${id}.example/v1`, apiKey: "sk-test-123456" });
+const only = (id: string, model = "m"): AiConfig => ({ active: { provider: provider(id), model } });
 
 describe("AI layer", () => {
   it("answers from the stub when nothing is configured", async () => {
-    const { ai, records } = setup({ providers: [], routes: {} });
+    const { ai, records } = setup({ active: null });
     const res = await ai.callStructured(req);
     expect(res).toMatchObject({ providerId: "stub", output: { title: "stub" } });
     expect(records[0]).toMatchObject({ status: "ok", capability: "slide.write" });
   });
 
   it("refuses without a provider when stubs are disabled", async () => {
-    const { ai } = setup({ providers: [], routes: {} }, undefined, false);
+    const { ai } = setup({ active: null }, undefined, false);
     await expect(ai.callStructured(req)).rejects.toThrow(/no AI provider/);
   });
 
@@ -42,33 +43,33 @@ describe("AI layer", () => {
       bodies.push(String(init.body));
       return okResponse(replies.shift());
     };
-    const { ai } = setup({ providers: [provider("a"), provider("b")], routes: { default: { primary: { providerId: "a", model: "m" }, fallback: { providerId: "b", model: "m2" } } } }, fetchImpl);
+    const { ai, records } = setup(only("a"), fetchImpl);
+    await expect(ai.callStructured(req)).rejects.toThrow(/invalid output twice/);
+    expect(bodies[1]).toContain("did not return a JSON object");
+    expect(records[0]).toMatchObject({ status: "error", providerId: "a" });
     const res = await ai.callStructured(req);
     expect(res.output).toEqual({ title: "ok", n: 2 });
-    expect(res.providerId).toBe("b");
-    expect(bodies[1]).toContain("did not return a JSON object");
-    expect(bodies[3] ?? bodies[2]).toBeDefined();
   });
 
-  it("routes per capability and meters tokens", async () => {
-    const urls: string[] = [];
-    const fetchImpl: FetchLike = async (url) => {
-      urls.push(url);
+  it("calls the one configured provider and model and meters tokens", async () => {
+    const calls: { url: string; model: string }[] = [];
+    const fetchImpl: FetchLike = async (url, init) => {
+      calls.push({ url, model: (JSON.parse(String(init.body)) as { model: string }).model });
       return okResponse({ title: "fine", n: 3 });
     };
-    const { ai, records } = setup({ providers: [provider("a"), provider("b")], routes: { default: { primary: { providerId: "a", model: "m" } }, "slide.write": { primary: { providerId: "b", model: "m" } } } }, fetchImpl);
+    const { ai, records } = setup(only("b", "glm-4.5"), fetchImpl);
     await ai.callStructured(req);
-    expect(urls[0]).toBe("https://b.example/v1/chat/completions");
-    expect(records[0]).toMatchObject({ providerId: "b", inputTokens: 10, outputTokens: 20, status: "ok" });
+    expect(calls).toEqual([{ url: "https://b.example/v1/chat/completions", model: "glm-4.5" }]);
+    expect(records[0]).toMatchObject({ providerId: "b", capability: "slide.write", inputTokens: 10, outputTokens: 20, status: "ok" });
   });
 
-  it("does not retry non-retriable provider errors on the same provider", async () => {
+  it("does not retry provider errors", async () => {
     let calls = 0;
     const fetchImpl: FetchLike = async () => {
       calls++;
       return new Response("bad request", { status: 400 });
     };
-    const { ai, records } = setup({ providers: [provider("a")], routes: { default: { primary: { providerId: "a", model: "m" } } } }, fetchImpl);
+    const { ai, records } = setup(only("a"), fetchImpl);
     await expect(ai.callStructured(req)).rejects.toThrow(/HTTP 400/);
     expect(calls).toBe(1);
     expect(records[0]?.status).toBe("error");

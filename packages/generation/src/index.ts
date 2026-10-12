@@ -9,3 +9,4 @@ export { slideKey, slideKeyInput } from "./slide-key.ts";
 export { findFormula, stubSlide, stubTable } from "./slide-stub.ts";
 export { applyGlossary, problemsOf, sanitizeWidgets, truncateLists } from "./checks.ts";
 export { clip, quantitiesIn, sentencesOf } from "./text.ts";
+export { neutralizeSource, suspiciousContent } from "./safety.ts";

@@ -67,10 +67,7 @@ export function providerFromEnv(env: NodeJS.ProcessEnv = process.env): { config:
   if (!baseUrl || !model) throw new Error(`provider "${kind}" needs KJ_EVAL_BASE_URL and KJ_EVAL_MODEL`);
   return {
     label: `${kind}/${model}`,
-    config: {
-      providers: [{ id: "eval", kind, name: preset.label, baseUrl, apiKey, enabled: true }],
-      routes: { default: { primary: { providerId: "eval", model } } },
-    },
+    config: { active: { provider: { id: "eval", kind, name: preset.label, baseUrl, apiKey }, model } },
   };
 }
 
@@ -135,7 +132,7 @@ export async function runScenario(o: RunOptions) {
   const ai =
     noisy?.ai ??
     createAiLayer({
-      config: { load: async () => o.provider?.config ?? { providers: [], routes: {} } },
+      config: { load: async () => o.provider?.config ?? { active: null } },
       meter,
       allowStubFallback: true,
     });

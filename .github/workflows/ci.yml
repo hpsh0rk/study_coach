@@ -18,6 +18,8 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm build
+      - name: Production bundle has no /dev pages
+        run: "! grep -rlE 'kjMeasure|measureReady' apps/web/dist/assets"
       - run: pnpm test
       # Real CJK glyphs, so the overflow test measures the widths students will see.
       - run: sudo apt-get update && sudo apt-get install -y fonts-noto-cjk

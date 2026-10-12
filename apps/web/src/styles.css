@@ -188,6 +188,49 @@ label {
   background: #fee2e2;
   color: #991b1b;
 }
+.badge.warn {
+  background: #fef3c7;
+  color: #92400e;
+  margin-left: 6px;
+}
+.share-row {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+}
+.share-box {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.share-box a {
+  word-break: break-all;
+}
+button.link {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: #2563eb;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.paste-panel {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.paste-panel textarea {
+  width: 100%;
+  font: inherit;
+  padding: 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+}
+.paste-panel .btn {
+  justify-self: start;
+}
 .page-loading {
   display: grid;
   place-items: center;

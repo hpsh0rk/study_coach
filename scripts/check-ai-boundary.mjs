@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Fails if code outside packages/ai talks to a model endpoint directly.
+// The one check for the AI boundary: fails if code outside packages/ai imports a model SDK or talks
+// to a model endpoint directly, so gating and metering cannot be bypassed.
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +16,7 @@ const FORBIDDEN = [
   [/bigmodel\.cn/, "GLM endpoint"],
   [/gateway\.ai\.cloudflare\.com/, "AI Gateway endpoint"],
   [/\benv\.AI\b/, "Workers AI binding"],
+  [/(?:from\s*|import\s*\(\s*|require\s*\(\s*)["'](?:openai|ai|zhipuai|deepseek|@anthropic-ai\/sdk|@google\/genai|@google\/generative-ai|@ai-sdk\/[^"']+)["']/, "model SDK import"],
 ];
 
 function* walk(dir) {

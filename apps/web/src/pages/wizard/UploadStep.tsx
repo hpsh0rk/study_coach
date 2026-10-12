@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { buildChapterTree, detectTextLayer } from "@kj/pdf-structure";
+import { buildChapterTree } from "@kj/pdf-structure";
 import { GlobalWorkerOptions, parsePdf } from "@kj/pdf-structure/browser";
 import { api, ApiError } from "../../api.ts";
 import { documentApi, type DocumentRow } from "../../lessonApi.ts";
@@ -32,13 +32,10 @@ export function UploadStep() {
     if (file.size > MAX_MB * 1024 * 1024) return setPhase({ kind: "error", message: `文件超过 ${MAX_MB} MB · File is larger than ${MAX_MB} MB` });
     try {
       setPhase({ kind: "parsing", done: 0, total: 1 });
-      const parsed = await parsePdf(await file.arrayBuffer(), file.name.replace(/\.pdf$/i, ""), (done, total) => setPhase({ kind: "parsing", done, total }));
-      if (!detectTextLayer(parsed.pages, parsed.pageCount)) {
-        return setPhase({ kind: "error", message: "这个 PDF 没有文字层（可能是扫描件），暂不支持。请上传电子版教材。· This PDF has no text layer (scanned?). Please upload a born-digital PDF." });
-      }
+      const parsed = await parsePdf(await file.arrayBuffer(), file.name.replace(/\.pdf$/i, ""), { onProgress: (done, total) => setPhase({ kind: "parsing", done, total }) });
       const chapters = buildChapterTree(parsed.toc, parsed.pageCount, parsed.pages);
       const { id, pageBatch } = await api<{ id: string; pageBatch: number }>("/api/documents", {
-        body: { filename: file.name, title: parsed.title, sizeBytes: file.size, pageCount: parsed.pageCount, hasTextLayer: true, chapters },
+        body: { filename: file.name, title: parsed.title, sizeBytes: file.size, pageCount: parsed.pageCount, chapters },
       });
       for (let i = 0; i < parsed.pages.length; i += pageBatch) {
         setPhase({ kind: "uploading", done: i, total: parsed.pages.length });

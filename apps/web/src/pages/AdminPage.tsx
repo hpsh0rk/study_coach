@@ -13,10 +13,8 @@ interface UserRow {
 type Kind = "deepseek" | "glm" | "custom";
 interface AiView {
   presets: Record<Kind, { label: string; baseUrl: string; models: string[]; docs: string }>;
-  capabilities: string[];
   stubFallback: boolean;
-  providers: { id: string; kind: Kind; name: string; baseUrl: string; apiKeyHint: string; enabled: boolean }[];
-  routes: { capability: string; primaryProviderId: string; primaryModel: string; fallbackProviderId: string | null; fallbackModel: string | null; temperature: number | null }[];
+  providers: { id: string; kind: Kind; name: string; baseUrl: string; apiKeyHint: string; model: string; enabled: boolean }[];
   recentCalls: { id: string; capability: string; providerId: string; model: string; status: string; latencyMs: number; inputTokens: number; outputTokens: number; createdAt: number; error: string | null }[];
 }
 
@@ -153,8 +151,7 @@ function AiPanel() {
   const [view, setView] = useState<AiView | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [form, setForm] = useState<{ kind: Kind; name: string; baseUrl: string; apiKey: string }>({ kind: "deepseek", name: "DeepSeek", baseUrl: "", apiKey: "" });
-  const [route, setRoute] = useState({ capability: "default", providerId: "", model: "", fallbackProviderId: "", fallbackModel: "" });
+  const [form, setForm] = useState<{ kind: Kind; name: string; baseUrl: string; apiKey: string; model: string }>({ kind: "deepseek", name: "DeepSeek", baseUrl: "", apiKey: "", model: "deepseek-chat" });
   const load = useCallback(async () => setView(await api<AiView>("/api/admin/ai")), []);
   useEffect(() => {
     void load();
@@ -173,13 +170,16 @@ function AiPanel() {
   if (!view) return <p className="muted">Loading…</p>;
   const preset = view.presets[form.kind];
   const providerName = (id: string | null) => view.providers.find((p) => p.id === id)?.name ?? id ?? "—";
-  const modelsFor = (id: string) => view.presets[view.providers.find((p) => p.id === id)?.kind ?? "custom"]?.models ?? [];
+  const active = view.providers.find((p) => p.enabled && p.model);
 
   return (
     <>
-      {view.stubFallback && view.routes.length === 0 && (
-        <div className="alert info">尚未配置模型：当前使用本地确定性 stub 生成（仅用于开发调试）。No route configured — the deterministic stub is used.</div>
-      )}
+      {!active &&
+        (view.stubFallback ? (
+          <div className="alert info">尚未启用模型：当前使用本地确定性 stub 生成（仅用于开发调试）。No model enabled — the deterministic stub is used.</div>
+        ) : (
+          <div className="alert warn">尚未启用模型：老师现在无法生成大纲和幻灯片。请在下面添加并启用一个。· No model enabled: generation is unavailable.</div>
+        ))}
       {error && <div className="alert error">{error}</div>}
       {notice && <div className="alert success">{notice}</div>}
 
@@ -188,16 +188,23 @@ function AiPanel() {
         onSubmit={(e) => {
           e.preventDefault();
           void run(async () => {
-            await api("/api/admin/ai/providers", { body: { kind: form.kind, name: form.name, apiKey: form.apiKey, ...(form.baseUrl ? { baseUrl: form.baseUrl } : {}) } });
+            await api("/api/admin/ai/providers", { body: { kind: form.kind, name: form.name, apiKey: form.apiKey, model: form.model, ...(form.baseUrl ? { baseUrl: form.baseUrl } : {}) } });
             setForm({ ...form, apiKey: "" });
-            setNotice("已保存，API Key 已加密存储 · Saved; key encrypted at rest");
+            setNotice("已保存并启用，API Key 已加密存储 · Saved and enabled; key encrypted at rest");
           });
         }}
       >
-        <h2>添加模型提供方 Add provider</h2>
+        <h2>添加模型 Add model</h2>
+        <p className="muted small span2">所有生成都用唯一启用的那个模型；添加新的会自动停用旧的。· One enabled provider + model serves every call.</p>
         <label>
           类型 Type
-          <select value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value as Kind, name: view.presets[e.target.value as Kind].label.split(" ")[0] ?? "" })}>
+          <select
+            value={form.kind}
+            onChange={(e) => {
+              const kind = e.target.value as Kind;
+              setForm({ ...form, kind, name: view.presets[kind].label.split(" ")[0] ?? "", model: view.presets[kind].models[0] ?? "" });
+            }}
+          >
             {(Object.keys(view.presets) as Kind[]).map((k) => (
               <option key={k} value={k}>
                 {view.presets[k].label}
@@ -209,7 +216,16 @@ function AiPanel() {
           名称 Name
           <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
         </label>
-        <label className="span2">
+        <label>
+          模型 Model
+          <input list="model-suggestions" value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} required />
+          <datalist id="model-suggestions">
+            {preset.models.map((m) => (
+              <option key={m} value={m} />
+            ))}
+          </datalist>
+        </label>
+        <label>
           Base URL（OpenAI 兼容）
           <input value={form.baseUrl} onChange={(e) => setForm({ ...form, baseUrl: e.target.value })} placeholder={preset.baseUrl || "https://your-endpoint/v1"} required={form.kind === "custom"} />
         </label>
@@ -218,12 +234,12 @@ function AiPanel() {
           <input type="password" value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} required autoComplete="off" />
         </label>
         <div className="form-actions">
-          <button className="btn primary">保存 Save</button>
+          <button className="btn primary">保存并启用 Save &amp; enable</button>
         </div>
       </form>
 
       <div className="card">
-        <h2>提供方 Providers</h2>
+        <h2>模型 Models</h2>
         {view.providers.length === 0 ? (
           <p className="muted">暂无。</p>
         ) : (
@@ -232,7 +248,10 @@ function AiPanel() {
               {view.providers.map((p) => (
                 <tr key={p.id}>
                   <td>
-                    <strong>{p.name}</strong> <span className="muted small">{p.kind}</span>
+                    <strong>{p.name}</strong> <span className="muted small">{p.kind}</span> {p.id === active?.id && <span className="badge ready">使用中 active</span>}
+                  </td>
+                  <td>
+                    <code>{p.model || "—"}</code>
                   </td>
                   <td className="muted small">{p.baseUrl}</td>
                   <td>
@@ -243,17 +262,27 @@ function AiPanel() {
                       className="btn ghost small"
                       onClick={() =>
                         run(async () => {
-                          const model = view.presets[p.kind].models[0] ?? prompt("Model name to test") ?? "";
-                          const r = await api<{ ok: boolean; error?: string; latencyMs?: number }>(`/api/admin/ai/providers/${p.id}/test`, { body: { model } });
-                          if (r.ok) setNotice(`${p.name} OK (${r.latencyMs} ms)`);
+                          const r = await api<{ ok: boolean; error?: string; latencyMs?: number }>(`/api/admin/ai/providers/${p.id}/test`, { body: {} });
+                          if (r.ok) setNotice(`${p.name} / ${p.model} OK (${r.latencyMs} ms)`);
                           else setError(`${p.name}: ${r.error}`);
                         })
                       }
                     >
                       测试连接 Test
                     </button>
+                    <button
+                      className="btn ghost small"
+                      onClick={() =>
+                        run(async () => {
+                          const model = prompt("模型名 Model", p.model)?.trim();
+                          if (model) await api(`/api/admin/ai/providers/${p.id}`, { method: "PATCH", body: { model } });
+                        })
+                      }
+                    >
+                      改模型
+                    </button>
                     <button className="btn ghost small" onClick={() => run(async () => void (await api(`/api/admin/ai/providers/${p.id}`, { method: "PATCH", body: { enabled: !p.enabled } })))}>
-                      {p.enabled ? "停用" : "启用"}
+                      {p.enabled ? "停用" : "改用这个"}
                     </button>
                     <button className="btn ghost small" onClick={() => run(async () => void (await api(`/api/admin/ai/providers/${p.id}`, { method: "DELETE" })))}>
                       删除
@@ -265,96 +294,6 @@ function AiPanel() {
           </table>
         )}
       </div>
-
-      <form
-        className="card form-grid"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void run(async () => {
-            await api("/api/admin/ai/routes", {
-              method: "PUT",
-              body: {
-                capability: route.capability,
-                primary: { providerId: route.providerId, model: route.model },
-                fallback: route.fallbackProviderId && route.fallbackModel ? { providerId: route.fallbackProviderId, model: route.fallbackModel } : null,
-              },
-            });
-            setNotice("路由已保存 · Route saved");
-          });
-        }}
-      >
-        <h2>能力路由 Capability routing</h2>
-        <label>
-          能力 Capability
-          <select value={route.capability} onChange={(e) => setRoute({ ...route, capability: e.target.value })}>
-            {view.capabilities.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          主模型 Provider
-          <select value={route.providerId} onChange={(e) => setRoute({ ...route, providerId: e.target.value, model: modelsFor(e.target.value)[0] ?? "" })} required>
-            <option value="">—</option>
-            {view.providers.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          模型 Model
-          <input list="model-suggestions" value={route.model} onChange={(e) => setRoute({ ...route, model: e.target.value })} required />
-          <datalist id="model-suggestions">
-            {modelsFor(route.providerId).map((m) => (
-              <option key={m} value={m} />
-            ))}
-          </datalist>
-        </label>
-        <label>
-          备用 Fallback
-          <select value={route.fallbackProviderId} onChange={(e) => setRoute({ ...route, fallbackProviderId: e.target.value, fallbackModel: modelsFor(e.target.value)[0] ?? "" })}>
-            <option value="">无 none</option>
-            {view.providers.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          备用模型 Fallback model
-          <input value={route.fallbackModel} onChange={(e) => setRoute({ ...route, fallbackModel: e.target.value })} />
-        </label>
-        <div className="form-actions">
-          <button className="btn primary">保存路由 Save route</button>
-        </div>
-        {view.routes.length > 0 && (
-          <table className="table span-all">
-            <tbody>
-              {view.routes.map((r) => (
-                <tr key={r.capability}>
-                  <td>
-                    <code>{r.capability}</code>
-                  </td>
-                  <td>
-                    {providerName(r.primaryProviderId)} / {r.primaryModel}
-                  </td>
-                  <td className="muted">{r.fallbackProviderId ? `↳ ${providerName(r.fallbackProviderId)} / ${r.fallbackModel}` : ""}</td>
-                  <td className="row end">
-                    <button type="button" className="btn ghost small" onClick={() => run(async () => void (await api(`/api/admin/ai/routes/${encodeURIComponent(r.capability)}`, { method: "DELETE" })))}>
-                      删除
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </form>
 
       <div className="card">
         <h2>最近调用 Recent AI calls</h2>

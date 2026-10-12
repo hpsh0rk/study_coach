@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Outline, SlideSpec } from "@kj/schema";
 import { layoutForPageType } from "@kj/templates";
-import { checkOutline, checkSlide, densityOf, outlineTiming, planBudget } from "../src/index.ts";
+import { checkOutline, checkSlide, densityOf, outlineTiming, planBudget, scopeAdvice } from "../src/index.ts";
 
 const spec = (pageType: SlideSpec["pageType"], minutes: number, extra: Partial<SlideSpec> = {}): SlideSpec => ({
   id: `s${Math.random().toString(36).slice(2, 7)}`,
@@ -54,5 +54,13 @@ describe("checkSlide", () => {
   it("rejects teacher talk on screen", () => {
     const v = checkSlide({ layout: "statement", title: "In this lesson, let's dive into waves", bullets: ["Waves move energy"], visual: { kind: "formula", tex: "v=f\\lambda", caption: "" }, terms: [] });
     expect(v.length).toBeGreaterThan(0);
+  });
+});
+
+describe("scopeAdvice", () => {
+  it("never calls a selection a good fit while pages are cut from the source", () => {
+    expect(scopeAdvice(6000, 40)).toMatchObject({ estimatedMinutes: 36, lessons: 1, tooMuch: false });
+    expect(scopeAdvice(6000, 40, 3)).toMatchObject({ estimatedMinutes: 36, lessons: 2, tooMuch: true, unreadPages: 3 });
+    expect(scopeAdvice(20000, 40)).toMatchObject({ lessons: 3, tooMuch: true });
   });
 });

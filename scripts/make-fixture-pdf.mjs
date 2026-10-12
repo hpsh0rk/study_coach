@@ -119,9 +119,69 @@ export async function makeFixturePdf() {
   return doc.save();
 }
 
+const ZH_PAGES = [
+  { heading: "第4章 牛顿运动定律", body: "本章研究力与运动的关系。我们将学习牛顿第一定律、牛顿第二定律和牛顿第三定律，并用它们分析生活中的运动现象。" },
+  { heading: "4.2 牛顿第一定律", body: "一切物体在没有受到外力作用时，总保持静止状态或匀速直线运动状态。物体保持原有运动状态的性质叫做惯性。质量是惯性大小的量度，质量越大，惯性越大。" },
+  { heading: "4.3 牛顿第二定律", body: "物体加速度的大小跟它受到的合力成正比，跟它的质量成反比，加速度的方向跟合力的方向相同。表达式为 F = ma。力的单位是牛顿，1 N = 1 kg·m/s²。" },
+  { heading: "4.3 牛顿第二定律（例题）", body: "例题：质量为 2 kg 的物体受到 10 N 的水平合力，求它的加速度。解：由 F = ma 得 a = F/m = 10 N ÷ 2 kg = 5 m/s²，方向与合力方向相同。" },
+  { scanned: true },
+  { scanned: true },
+];
+
+const ZH_OUTLINE = [
+  { title: "第4章 牛顿运动定律", page: 0, children: [
+    { title: "4.2 牛顿第一定律", page: 1 },
+    { title: "4.3 牛顿第二定律", page: 2 },
+    { title: "4.4 习题（扫描页）", page: 4 },
+  ] },
+];
+
+const utf16Hex = (s) => [...s].map((ch) => ch.codePointAt(0).toString(16).padStart(4, "0")).join("");
+const chunks = (s, n) => Array.from({ length: Math.ceil(s.length / n) }, (_, i) => s.slice(i * n, i * n + n));
+
+/**
+ * Chinese text set in a non-embedded CID font (Adobe-GB1, UniGB-UTF16-H), as many publisher PDFs do.
+ * pdf.js can only extract its text with the predefined CMaps. Pages 5–6 are image-only ("scanned").
+ */
+export async function makeCidFixturePdf() {
+  const doc = await PDFDocument.create();
+  doc.setTitle("牛顿运动定律（中文 CID 字体样例）");
+  const ctx = doc.context;
+  const descendant = ctx.register(
+    ctx.obj({
+      Type: "Font",
+      Subtype: "CIDFontType0",
+      BaseFont: "STSong-Light",
+      CIDSystemInfo: { Registry: PDFHexString.fromText("Adobe"), Ordering: PDFHexString.fromText("GB1"), Supplement: 4 },
+      FontDescriptor: ctx.register(ctx.obj({ Type: "FontDescriptor", FontName: "STSong-Light", Flags: 6, FontBBox: [-25, -254, 1000, 880], ItalicAngle: 0, Ascent: 880, Descent: -120, CapHeight: 880, StemV: 93 })),
+      DW: 1000,
+    }),
+  );
+  const font = ctx.register(ctx.obj({ Type: "Font", Subtype: "Type0", BaseFont: "STSong-Light-UniGB-UTF16-H", Encoding: "UniGB-UTF16-H", DescendantFonts: [descendant] }));
+  const pageRefs = [];
+  ZH_PAGES.forEach((p, i) => {
+    const page = doc.addPage([595, 842]);
+    pageRefs.push(page.ref);
+    page.node.setFontDictionary(PDFName.of("F1"), font);
+    const ops = [];
+    if (p.scanned) {
+      ops.push("0.85 g 60 120 475 650 re f");
+    } else {
+      ops.push(`BT /F1 22 Tf 60 770 Td <${utf16Hex(p.heading)}> Tj ET`);
+      chunks(p.body, 22).forEach((line, j) => ops.push(`BT /F1 20 Tf 60 ${720 - j * 30} Td <${utf16Hex(line)}> Tj ET`));
+      ops.push(`BT /F1 10 Tf 290 40 Td <${utf16Hex(String(i + 1))}> Tj ET`);
+    }
+    page.node.set(PDFName.of("Contents"), ctx.register(ctx.stream(ops.join("\n"))));
+  });
+  addOutline(doc, pageRefs, ZH_OUTLINE);
+  return doc.save();
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const out = resolve(dirname(fileURLToPath(import.meta.url)), "../fixtures/pdfs/waves-mini.pdf");
-  mkdirSync(dirname(out), { recursive: true });
-  writeFileSync(out, await makeFixturePdf());
-  console.log(`wrote ${out}`);
+  const dir = resolve(dirname(fileURLToPath(import.meta.url)), "../fixtures/pdfs");
+  mkdirSync(dir, { recursive: true });
+  for (const [name, make] of [["waves-mini.pdf", makeFixturePdf], ["newton-zh-cid.pdf", makeCidFixturePdf]]) {
+    writeFileSync(resolve(dir, name), await make());
+    console.log(`wrote ${resolve(dir, name)}`);
+  }
 }

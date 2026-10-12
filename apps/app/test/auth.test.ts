@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { hashPassword, verifyPassword } from "../src/auth/password.ts";
-import { Client, seedUser } from "./client.ts";
+import { DUMMY_HASH, hashPassword, PBKDF2_ITERATIONS, verifyPassword } from "../src/auth/password.ts";
+import { loadAiConfig } from "../src/ai.ts";
+import { Client, e, seedUser } from "./client.ts";
 
 beforeAll(async () => {
   await seedUser("usr_admin", "admin", "Admin12345", { role: "admin" });
@@ -13,6 +14,17 @@ describe("PBKDF2 passwords", () => {
     expect(await verifyPassword("Secret123", h)).toBe(true);
     expect(await verifyPassword("Secret124", h)).toBe(false);
     expect(await verifyPassword("Secret123", "$argon2id$v=19$m=1,t=1,p=1$aa$bb")).toBe(false);
+    expect(await verifyPassword("dummy-password-1", DUMMY_HASH)).toBe(false);
+  });
+
+  it("rehashes other costs to the current one on login", async () => {
+    await seedUser("usr_old", "oldcost", "Secret123", { mustChange: false });
+    const before = await e.DB.prepare("SELECT password_hash AS h FROM users WHERE id = 'usr_old'").first<string>("h");
+    expect(before!.split("$")[1]).toBe("1000");
+    expect((await new Client().req("POST", "/api/auth/login", { username: "oldcost", password: "Secret123" })).status).toBe(200);
+    const after = await e.DB.prepare("SELECT password_hash AS h FROM users WHERE id = 'usr_old'").first<string>("h");
+    expect(after!.split("$")[1]).toBe(String(PBKDF2_ITERATIONS));
+    expect(await verifyPassword("Secret123", after!)).toBe(true);
   });
 });
 
@@ -46,6 +58,25 @@ describe("whitelist auth", () => {
     const teacher = new Client();
     expect((await teacher.req("POST", "/api/auth/login", { username: "wang", password: "Teach12345" })).status).toBe(200);
     expect((await teacher.req("GET", "/api/admin/users")).status).toBe(403);
+  });
+
+  it("admin AI config keeps exactly one enabled provider and model", async () => {
+    const admin = new Client();
+    expect((await admin.req("POST", "/api/auth/login", { username: "admin", password: "Admin123456" })).status).toBe(200);
+    expect(await loadAiConfig(e, "org_default")).toEqual({ active: null });
+    expect((await admin.req("POST", "/api/admin/ai/providers", { kind: "deepseek", name: "DS", apiKey: "sk-test-12345678" })).status).toBe(400);
+    const a = (await admin.req("POST", "/api/admin/ai/providers", { kind: "deepseek", name: "DS", apiKey: "sk-test-12345678", model: "deepseek-chat" })).json.id;
+    const b = (await admin.req("POST", "/api/admin/ai/providers", { kind: "glm", name: "GLM", apiKey: "sk-test-87654321", model: "glm-4-flash" })).json.id;
+    const enabled = async () => (await admin.req("GET", "/api/admin/ai")).json.providers.filter((p: any) => p.enabled).map((p: any) => p.id);
+    expect(await enabled()).toEqual([b]);
+    expect((await loadAiConfig(e, "org_default")).active).toMatchObject({ provider: { id: b }, model: "glm-4-flash" });
+    expect((await admin.req("PATCH", `/api/admin/ai/providers/${a}`, { enabled: true, model: "deepseek-reasoner" })).status).toBe(200);
+    expect(await enabled()).toEqual([a]);
+    expect((await loadAiConfig(e, "org_default")).active).toMatchObject({ provider: { id: a }, model: "deepseek-reasoner" });
+    expect((await admin.req("PATCH", "/api/admin/ai/providers/aip_missing", { enabled: true })).status).toBe(404);
+    expect(await enabled()).toEqual([a]);
+    await admin.req("DELETE", `/api/admin/ai/providers/${a}`);
+    expect(await loadAiConfig(e, "org_default")).toEqual({ active: null });
   });
 
   it("serves share links without speaker notes and 404s unknown tokens", async () => {

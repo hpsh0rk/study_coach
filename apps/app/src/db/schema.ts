@@ -56,7 +56,6 @@ export const documents = sqliteTable(
     pageCount: integer("page_count").notNull(),
     /** Pages received so far; the document is usable once it equals page_count. */
     pagesReceived: integer("pages_received").notNull().default(0),
-    hasTextLayer: integer("has_text_layer", { mode: "boolean" }).notNull(),
     hasBookmarks: integer("has_bookmarks", { mode: "boolean" }).notNull(),
     createdAt: integer("created_at").notNull().$defaultFn(now),
   },
@@ -105,6 +104,8 @@ export const lessons = sqliteTable(
     /** LessonParams JSON. */
     params: text("params").notNull(),
     theme: text("theme").notNull().default("classic"),
+    /** Set while an outline draft is running (a lock that expires on its own if the request dies). */
+    draftingUntil: integer("drafting_until"),
     createdAt: integer("created_at").notNull().$defaultFn(now),
     updatedAt: integer("updated_at").notNull().$defaultFn(now),
   },
@@ -123,7 +124,8 @@ export const outlineVersions = sqliteTable(
     params: text("params").notNull(),
     scope: text("scope").notNull(),
     specCount: integer("spec_count").notNull(),
-    totalMinutes: real("total_minutes").notNull(),
+    /** Bumped by every saved edit of a draft; PUT and confirm must name the rev they started from. */
+    rev: integer("rev").notNull().default(0),
     ackOverBudget: integer("ack_over_budget", { mode: "boolean" }).notNull().default(false),
     confirmedAt: integer("confirmed_at"),
     createdAt: integer("created_at").notNull().$defaultFn(now),
@@ -164,6 +166,10 @@ export const shareLinks = sqliteTable(
     id: text("id").primaryKey(),
     tokenHash: text("token_hash").notNull(),
     lessonId: text("lesson_id").notNull().references(() => lessons.id, { onDelete: "cascade" }),
+    /** The confirmed version students see; later versions only reach them when the teacher updates the link. */
+    versionId: text("version_id").references(() => outlineVersions.id),
+    /** Last time the teacher shared (and so reviewed) the deck: flagged slides changed after this are held back. */
+    reviewedAt: integer("reviewed_at").notNull().default(0),
     createdBy: text("created_by").notNull().references(() => users.id),
     createdAt: integer("created_at").notNull().$defaultFn(now),
     revokedAt: integer("revoked_at"),
@@ -180,25 +186,12 @@ export const aiProviders = sqliteTable("ai_providers", {
   /** AES-GCM sealed with AI_CONFIG_KEY. */
   apiKeySealed: text("api_key_sealed").notNull(),
   apiKeyHint: text("api_key_hint").notNull(),
+  model: text("model").notNull().default(""),
+  /** At most one provider per org is enabled: every model call uses it. */
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
   createdAt: integer("created_at").notNull().$defaultFn(now),
   updatedAt: integer("updated_at").notNull().$defaultFn(now),
 });
-
-export const aiRoutes = sqliteTable(
-  "ai_routes",
-  {
-    orgId: text("org_id").notNull().references(() => orgs.id),
-    capability: text("capability").notNull(),
-    primaryProviderId: text("primary_provider_id").notNull(),
-    primaryModel: text("primary_model").notNull(),
-    fallbackProviderId: text("fallback_provider_id"),
-    fallbackModel: text("fallback_model"),
-    temperature: real("temperature"),
-    updatedAt: integer("updated_at").notNull().$defaultFn(now),
-  },
-  (t) => [primaryKey({ columns: [t.orgId, t.capability] })],
-);
 
 export const aiCalls = sqliteTable(
   "ai_calls",

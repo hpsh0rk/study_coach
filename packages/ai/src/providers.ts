@@ -31,26 +31,14 @@ export const ProviderConfig = z.object({
   name: z.string().min(1),
   baseUrl: z.string().url(),
   apiKey: z.string().min(1),
-  enabled: z.boolean(),
   /** Extra headers some OpenAI-compatible gateways need. */
   headers: z.record(z.string(), z.string()).optional(),
 });
 export type ProviderConfig = z.infer<typeof ProviderConfig>;
 
-export const RouteTarget = z.object({ providerId: z.string(), model: z.string().min(1) });
-export type RouteTarget = z.infer<typeof RouteTarget>;
-
-export const CapabilityRoute = z.object({
-  primary: RouteTarget,
-  fallback: RouteTarget.optional(),
-  temperature: z.number().min(0).max(2).optional(),
-});
-export type CapabilityRoute = z.infer<typeof CapabilityRoute>;
-
 export interface AiConfig {
-  providers: ProviderConfig[];
-  /** Keyed by capability name, or "default" for everything not listed. */
-  routes: Record<string, CapabilityRoute>;
+  /** The one provider and model every call uses; null when none is configured. */
+  active: { provider: ProviderConfig; model: string } | null;
 }
 
 export interface AiConfigSource {

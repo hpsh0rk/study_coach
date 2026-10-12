@@ -1,14 +1,13 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, ne } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
-import { KNOWN_CAPABILITIES, maskSecret, PROVIDER_PRESETS, ProviderKind, sealSecret, testProvider } from "@kj/ai";
+import { maskSecret, openSecret, PROVIDER_PRESETS, ProviderKind, sealSecret, testProvider } from "@kj/ai";
 import { newId } from "@kj/schema";
-import { aiCalls, aiProviders, aiRoutes, auditLog, users } from "../db/schema.ts";
-import { secret, type AppBindings } from "../env.ts";
+import { aiCalls, aiProviders, auditLog, users } from "../db/schema.ts";
+import { secret, type AppBindings, type Env } from "../env.ts";
 import { HttpError, parseJson } from "../http.ts";
 import { generatePassword, hashPassword, passwordProblem } from "../auth/password.ts";
 import { db, destroyUserSessions, requireAdmin, requireUser } from "../auth/session.ts";
-import { loadAiConfig } from "../ai.ts";
 
 const Username = z
   .string()
@@ -77,27 +76,24 @@ export const adminRoutes = new Hono<AppBindings>()
     return c.json({ ok: true });
   })
 
-  // ---- AI providers & capability routing (owner decision: configured here, not in env) ----
+  // ---- AI provider (owner decision: configured here, not in env). One enabled provider + model serves every call. ----
   .get("/ai", async (c) => {
     const orgId = c.get("user").orgId;
-    const [providers, routes, recent] = await Promise.all([
+    const [providers, recent] = await Promise.all([
       db(c.env).select().from(aiProviders).where(eq(aiProviders.orgId, orgId)).orderBy(aiProviders.createdAt),
-      db(c.env).select().from(aiRoutes).where(eq(aiRoutes.orgId, orgId)),
       db(c.env).select().from(aiCalls).where(eq(aiCalls.orgId, orgId)).orderBy(desc(aiCalls.createdAt)).limit(20),
     ]);
     return c.json({
       presets: PROVIDER_PRESETS,
-      capabilities: ["default", ...KNOWN_CAPABILITIES],
       stubFallback: c.env.AI_ALLOW_STUB === "true",
-      providers: providers.map((p) => ({ id: p.id, kind: p.kind, name: p.name, baseUrl: p.baseUrl, apiKeyHint: p.apiKeyHint, enabled: p.enabled })),
-      routes,
+      providers: providers.map((p) => ({ id: p.id, kind: p.kind, name: p.name, baseUrl: p.baseUrl, apiKeyHint: p.apiKeyHint, model: p.model, enabled: p.enabled })),
       recentCalls: recent,
     });
   })
   .post("/ai/providers", async (c) => {
     const body = await parseJson(
       c,
-      z.object({ kind: ProviderKind, name: z.string().trim().min(1).max(64), baseUrl: z.string().url().optional(), apiKey: z.string().trim().min(8), enabled: z.boolean().default(true) }),
+      z.object({ kind: ProviderKind, name: z.string().trim().min(1).max(64), baseUrl: z.string().url().optional(), apiKey: z.string().trim().min(8), model: z.string().trim().min(1).max(100), enabled: z.boolean().default(true) }),
     );
     const baseUrl = body.baseUrl || PROVIDER_PRESETS[body.kind].baseUrl;
     if (!baseUrl) throw new HttpError(400, "VALIDATION", "Custom providers need a base URL · 自定义提供方需要填写 Base URL");
@@ -105,69 +101,46 @@ export const adminRoutes = new Hono<AppBindings>()
     const id = newId("aip");
     await db(c.env)
       .insert(aiProviders)
-      .values({ id, orgId: me.orgId, kind: body.kind, name: body.name, baseUrl, apiKeySealed: await sealSecret(body.apiKey, secret(c.env, "AI_CONFIG_KEY")), apiKeyHint: maskSecret(body.apiKey), enabled: body.enabled });
+      .values({ id, orgId: me.orgId, kind: body.kind, name: body.name, baseUrl, model: body.model, apiKeySealed: await sealSecret(body.apiKey, secret(c.env, "AI_CONFIG_KEY")), apiKeyHint: maskSecret(body.apiKey), enabled: body.enabled });
+    if (body.enabled) await disableOthers(c.env, me.orgId, id);
     await db(c.env).insert(auditLog).values({ orgId: me.orgId, actorId: me.id, action: "admin.ai_provider_created", target: id });
     return c.json({ id }, 201);
   })
   .patch("/ai/providers/:id", async (c) => {
-    const body = await parseJson(c, z.object({ name: z.string().trim().min(1).max(64).optional(), baseUrl: z.string().url().optional(), apiKey: z.string().trim().min(8).optional(), enabled: z.boolean().optional() }));
+    const body = await parseJson(
+      c,
+      z.object({ name: z.string().trim().min(1).max(64).optional(), baseUrl: z.string().url().optional(), apiKey: z.string().trim().min(8).optional(), model: z.string().trim().min(1).max(100).optional(), enabled: z.boolean().optional() }),
+    );
     const me = c.get("user");
+    const id = c.req.param("id");
     const patch: Partial<typeof aiProviders.$inferInsert> = { updatedAt: Date.now() };
     if (body.name) patch.name = body.name;
     if (body.baseUrl) patch.baseUrl = body.baseUrl;
+    if (body.model) patch.model = body.model;
     if (body.enabled !== undefined) patch.enabled = body.enabled;
     if (body.apiKey) {
       patch.apiKeySealed = await sealSecret(body.apiKey, secret(c.env, "AI_CONFIG_KEY"));
       patch.apiKeyHint = maskSecret(body.apiKey);
     }
-    await db(c.env).update(aiProviders).set(patch).where(and(eq(aiProviders.id, c.req.param("id")), eq(aiProviders.orgId, me.orgId)));
+    const res = await db(c.env).update(aiProviders).set(patch).where(and(eq(aiProviders.id, id), eq(aiProviders.orgId, me.orgId))).returning({ id: aiProviders.id });
+    if (!res.length) throw new HttpError(404, "NOT_FOUND", "Provider not found");
+    if (body.enabled) await disableOthers(c.env, me.orgId, id);
     return c.json({ ok: true });
   })
   .delete("/ai/providers/:id", async (c) => {
     const me = c.get("user");
-    const id = c.req.param("id");
-    const used = await db(c.env).select().from(aiRoutes).where(and(eq(aiRoutes.orgId, me.orgId), eq(aiRoutes.primaryProviderId, id))).limit(1);
-    if (used.length) throw new HttpError(409, "IN_USE", "Provider is used by a route; change the route first · 该提供方正在被路由使用");
-    await db(c.env).delete(aiProviders).where(and(eq(aiProviders.id, id), eq(aiProviders.orgId, me.orgId)));
+    await db(c.env).delete(aiProviders).where(and(eq(aiProviders.id, c.req.param("id")), eq(aiProviders.orgId, me.orgId)));
     return c.json({ ok: true });
   })
   .post("/ai/providers/:id/test", async (c) => {
-    const body = await parseJson(c, z.object({ model: z.string().min(1) }));
-    const config = await loadAiConfig(c.env, c.get("user").orgId);
-    const provider = config.providers.find((p) => p.id === c.req.param("id"));
-    if (!provider) throw new HttpError(404, "NOT_FOUND", "Provider not found");
-    return c.json(await testProvider(provider, body.model));
-  })
-  .put("/ai/routes", async (c) => {
-    const body = await parseJson(
-      c,
-      z.object({
-        capability: z.string().refine((v) => v === "default" || (KNOWN_CAPABILITIES as readonly string[]).includes(v), "unknown capability"),
-        primary: z.object({ providerId: z.string(), model: z.string().trim().min(1) }),
-        fallback: z.object({ providerId: z.string(), model: z.string().trim().min(1) }).nullable().optional(),
-        temperature: z.number().min(0).max(2).nullable().optional(),
-      }),
-    );
     const me = c.get("user");
-    const owned = await db(c.env).select({ id: aiProviders.id }).from(aiProviders).where(eq(aiProviders.orgId, me.orgId));
-    const ids = new Set(owned.map((o) => o.id));
-    if (!ids.has(body.primary.providerId) || (body.fallback && !ids.has(body.fallback.providerId))) throw new HttpError(400, "VALIDATION", "Unknown provider");
-    const values = {
-      orgId: me.orgId,
-      capability: body.capability,
-      primaryProviderId: body.primary.providerId,
-      primaryModel: body.primary.model,
-      fallbackProviderId: body.fallback?.providerId ?? null,
-      fallbackModel: body.fallback?.model ?? null,
-      temperature: body.temperature ?? null,
-      updatedAt: Date.now(),
-    };
-    await db(c.env).insert(aiRoutes).values(values).onConflictDoUpdate({ target: [aiRoutes.orgId, aiRoutes.capability], set: values });
-    return c.json({ ok: true });
-  })
-  .delete("/ai/routes/:capability", async (c) => {
-    await db(c.env)
-      .delete(aiRoutes)
-      .where(and(eq(aiRoutes.orgId, c.get("user").orgId), eq(aiRoutes.capability, c.req.param("capability"))));
-    return c.json({ ok: true });
+    const body = await parseJson(c, z.object({ model: z.string().min(1).optional() }).default({}));
+    const row = (await db(c.env).select().from(aiProviders).where(and(eq(aiProviders.id, c.req.param("id")), eq(aiProviders.orgId, me.orgId))).limit(1))[0];
+    if (!row) throw new HttpError(404, "NOT_FOUND", "Provider not found");
+    const provider = { id: row.id, kind: row.kind, name: row.name, baseUrl: row.baseUrl, apiKey: await openSecret(row.apiKeySealed, secret(c.env, "AI_CONFIG_KEY")) };
+    return c.json(await testProvider(provider, body.model ?? row.model));
   });
+
+async function disableOthers(env: Env, orgId: string, keepId: string): Promise<void> {
+  await db(env).update(aiProviders).set({ enabled: false, updatedAt: Date.now() }).where(and(eq(aiProviders.orgId, orgId), ne(aiProviders.id, keepId)));
+}

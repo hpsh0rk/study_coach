@@ -15,9 +15,9 @@ pnpm admin:create --username admin          # prints a one-time password; change
 pnpm dev                                    # builds the web app, serves everything on http://127.0.0.1:8787
 ```
 
-- Flow: upload PDF → choose chapters/pages (printed page numbers) → lesson settings → outline (±15% time budget; over-budget confirm needs an explicit acknowledgement) → generate, edit/undo/regenerate per slide → present (←/→, S speaker notes, F fullscreen, B blank) or share a read-only link.
-- `/admin` creates teacher accounts and configures the AI provider: DeepSeek, GLM, or any OpenAI-compatible endpoint (base URL + key + model). Keys are encrypted in D1 with `AI_CONFIG_KEY`. With no provider configured, local dev falls back to a deterministic stub (`AI_ALLOW_STUB=true`).
-- `/dev/gallery` renders every layout at its hard content budget (English and Chinese); `/dev/render` renders a deck JSON.
+- Flow: upload PDF → choose chapters/pages (printed page numbers; scanned pages are flagged and their text can be pasted) → lesson settings → outline (±15% time budget; over-budget confirm needs an explicit acknowledgement) → generate, edit/undo/regenerate per slide → present (←/→, S speaker notes, F fullscreen, B blank) or share a read-only link frozen at one outline version (unshare any time).
+- `/admin` creates teacher accounts and configures the AI model: one enabled provider (DeepSeek, GLM, or any OpenAI-compatible endpoint: base URL + key) plus one model name serves every call. Keys are encrypted in D1 with `AI_CONFIG_KEY`. With no model enabled, local dev falls back to a deterministic stub (`AI_ALLOW_STUB=true`).
+- `/dev/gallery` renders every layout at its hard content budget (English and Chinese); `/dev/render` renders a deck JSON. Both exist only under `vite dev` and in builds made with `KJ_DEV_PAGES=1` (the e2e server and `eval:render` set it); production builds leave them out.
 - Built-in simulations live in `apps/web/public/sims/` and are listed in `EMBED_CATALOG` (`packages/widgets`). Experiment pages are only planned when a catalog sim matches the chapter.
 - Secrets: copy `apps/app/.dev.vars.example` to `apps/app/.dev.vars`. Local dev also works without it, using development-only fallback keys.
 - For web-only work, run `pnpm --filter @kj/web dev` (Vite on :5173, proxying the API to :8787).
@@ -25,14 +25,14 @@ pnpm dev                                    # builds the web app, serves everyth
 ## Tests
 
 ```bash
-pnpm lint          # ESLint + model calls only in packages/ai + dependency-cruiser boundaries
+pnpm lint          # ESLint + model SDKs/endpoints only in packages/ai + dependency-cruiser boundaries
 pnpm typecheck
 pnpm test          # vitest across all packages; apps/app runs inside workerd (D1 gate, auth, slide reuse/undo)
 pnpm test:e2e --project=overflow --project=e2e   # Playwright: max-budget fit per layout + full teacher flow on :8788
 SHOTS_DIR=out pnpm test:e2e --project=e2e        # same flow, saving a screenshot per step
 ```
 
-CI installs `fonts-noto-cjk` so the overflow test measures real CJK glyphs.
+CI installs `fonts-noto-cjk` so the overflow test measures real CJK glyphs. `node scripts/make-fixture-pdf.mjs` regenerates the e2e PDFs (`waves-mini.pdf`, and `newton-zh-cid.pdf`: Chinese in a non-embedded CID font plus two scanned pages). `node scripts/bench-pbkdf2.mjs` measures the password-hash cost (see architecture §9).
 
 ## Evals (`tools/eval`)
 

@@ -1,8 +1,19 @@
 /**
- * PBKDF2-SHA256 via WebCrypto (no WASM, fits the Workers CPU budget).
- * Stored as "pbkdf2-sha256$<iterations>$<salt b64>$<hash b64>" so the cost can change without a migration.
+ * PBKDF2-SHA256 via WebCrypto (no WASM).
+ * Stored as "pbkdf2-sha256$<iterations>$<salt b64>$<hash b64>" so the cost can change without a migration;
+ * logins rehash any other cost to the current one.
+ *
+ * 15k iterations ≈ 3 ms CPU (`node scripts/bench-pbkdf2.mjs`), so changing a password (verify + hash)
+ * stays inside the Workers free plan's 10 ms. That is far below OWASP's 600k: see docs/architecture.md.
  */
-export const PBKDF2_ITERATIONS = 100_000;
+export const PBKDF2_ITERATIONS = 15_000;
+
+/** Same cost as a real hash, so an unknown username takes as long as a wrong password. Never matches. */
+export const DUMMY_HASH = `pbkdf2-sha256$${PBKDF2_ITERATIONS}$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA`;
+
+export function needsRehash(encoded: string): boolean {
+  return encoded.split("$")[1] !== String(PBKDF2_ITERATIONS);
+}
 
 function b64(bytes: Uint8Array): string {
   let s = "";

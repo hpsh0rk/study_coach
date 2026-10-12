@@ -4,15 +4,11 @@ import { z } from "zod";
 import { auditLog, loginAttempts, users } from "../db/schema.ts";
 import type { AppBindings, Env } from "../env.ts";
 import { HttpError, parseJson } from "../http.ts";
-import { hashPassword, passwordProblem, verifyPassword } from "../auth/password.ts";
+import { DUMMY_HASH, hashPassword, needsRehash, passwordProblem, verifyPassword } from "../auth/password.ts";
 import { createSession, db, destroySession, destroyUserSessions, loadSessionUser, requireUser } from "../auth/session.ts";
 
 const WINDOW_MS = 15 * 60_000;
 const MAX_FAILURES = 8;
-/** Verifying against a dummy hash keeps response time the same for unknown usernames. Lazy: Workers forbid randomness at global scope. */
-let dummyHash: string | undefined;
-const getDummyHash = async () => (dummyHash ??= await hashPassword("dummy-password-1"));
-
 async function tooManyAttempts(env: Env, keys: string[]): Promise<boolean> {
   const now = Date.now();
   for (const key of keys) {
@@ -42,10 +38,13 @@ export const authRoutes = new Hono<AppBindings>()
     const keys = [`u:${username}`, `ip:${ip}`];
     if (await tooManyAttempts(c.env, keys)) throw new HttpError(429, "RATE_LIMITED", "Too many attempts, try again in 15 minutes · 尝试次数过多，请 15 分钟后再试");
     const user = (await db(c.env).select().from(users).where(eq(users.username, username)).limit(1))[0];
-    const ok = (await verifyPassword(body.password, user?.passwordHash ?? (await getDummyHash()))) && !!user && !user.disabledAt;
+    const ok = (await verifyPassword(body.password, user?.passwordHash ?? DUMMY_HASH)) && !!user && !user.disabledAt;
     if (!ok || !user) {
       await recordFailure(c.env, keys);
       throw new HttpError(401, "INVALID_CREDENTIALS", "Wrong username or password · 用户名或密码错误");
+    }
+    if (needsRehash(user.passwordHash)) {
+      await db(c.env).update(users).set({ passwordHash: await hashPassword(body.password) }).where(eq(users.id, user.id));
     }
     await db(c.env).delete(loginAttempts).where(eq(loginAttempts.key, `u:${username}`));
     await createSession(c, user.id);

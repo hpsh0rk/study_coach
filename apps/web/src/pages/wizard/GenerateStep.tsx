@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { PAGE_TYPES } from "@kj/pedagogy";
 import type { Slide, SlideSpec } from "@kj/schema";
@@ -6,27 +6,120 @@ import { ApiError } from "../../api.ts";
 import { SlotEditor } from "../../components/SlotEditor.tsx";
 import { SlidePreview, SlideThumb } from "../../components/SlideView.tsx";
 import { UnverifiedBadge, UnverifiedBox } from "../../components/Unverified.tsx";
-import { documentApi, lessonApi, type LessonView } from "../../lessonApi.ts";
+import { documentApi, lessonApi, type FlaggedSlide, type LessonView, type ShareView } from "../../lessonApi.ts";
 import { downloadOfflineHtml } from "../../offline/exportDeck.ts";
 import { openPresenter } from "../PlayPages.tsx";
 import { Stepper, StepIntro, type StepKey } from "./Stepper.tsx";
 
 const CONCURRENCY = 2;
 
+/** Share link status: copy, unshare, move to the current version, and the pre-share review of flagged pages. */
+function SharePanel({ lessonId, initial, current, canShare }: { lessonId: string; initial: ShareView | null; current: { id: string; version: number }; canShare: boolean }) {
+  const [share, setShare] = useState(initial);
+  const [review, setReview] = useState<{ body: { versionId?: string }; pages: FlaggedSlide[] } | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState("");
+  const url = share ? `${location.origin}${share.path}` : "";
+
+  async function doShare(body: { versionId?: string }, ack = false) {
+    setError("");
+    try {
+      const next = await lessonApi.share(lessonId, { ...body, ack });
+      setShare(next);
+      setReview(null);
+      await navigator.clipboard?.writeText(`${location.origin}${next.path}`).then(
+        () => setCopied(true),
+        () => undefined,
+      );
+    } catch (e) {
+      if (e instanceof ApiError && e.code === "SHARE_REVIEW_REQUIRED") setReview({ body, pages: e.detail as FlaggedSlide[] });
+      else setError(e instanceof ApiError ? e.message : (e as Error).message);
+    }
+  }
+
+  async function unshare() {
+    if (!window.confirm("取消分享后，学生手里的链接会立即失效。确定吗？· Students' link stops working. Unshare?")) return;
+    setError("");
+    try {
+      await lessonApi.unshare(lessonId);
+      setShare(null);
+      setCopied(false);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  return (
+    <>
+      {!share ? (
+        <button className="btn ghost" disabled={!canShare} onClick={() => doShare({})} data-testid="share">
+          分享链接 Share
+        </button>
+      ) : (
+        <div className="alert success share-box" data-testid="share-box">
+          已分享第 {share.version} 版 · 学生可以用这个链接查看（不含讲稿和误区提示）：
+          <a href={url} target="_blank" rel="noreferrer" data-testid="share-url">
+            {url}
+          </a>
+          <div className="row wrap">
+            <button className="btn small" onClick={() => navigator.clipboard?.writeText(url).then(() => setCopied(true), () => undefined)}>
+              {copied ? "已复制 Copied" : "复制链接 Copy"}
+            </button>
+            {share.versionId !== current.id && (
+              <button className="btn small" onClick={() => doShare({ versionId: current.id })} data-testid="share-update">
+                改为分享第 {current.version} 版 · Share version {current.version}
+              </button>
+            )}
+            <button className="btn small ghost" onClick={unshare} data-testid="unshare">
+              取消分享 Unshare
+            </button>
+          </div>
+          {share.held.length > 0 && (
+            <p className="small" data-testid="share-held">
+              第 {share.held.join("、")} 页在分享之后改过，并且含有网址或像指令的文字，学生暂时看不到。检查后点
+              <button className="link" onClick={() => doShare({ versionId: share.versionId })}>
+                重新分享
+              </button>
+              。
+            </p>
+          )}
+        </div>
+      )}
+      {review && (
+        <div className="alert warn" role="alert" data-testid="share-review">
+          <p>这些页含有网址、邮箱或像指令的文字，学生会看到。请先检查（可能来自教材，也可能是被人插入的内容）：· Check these pages before sharing:</p>
+          <ul>
+            {review.pages.map((p) => (
+              <li key={p.page}>
+                第 {p.page} 页「{p.title}」：{p.issues.join("；")}
+              </li>
+            ))}
+          </ul>
+          <button className="btn small" onClick={() => doShare(review.body, true)} data-testid="share-ack">
+            已检查，仍然分享 · Share anyway
+          </button>{" "}
+          <button className="btn small ghost" onClick={() => setReview(null)}>
+            先不分享 Cancel
+          </button>
+        </div>
+      )}
+      {error && <div className="alert error">{error}</div>}
+    </>
+  );
+}
+
 export function GenerateStep({ view, reached }: { view: LessonView; reached: StepKey }) {
   const nav = useNavigate();
-  const confirmed = view.version?.confirmedAt ? view.version : null;
+  const confirmed = view.confirmed;
   const specs: SlideSpec[] = useMemo(() => confirmed?.outline.slides ?? [], [confirmed]);
   const [slides, setSlides] = useState<Record<string, Slide>>(() => Object.fromEntries(view.slides.map((s) => [s.specId, s])));
   const [running, setRunning] = useState<Set<string>>(new Set());
   const [failed, setFailed] = useState<Record<string, string>>({});
   const [selected, setSelected] = useState<string | null>(specs[0]?.id ?? null);
-  const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [source, setSource] = useState<{ no: number; text: string; label: string | null } | null>(null);
   const [editing, setEditing] = useState(false);
   const [exporting, setExporting] = useState("");
   const [exportError, setExportError] = useState("");
-  const stop = useRef(false);
   const theme = view.lesson.theme;
 
   const labels = view.pageLabels;
@@ -52,14 +145,13 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
   );
 
   async function generateAll() {
-    stop.current = false;
     const missing = specs.filter((s) => !slides[s.id]);
     // Worked examples first, so faded and practice pages can mirror their problem.
     for (const todo of [missing.filter((s) => s.pageType === "worked"), missing.filter((s) => s.pageType !== "worked")].map((l) => l.map((s) => s.id))) {
       let next = 0;
       await Promise.all(
         Array.from({ length: CONCURRENCY }, async () => {
-          while (next < todo.length && !stop.current) await generateOne(todo[next++]!);
+          while (next < todo.length) await generateOne(todo[next++]!);
         }),
       );
     }
@@ -122,7 +214,7 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
           </button>
           <details className="menu">
             <summary className="btn ghost" aria-disabled={done === 0}>
-              导出 / 分享 Export ▾
+              导出 Export ▾
             </summary>
             <div className="menu-list card">
               <button
@@ -157,28 +249,22 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
               >
                 数据 JSON
               </button>
-              <button
-                className="btn ghost"
-                disabled={done === 0}
-                onClick={async () => {
-                  const r = await lessonApi.share(view.lesson.id);
-                  const url = `${location.origin}${r.path}`;
-                  setShareUrl(url);
-                  await navigator.clipboard?.writeText(url).catch(() => undefined);
-                }}
-              >
-                学生分享链接 Share link
-              </button>
             </div>
           </details>
         </div>
       </div>
       {exportError && <div className="alert error">导出失败 Export failed: {exportError}</div>}
-      {shareUrl && (
-        <div className="alert success">
-          学生可以用这个链接查看（不含讲稿）· Read-only link (no speaker notes): <a href={shareUrl}>{shareUrl}</a>
+      {view.draft && (
+        <div className="alert info" data-testid="draft-banner">
+          这里是已确认的第 {confirmed.version} 版。还有一份未确认的新大纲（第 {view.draft.version} 版），确认后才会用到它。· A newer outline draft is waiting for confirmation.{" "}
+          <button className="btn small" onClick={() => nav(`/lessons/${view.lesson.id}/outline`)}>
+            去确认新大纲 →
+          </button>
         </div>
       )}
+      <div className="share-row">
+        <SharePanel lessonId={view.lesson.id} initial={view.share} current={confirmed} canShare={done > 0} />
+      </div>
       <div className="gen-body">
         <ol className="thumb-grid">
           {specs.map((s, i) => {

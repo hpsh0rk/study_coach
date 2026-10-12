@@ -82,19 +82,26 @@ export function outlineTiming(outline: Pick<Outline, "slides">, params: Pick<Les
 /** Rough teaching time for a selection: about 6 minutes per 1000 words of textbook text (F-01). */
 export const MINUTES_PER_1000_WORDS = 6;
 
+/** Source characters the outline planner reads (about 15k tokens); later pages are not read and go to notCovered. */
+export const OUTLINE_SOURCE_CHARS = 60_000;
+
 export interface ScopeAdvice {
   estimatedMinutes: number;
   /** Lessons of the chosen length the selection would need. */
   lessons: number;
+  /** More than one lesson's worth, or pages the planner cannot read: never shown as a good fit. */
   tooMuch: boolean;
+  unreadPages: number;
 }
 
-export function scopeAdvice(words: number, lessonMinutes: number): ScopeAdvice {
+/** `unreadPages`: selected pages beyond OUTLINE_SOURCE_CHARS (the caller computes them from page lengths). */
+export function scopeAdvice(words: number, lessonMinutes: number, unreadPages = 0): ScopeAdvice {
   const estimatedMinutes = Math.round((words / 1000) * MINUTES_PER_1000_WORDS);
   return {
     estimatedMinutes,
-    lessons: Math.max(1, Math.ceil(estimatedMinutes / lessonMinutes - 0.2)),
-    tooMuch: estimatedMinutes > lessonMinutes * 1.2,
+    lessons: Math.max(unreadPages > 0 ? 2 : 1, Math.ceil(estimatedMinutes / lessonMinutes - 0.2)),
+    tooMuch: estimatedMinutes > lessonMinutes * 1.2 || unreadPages > 0,
+    unreadPages,
   };
 }
 

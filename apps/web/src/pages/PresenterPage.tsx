@@ -48,7 +48,7 @@ export function PresenterPage() {
   useEffect(() => {
     lessonApi
       .get(id)
-      .then((v) => setData({ title: v.lesson.title, slides: v.slides, theme: v.lesson.theme, minutes: v.version?.params.minutes ?? v.lesson.params.minutes, pageLabels: v.pageLabels }))
+      .then((v) => setData({ title: v.lesson.title, slides: v.slides, theme: v.lesson.theme, minutes: v.confirmed?.params.minutes ?? v.lesson.params.minutes, pageLabels: v.pageLabels }))
       .catch((e) => setError((e as Error).message));
   }, [id]);
   useEffect(() => {

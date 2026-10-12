@@ -9,7 +9,7 @@
 - **产品主线只有一条**：上传 PDF → 选章节 → 设置这节课 → **确认时间预算大纲（唯一强制卡点）** → 逐页生成、可编辑 → 放映 / 分享。界面是线性的五步向导，每步只有一个主按钮。
 - **运行时只用 Workers + Static Assets + D1**，`wrangler dev` 本地免费运行，适配 Workers 免费版（每次调用 10ms CPU、50 次 D1 查询）。没有 Durable Objects、Workflows、Queues、R2、Containers。
 - **PDF 在老师浏览器里用 pdf.js 解析**；服务端只存“章节树 + 每页文本 + 印刷页码”。
-- **密码用 WebCrypto PBKDF2-SHA256**。
+- **密码用 WebCrypto PBKDF2-SHA256，15k 次迭代**（约 3ms CPU，适配免费版 10ms；取舍见 §9）。
 - **卡点 = SQLite 触发器 + 409**：已确认的大纲版本不可改不可删；页面只能挂在已确认版本上；生成接口对未确认版本返回 409。超出课时 ±15% 时确认需要老师显式“仍然确认”，服务端同样强制（409 → 带 ack 重试）。
 - **每个大纲版本快照自己的课时参数与页码范围**；之后改设置不会悄悄改变已有版本的含义，界面提示“需重新生成大纲”。
 - **生成幂等、可复用**：页面按 `slideKey` 跨版本复用。`slideKey` 由 `generation` 导出，只包含 writer 真正读取的输入（规格的页型、版式、标题、目的、要点、视觉、分钟、页码，加学生水平和授课语言）；改“本节重点”或课时长度不会作废已生成或手改的页。“修改大纲”复制源版本的参数与范围快照。单页可“重新生成”、按槽位表单编辑、撤销一步。
@@ -19,7 +19,8 @@
 - **课件 = 8 个固定版式 + 带内容预算的类型化槽位**。LLM 只填内容；CSS Grid 落位；浏览器实测溢出；学生要读的字不小于 48px。每个版式按硬预算填满（中 / 英，含表格、流程图、图示待补变体）都能放下，最后一步揭示后没有隐藏的元素，由 Playwright 在 CI 中验证（CI 安装 Noto CJK 字体）。
 - **生成流水线在一个包 `@kj/generation`**（大纲 + 单页），消融开关是一个带默认值的普通对象 `PipelineOptions`；评测驱动在产品代码之外的 `tools/eval`。
 - **模块单向依赖，dependency-cruiser 在 CI 中强制**；只有 `packages/ai` 能发起模型请求。
-- AI 模型在后台配置（DeepSeek / GLM / OpenAI 兼容），未配置时本地与测试使用确定性 stub。
+- AI 模型在后台配置：**一个启用的提供方 + 一个模型名**服务所有调用（DeepSeek / GLM / OpenAI 兼容），未启用时本地与测试使用确定性 stub。
+- **第 5 步与分享只看已确认版本**：新的未确认草稿不会挡住放映和分享；分享链接冻结一个版本，学生版不含讲稿和误区标签，账号停用即失效。
 
 ---
 
@@ -28,6 +29,7 @@
 ```
 老师浏览器（React SPA，apps/web）
  ├─ pdf.js 解析目录、每页文本、印刷页码（getPageLabels）→ 分批上传（每批 40 页）
+ │   CMap 与标准字体随 SPA 发布在 /pdfjs/（中文 CID 字体的 PDF 没有它们就抽不出字）
  ├─ 向导：上传 → 章节（树 / 按书上页码输入，首尾页预览，字数估时与拆课提示）
  │        → 课堂设置 → 大纲（时间条、密度灯、未覆盖、术语表；规则与服务端同一份代码）
  │        → 生成（先例题后其余，并发 2；单页重新生成 / 槽位编辑 / 撤销 / 待核实）→ 放映 / 分享
@@ -39,12 +41,14 @@ Worker（Hono，apps/app）
  ├─ routes（HTTP 边界、鉴权、zod 校验、用例编排）
  ├─ generation（draftOutline / writeSlide）→ ai（唯一模型出口）→ DeepSeek / GLM / OpenAI 兼容
  └─ store（D1 仓储：快照、复用、聚合查询）
-D1：orgs, users, sessions, login_attempts, ai_providers, ai_routes, ai_calls, audit_log,
+D1：orgs, users, sessions, login_attempts, ai_providers, ai_calls, audit_log,
     documents, pages, chapters, lessons, outline_versions, slides, share_links
 静态资源：SPA、字体（Arimo、Noto Sans SC）、KaTeX、内置实验 /sims/*.html
 ```
 
-关闭标签页会中断生成；重新打开后“继续生成”只补缺失的页。需要后台生成时再引入 Workflows，`writeSlide()` 原样作为 step 主体。
+关闭标签页会中断逐页生成；重新打开后“继续生成”只补缺失的页。需要后台生成时再引入 Workflows，`writeSlide()` 原样作为 step 主体。
+
+起草大纲有服务端锁：`lessons.drafting_until`（150 秒）用一条条件 UPDATE 抢占，同一节课同时只有一次起草（双击、刷新、另一个标签页 → 409 `DRAFT_IN_PROGRESS`，不会重复计费或生成两个版本）。请求断开后 `waitUntil` 让已开始的起草跑完；界面按 `drafting` 每 3 秒轮询并显示已用秒数。请求死掉时锁到期自动释放。
 
 ---
 
@@ -78,7 +82,7 @@ D1：orgs, users, sessions, login_attempts, ai_providers, ai_routes, ai_calls, a
 | `product-code-never-imports-tools` | `apps/*`、`packages/*` 不得导入 `tools/*` |
 | `ai-layer-is-generic` | `ai` 只依赖 `schema`，不认识课、版式、教学规则 |
 | `pedagogy-has-no-io` | `pedagogy` 不得依赖 `ai`、`generation`、`player`、`pdf-structure` |
-| AI 出口检查 | 模型 SDK 只能在 `packages/ai`（ESLint + `scripts/check-ai-boundary.mjs`，扫描 apps、packages、tools） |
+| AI 出口检查 | 只有 `packages/ai` 能导入模型 SDK 或写模型端点（`scripts/check-ai-boundary.mjs`，扫描 apps、packages、tools、scripts；这是这条边界唯一的检查） |
 
 ---
 
@@ -87,15 +91,15 @@ D1：orgs, users, sessions, login_attempts, ai_providers, ai_routes, ai_calls, a
 | 模块 | 单一职责 | 公共接口（摘要） |
 |---|---|---|
 | `schema` | 跨模块数据契约 | `ParsedPdf`、`PageText{no, text, label?}`、`ChapterNode`、`LessonParams`、`PageType`、`LayoutId`、`SlideSpec{…, sourceIssue?}`、`Outline{objectives, slides, glossary, notCovered}`、`SlideContent`（按版式区分的联合）、`Slide{…, unverified?, canUndo?}`、`Unverified{kind: number\|formula\|calc\|source, text, detail}`、`WidgetSpec`（含 `table`、`placeholder`）、`ThemeId`；`newId()`、`sha256Hex()`、`countWords()` |
-| `pdf-structure` | 目录 + 页文本 → 章节树、范围、源文本 | `buildChapterTree`、`rangesForChapters`、`normalizeRanges`、`pagesInRanges`、`countPages`、`sourceForRanges(pages, ranges, maxChars) → {text, included, omitted}`、`labelOf`、`formatPages`、`pageForLabel`（按印刷页码解析输入）、`detectTextLayer`、`subtreeIds`；浏览器入口 `parsePdf(data, title, onProgress)` |
+| `pdf-structure` | 目录 + 页文本 → 章节树、范围、源文本 | `buildChapterTree`、`rangesForChapters`、`normalizeRanges`、`pagesInRanges`、`countPages`、`sourceForRanges(pages, ranges, maxChars) → {text, included, omitted}`、`sourceCut(pageSizes, maxChars)`（只按长度预测哪些页读不进）、`isEmptyPage(words)`（< 5 词 = 扫描页）、`distributeText`（粘贴文字分到多页）、`labelOf`、`formatPages`、`pageForLabel`（按印刷页码解析输入）、`subtreeIds`；浏览器入口 `parsePdf(data, title, {onProgress, assets})`（配置 CMap / 标准字体；丢弃极小字号文字；页面有像指令的文字时再去掉白色文字） |
 | `widgets` | 声明式图示与交互：校验、表达式、渲染 | 核心：`validateWidget`、`compileExpr`（自写解析器，不用 eval）、`chartOption`、`functionOption`、`EMBED_CATALOG` / `resolveEmbed` / `findEmbed(text, minHits)`（整词匹配）；渲染入口 `renderWidget(spec, host, ctx) → {dispose}`（从不抛错：画不出来时显示“图示无法显示”占位） |
 | `templates` | 8 个固定版式：槽位 schema、内容预算、HTML 渲染、给老师看的槽位报错 | 核心：`LAYOUTS`、`layoutForPageType`、`PAGE_TYPE_VISUALS`、`SLOT_SCHEMAS` / `slotSchema`、`TABLE_SLOT` / `TABLE_NARROW_SLOT` / `FLOW_SLOT` / `PLACEHOLDER_SLOT`、`BUDGETS`、`FONT`、`maxBudgetContent(layout, lang)`、`galleryCells()`、`stepsOf`；`issues` 入口：`slotIssues(content)`（含过长列表遮住的逐条错误）、`widgetIssues`、`describeIssue`（中文：“要点 第 2 条：太长：最多 8 个英文词（约 14 个汉字）”）；渲染入口：`renderSlide(slide, {theme, interactive, badge, pageLabels, onSourceClick})`、`applyStep`、`fitSlide`、`measureOverflow`、`minBodyFontPx`、`THEMES` |
-| `pedagogy` | “内容量合适、流程合理”的可计算规则 | `PAGE_TYPES`（默认分钟、讲 / 练）、`TIME_TOLERANCE = 0.15`、`planBudget(params) → {minutes, minMinutes, maxMinutes}`、`outlineTiming → {totalMinutes, status, needsAck, …}`、`checkOutline`、`checkSlide`、`densityOf`、`scopeAdvice(words, minutes) → {estimatedMinutes, lessons, tooMuch}`（6 分钟 / 千词）、`MAX_LECTURE_RUN = 10`；数字核对 `verifyNumbers(content, sourceText, {pageType, notes}) → Unverified[]`（数字可按 10³ / 10⁶ / 百分比换算匹配；≤ 10 的整数忽略；公式的符号必须出现在源文某个含“=”的句子里；算式重算） |
-| `ai` | 唯一模型出口：结构化 JSON、修复一次、计量、stub | `createAiLayer({config, meter, allowStub})`、`ai.callStructured({capability, promptVersion, schema, messages, stub, ctx})`、`jsonSchemaOf(schema)`（WeakMap 缓存）、`testProvider`、`sealSecret/openSecret`、`PROVIDER_PRESETS` |
-| `generation` | 源文本 + 参数 → 时间预算大纲；大纲 + 规格 → 单页内容；一页的复用键 | `draftOutline(ai, DraftInput) → {outline, warnings}`、`normalizeOutline`（含 `checkSourcePages`、`enforceCheckCadence`）、`rebalanceMinutes`、`writeSlide(ai, outline, specId, WriteInput) → {content, notes, sources, warnings, unverified}`、`slideKey(spec, {level, language})`、`sourceUnverified(spec)`、`workedSpecFor`、`stubOutline` / `stubSlide`、`problemsOf` / `truncateLists` / `sanitizeWidgets` / `applyGlossary`、`PipelineOptions` / `DEFAULT_OPTIONS` / `optionsOf`、`OUTLINE_PROMPT_VERSION`、`SLIDE_PROMPT_VERSION` |
+| `pedagogy` | “内容量合适、流程合理”的可计算规则 | `PAGE_TYPES`（默认分钟、讲 / 练）、`TIME_TOLERANCE = 0.15`、`planBudget(params) → {minutes, minMinutes, maxMinutes}`、`outlineTiming → {totalMinutes, status, needsAck, …}`、`checkOutline`、`checkSlide`、`densityOf`、`scopeAdvice(words, minutes, unreadPages) → {estimatedMinutes, lessons, tooMuch}`（6 分钟 / 千词；有读不进的页时永远不算“合适”）、`OUTLINE_SOURCE_CHARS = 60_000`、`MAX_LECTURE_RUN = 10`；数字核对 `verifyNumbers(content, sourceText, {pageType, notes}) → Unverified[]`（数字可按 10³ / 10⁶ / 百分比换算匹配；≤ 10 的整数忽略；公式的符号必须出现在源文某个含“=”的句子里；算式重算） |
+| `ai` | 唯一模型出口：结构化 JSON、修复一次、计量、stub | `createAiLayer({config: {active: {provider, model} \| null}, meter, allowStub})`、`ai.callStructured({capability, promptVersion, schema, messages, stub, ctx})`、`jsonSchemaOf(schema)`（WeakMap 缓存）、`testProvider`、`sealSecret/openSecret`、`PROVIDER_PRESETS` |
+| `generation` | 源文本 + 参数 → 时间预算大纲；大纲 + 规格 → 单页内容；一页的复用键 | `draftOutline(ai, DraftInput) → {outline, warnings}`、`normalizeOutline`（含 `checkSourcePages`、`enforceCheckCadence`）、`rebalanceMinutes`、`writeSlide(ai, outline, specId, WriteInput) → {content, notes, sources, warnings, unverified}`、`slideKey(spec, {level, language})`、`sourceUnverified(spec)`、`workedSpecFor`、`stubOutline` / `stubSlide`、`problemsOf` / `truncateLists` / `sanitizeWidgets` / `applyGlossary`、`PipelineOptions` / `DEFAULT_OPTIONS` / `optionsOf`、`OUTLINE_PROMPT_VERSION`、`SLIDE_PROMPT_VERSION`；`neutralizeSource`（源文本里的 `<` `>` 换成全角，学生教材里的文字关不掉 `<source>`）、`suspiciousContent`（网址、邮箱、可下载文件、像指令的文字） |
 | `player` | 放映壳：16:9 缩放、翻页、分步、全屏、黑屏、讲稿；双窗口同步 | `new Player(host, {slides, theme, showNotes, badge, onSourceClick, pageLabels, start, onChange, onBlank})`（按键监听在 document 上，翻页器在任何焦点下都有效）、`setBlank`、`renderThumb`；`presenterSync(lessonId, {onPosition, onBlank, onHello}) → {position, blank, close}`、`answerKey(content)`；纯函数 `keyAction` / `nextPosition` / `prevPosition` |
 | `apps/app` | HTTP 边界 + 用例编排 + 持久化 | 路由见 §6；`store.ts`（快照、复用、聚合列表、导出）；`auth/*`（PBKDF2 + 会话 + 登录限速） |
-| `apps/web` | 老师界面 | 登录 / 改密 / 后台 / 我的课 / 五步向导（章节步显示内容量条）/ 槽位编辑器（按版式生成表单：实时字数、中文报错、图示无需 JSON、A/B/C/D 选答案、实时预览）/ 放映 / 演讲者窗口 / 离线导出（`src/offline/*`）/ 分享 / `/dev/gallery`、`/dev/render` |
+| `apps/web` | 老师界面 | 登录 / 改密 / 后台 / 我的课 / 五步向导（章节步显示内容量条）/ 槽位编辑器（按版式生成表单：实时字数、中文报错、图示无需 JSON、A/B/C/D 选答案、实时预览）/ 放映 / 演讲者窗口 / 离线导出（`src/offline/*`）/ 分享；`/dev/gallery`、`/dev/render` 只在 `vite dev` 和 `KJ_DEV_PAGES=1` 构建里（E2E、评测用），生产包不含 |
 | `tools/eval` | 消融评测（不属于产品） | `pnpm eval:run`（manifest 场景 → 流水线 → 每场景 × 次数一个 deck JSON）、`pnpm eval:render`（Chromium 渲染，写回 `slides[].overflow`）；`pnpm eval:run --noise` / `pnpm eval:faults`（注入故障，量每道防线的拦截率与干净数据上的误报率）；`AblationFlags = PipelineOptions + {scope, outline, renderMode, autoConfirm}` |
 
 ---
@@ -164,13 +168,14 @@ PipelineOptions = { budgetsInPrompt, outlineCheckRetry, slideCheckRetry, truncat
 
 | 表 | 列（摘要） | 约束 |
 |---|---|---|
-| `documents` | id, org_id, owner_id, filename, title, size_bytes, page_count, pages_received, has_text_layer, has_bookmarks | |
+| `documents` | id, org_id, owner_id, filename, title, size_bytes, page_count, pages_received, has_bookmarks | 扫描页由服务端按 `pages.words` 判断，不存标志 |
 | `pages` | document_id, no, text, label, words | PK(document_id, no) |
 | `chapters` | document_id, id, parent_id, ord, level, title, page_start, page_end, words | |
-| `lessons` | id, org_id, owner_id, document_id, title, scope, params, theme | |
-| `outline_versions` | id, lesson_id, version, outline, params, scope, spec_count, total_minutes, ack_over_budget, confirmed_at | UNIQUE(lesson_id, version)；触发器 `outline_versions_confirmed_no_update` / `_no_delete` |
+| `lessons` | id, org_id, owner_id, document_id, title, scope, params, theme, drafting_until | `drafting_until`：起草锁（§1） |
+| `outline_versions` | id, lesson_id, version, outline, params, scope, spec_count, rev, ack_over_budget, confirmed_at | UNIQUE(lesson_id, version)；触发器 `outline_versions_confirmed_no_update` / `_no_delete`；`rev` 乐观锁 |
 | `slides` | id, lesson_id, outline_version_id, spec_id, spec_hash（= slideKey）, layout, page_type, minutes, content, notes, sources, warnings, unverified, provider_id, prev_content, prev_notes | UNIQUE(outline_version_id, spec_id)；INDEX(lesson_id, spec_hash)；触发器 `slides_require_confirmed_insert` |
-| `share_links` | id, token_hash, lesson_id, created_by, revoked_at | 学生版不含讲稿 |
+| `share_links` | id, token_hash, lesson_id, version_id, reviewed_at, created_by, revoked_at | 每课最多一条有效链接；token = HMAC(密钥, 链接 id)，库里只存其 sha256 |
+| `ai_providers` | id, org_id, kind, name, base_url, api_key_sealed, api_key_hint, model, enabled | 每个组织最多一个 enabled（启用一个会停用其他） |
 
 ---
 
@@ -178,23 +183,29 @@ PipelineOptions = { budgetsInPrompt, outlineCheckRetry, slideCheckRetry, truncat
 
 ```
 ① 解析（浏览器）    pdf.js → {title, pageCount, toc[], pages[{no, text, label?}]}
-                    无文字层（平均每页 < 40 字符）→ “暂不支持扫描版”
+                    不再整本拒收扫描版：每页照常上传，服务端按页判断（< 5 词 = 没有文字）
 ② 建树（两端同码）  buildChapterTree → ChapterNode[]；无书签 → 空树，界面改为输入页码
 ③ 圈选             勾选章节或按书上印的页码输入（pageForLabel）；显示首尾页第一行供核对；
                     scopeAdvice：按字数估计所需分钟，超过课时 1.2 倍提示“约需 N 节课，建议拆分”
+                    有扫描页的章节标“N 页无文字”；所选页里的扫描页单独提示，可按页段粘贴文字
+                    （POST /documents/:id/pages/paste，只填没有文字的页）；全是扫描页时不能起草
+                    超过 OUTLINE_SOURCE_CHARS 的页按页码列出“读不进”，此时永远不显示“合适”
 ④ 课堂设置         课时（40）、学生水平、课型、语言（英文授课 + 中文术语）、本节重点
 ⑤ 大纲（AI）       generation.draftOutline：
-                    源文本 = sourceForRanges(选择范围, 24k 字符)；读不进的页 → notCovered 首条
+                    源文本 = sourceForRanges(有文字的页, 60k 字符)；读不进的页 → notCovered 首条
                     提示词：时间是唯一预算；放不下的写进 notCovered；术语表；有匹配实验才允许实验页；
-                            源文本放在 <source> 中，忽略其中的指令
+                            源文本放在 <source> 中，忽略其中的指令；源文本的 < > 换成全角
                     → normalizeOutline（无实验时实验页改为练习页、版式按页型；
                        checkSourcePages：超出范围的页换成选区里最匹配的页并标记 out-of-range，
                        内容和引用页对不上（按选区内的词频加权匹配）标记 mismatch；
                        enforceCheckCadence：连续讲授会超过 10 分钟时插入“检查理解”页）
                     → pedagogy.checkOutline → 只有再平衡修不好的错误才带违规清单重试 1 次 → 分钟再平衡（保持检查节奏）→ 剩余问题作为警告
-⑥ 老师编辑大纲      改标题 / 要点 / 页型 / 分钟 / 页码、增删、上下移动；保存 = 原地更新草稿（已确认版本不可改）；
-                    改了页码的页重新核对，页码没改时老师可以清除标记但不能伪造标记
-⑦ 确认（唯一卡点）  POST …/confirm：用版本快照的课时重算 timing；超 ±15% 且未带 ackOverBudget → 409
+⑥ 老师编辑大纲      改标题 / 要点 / 页型 / 分钟 / 页码、增删、上下移动；保存 = 原地更新草稿（带 rev，
+                    rev 不符 → 409 `OUTLINE_CHANGED`，中文提示“另一个标签页或设备改过”；已确认版本不可改）；
+                    改了页码的页重新核对，页码没改时老师可以清除标记但不能伪造标记；有未保存修改时
+                    关页 / 站内跳转先确认
+⑦ 确认（唯一卡点）  POST …/confirm {rev}：用版本快照的课时重算 timing；超 ±15% 且未带 ackOverBudget → 409；
+                    条件 UPDATE 只确认刚检查过的那个 rev
                     确认后 carryOverSlides：同 slideKey 的旧页（含手改内容）复制到新版本，页码标记按新规格刷新
 ⑧ 逐页生成（AI）    POST …/outline-versions/:vid/slides/:specId/generate {regenerate?}
                     未确认 → 409；已有或可复用 → 直接返回 {reused: true}（不调模型）
@@ -205,6 +216,7 @@ PipelineOptions = { budgetsInPrompt, outlineCheckRetry, slideCheckRetry, truncat
                       → 带问题清单重试 1 次 → 截断 → sanitizeWidgets（仍画不出来的图示 → 图示待补）
                       术语按术语表统一；实验页固定使用目录中的实验
                       unverified = 规格的页码标记 + verifyNumbers 结果，存进 slides.unverified
+                      suspiciousContent：网址 / 邮箱 / 文件 / 像指令的文字进 warnings
                     重新生成时旧内容存入 prev_*，可撤销
 ⑨ 编辑             PATCH /slides/:id {content?, notes?}：按版式槽位 schema（含硬预算）和图示校验，否则 422
                     （detail 为逐条 {path, message}，message 是中文；过长列表同时报条数和逐条字数）；
@@ -225,6 +237,12 @@ PipelineOptions = { budgetsInPrompt, outlineCheckRetry, slideCheckRetry, truncat
 - 生成与导出接口用 `confirmedOutline(version)` 读取大纲，未确认 → 409 `OUTLINE_NOT_CONFIRMED`。卡点就是“触发器 + 409”，没有额外的类型层。
 - 确认后再改大纲不是竞态：旧版本仍可生成它自己的页面；新版本需重新确认，确认时复用未变的页。
 
+**分享**
+
+- `POST /share`：已有有效链接时返回同一个 URL；`versionId` 把链接移到另一个已确认版本；默认选“页面齐全的最新已确认版本”。
+- 每次分享都是一次检查：学生可见文字里有网址、邮箱、可下载文件或像指令的文字 → 409 `SHARE_REVIEW_REQUIRED`（列出页码），老师带 `ack` 重试。分享之后才生成或改过、并且被标记的页，学生端暂不显示（`reviewed_at`），老师再分享一次即放出。
+- 学生 JSON 去掉讲稿、检查提示和测验误区标签；链接所属账号停用后 404；取消分享立即失效，再分享得到新 URL。
+
 **免费版约束**：我的课列表是一条带相关子查询的 SQL；页面上传每批 40 页（每页一条 upsert，留出鉴权等查询余量）；复用插入每批 5 行（D1 每条语句 ≤ 100 个绑定参数）；JSON Schema 预计算并缓存。
 
 ---
@@ -234,21 +252,22 @@ PipelineOptions = { budgetsInPrompt, outlineCheckRetry, slideCheckRetry, truncat
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | POST / GET | `/api/auth/login` · `/logout` · `/change-password` · `/me` | 白名单登录（PBKDF2），首次登录强制改密 |
-| * | `/api/admin/users…` · `/api/admin/ai…` | 管理员：账号、AI 提供方、按能力路由（`outline.draft`、`slide.write`） |
-| GET / POST | `/api/documents` | 列表；`{filename, title, sizeBytes, pageCount, hasTextLayer, chapters}` 新建 → `{id, pageBatch: 40}` |
+| * | `/api/admin/users…` · `/api/admin/ai…` | 管理员：账号、AI 模型（提供方 + 模型名，启用一个即停用其他；测试连接） |
+| GET / POST | `/api/documents` | 列表；`{filename, title, sizeBytes, pageCount, chapters}` 新建 → `{id, pageBatch: 40}` |
 | POST | `/api/documents/:id/pages` | `{pages:[{no, text, label?}]}` |
-| GET | `/api/documents/:id` · `/api/documents/:id/pages/:no` | 章节树、`pageLabels`、`pageWords`；某页原文与印刷页码 |
+| POST | `/api/documents/:id/pages/paste` | `{start, end, text}` → 文字分到范围内没有文字的页（有文字的页不动；一次最多 40 页） |
+| GET | `/api/documents/:id` · `/api/documents/:id/pages/:no` | 章节树、`pageLabels`、`pageWords`、`pageChars`；某页原文与印刷页码 |
 | GET / POST | `/api/lessons` | 列表（单条聚合 SQL）；`{documentId, chapterIds, ranges}` 新建 |
-| GET / PATCH | `/api/lessons/:id` | 课的全部状态（最新大纲版本含快照、页面、`pageLabels`、`scopeWords`）；更新 scope / params / theme / title |
-| POST | `/api/lessons/:id/outline` | 起草 → 新的未确认版本 |
-| PUT | `/api/lessons/:id/outline-versions/:vid` | 保存老师编辑（已确认版本 → 409 `OUTLINE_VERSION_IMMUTABLE`） |
-| POST | `/api/lessons/:id/outline-versions/:vid/confirm` | `{ackOverBudget?}`；超预算未确认 → 409 `OVER_BUDGET_ACK_REQUIRED`；返回复用后的页面 |
+| GET / PATCH | `/api/lessons/:id` | `{lesson{…, scopeWords, emptyPages, unreadPages}, draft, confirmed, slides（已确认版本的）, pageLabels, share, drafting}`（版本含快照）；更新 scope / params / theme / title |
+| POST | `/api/lessons/:id/outline` | 起草 → 新的未确认版本；全是扫描页 → 422 `NO_SOURCE_TEXT`；正在起草 → 409 `DRAFT_IN_PROGRESS` |
+| PUT | `/api/lessons/:id/outline-versions/:vid` | `{outline, rev}` 保存老师编辑；已确认 → 409 `OUTLINE_VERSION_IMMUTABLE`；rev 过期 → 409 `OUTLINE_CHANGED` |
+| POST | `/api/lessons/:id/outline-versions/:vid/confirm` | `{ackOverBudget?, rev?}`；超预算未确认 → 409 `OVER_BUDGET_ACK_REQUIRED`；返回复用后的页面 |
 | POST | `/api/lessons/:id/outline-versions/:vid/revise` | 以已确认版本为底稿新建草稿（复制它的参数与范围快照） |
 | POST | `/api/lessons/:id/outline-versions/:vid/slides/:specId/generate` | `{regenerate?}` → `{slide, reused}` |
 | PATCH | `/api/lessons/:id/slides/:slideId` | `{content?, notes?}`；槽位或图示校验失败 → 422 `INVALID_CONTENT`（`detail: [{path, message}]`，message 为中文）；返回重新核对后的 `unverified` |
 | POST | `/api/lessons/:id/slides/:slideId/undo` | 一步撤销；无可撤销 → 409 `NOTHING_TO_UNDO` |
 | GET | `/api/lessons/:id/deck` | 导出 deck JSON（版本快照的参数与范围，含讲稿与待核实；离线导出也用它） |
-| POST / DELETE | `/api/lessons/:id/share` | 学生分享链接；GET `/api/share/:token` 返回去掉讲稿的课件 |
+| POST / DELETE | `/api/lessons/:id/share` | `{versionId?, ack?}` → `{path, versionId, version, held}`（见 §5“分享”）；DELETE 取消分享。GET `/api/share/:token` 返回冻结版本的学生版课件 |
 
 ---
 
@@ -256,10 +275,10 @@ PipelineOptions = { budgetsInPrompt, outlineCheckRetry, slideCheckRetry, truncat
 
 | 层 | 内容 | 工具 |
 |---|---|---|
-| 单元 | schema 默认值与上限；pdf-structure 建树 / 范围 / 印刷页码；pedagogy 预算 / 时长 / 密度 / 估时；widgets 表达式安全、校验、整词匹配；templates 预算样本合法；generation：stub 预算、开关、实验门槛、notCovered、术语表、无全文回退、12k 上限、渐隐修复、重试 → 截断、编造数字重试、图示兜底、页码标记、检查节奏、slideKey；pedagogy 数字核对；templates 中文槽位报错；ai 层修复、回退、Schema 缓存；player 导航、演讲者同步、表达式坏掉不抛错、最后一步无隐藏元素；tools/eval 开关解析 | Vitest |
-| 卡点 / API | 未确认生成 → 409；超预算未确认 → 409，带 ack → 成功；触发器拒绝改已确认版本与给草稿插页；跨版本复用与幂等生成；改“本节重点”标点后修订或重新起草，所有页（含手改页）都保留；PATCH 校验（含坏图示、过长列表的逐条错误）与撤销；待核实；页码标记；快照；鉴权与 CSRF | `@cloudflare/vitest-pool-workers`（本地 D1） |
+| 单元 | schema 默认值与上限；pdf-structure 建树 / 范围 / 印刷页码；pedagogy 预算 / 时长 / 密度 / 估时；widgets 表达式安全、校验、整词匹配；templates 预算样本合法；generation：stub 预算、开关、实验门槛、notCovered、术语表、无全文回退、12k 上限、渐隐修复、重试 → 截断、源文本转义与可疑内容、编造数字重试、图示兜底、页码标记、检查节奏、slideKey；pedagogy 数字核对；templates 中文槽位报错；ai 层修复、回退、Schema 缓存；player 导航、演讲者同步、表达式坏掉不抛错、最后一步无隐藏元素；pdf-structure CID 字体中文抽取与隐藏文字；tools/eval 开关解析 | Vitest |
+| 卡点 / API | 未确认生成 → 409；超预算未确认 → 409，带 ack → 成功；触发器拒绝改已确认版本与给草稿插页；跨版本复用与幂等生成；改“本节重点”标点后修订或重新起草，所有页（含手改页）都保留；PATCH 校验（含坏图示、过长列表的逐条错误）与撤销；待核实；页码标记；快照；鉴权与 CSRF；扫描页 / 粘贴 / 不能凭空起草；60k 读不进的页；起草锁；rev 冲突；分享（同一 URL、冻结版本、移动、取消、去误区、停用账号、检查与暂扣）；单一 AI 模型配置；PBKDF2 换代 | `@cloudflare/vitest-pool-workers`（本地 D1） |
 | 溢出 | 8 个版式 × {示例, 英文满预算, 中文满预算} + 表格 / 流程图 / 图示待补变体（31 格）：`measureOverflow` 为空、正文 ≥ 48px、最后一步没有隐藏元素 | Playwright `overflow`（`/dev/gallery`，CI 装 `fonts-noto-cjk`） |
-| E2E | 登录 → 改密 → 上传 `waves-mini.pdf` → 选章节（内容量条）→ 设置 → 大纲（时间条）→ 超预算确认被拒 → “仍然确认” → 全部生成 → 编辑标题 → 撤销 → 待核实 → 编辑器（字数、中文报错、重新添加术语、流程图、A/B/C/D）→ 表格页 → 放映与演讲者窗口双向同步（答案只在演讲者窗口）→ 离线文件在断网的上下文里打开（无网络请求、字体加载、实验画布） | Playwright `e2e` + stub 模型；`SHOTS_DIR` 时每步截图 |
+| E2E | 登录 → 改密 → 上传 `waves-mini.pdf` → 选章节（内容量条）→ 设置 → 大纲（时间条）→ 超预算确认被拒 → “仍然确认” → 全部生成 → 编辑标题 → 撤销 → 待核实 → 编辑器（字数、中文报错、重新添加术语、流程图、A/B/C/D）→ 表格页 → 放映与演讲者窗口双向同步（答案只在演讲者窗口）→ 离线文件在断网的上下文里打开（无网络请求、字体加载、实验画布）→ 分享（学生无讲稿）→ 新草稿不挡放映 → 取消分享；中文 CID 字体 PDF（`newton-zh-cid.pdf`）抽出中文 → 扫描章节标记 → 粘贴文字 → 起草 → 两个标签页保存冲突 → 未保存离开提示 | Playwright `e2e` + stub 模型；`SHOTS_DIR` 时每步截图 |
 | 依赖边界 | dependency-cruiser + AI 出口检查 | `pnpm lint` |
 
 真模型质量评测（消融计划，见资料库 `docs/design/ablation-plan.md`）用 `tools/eval` 手动运行，不进 CI。
@@ -278,3 +297,11 @@ PipelineOptions = { budgetsInPrompt, outlineCheckRetry, slideCheckRetry, truncat
 | 先查库再新建、复制去年的课 | M1b |
 | pptx 导出 | 有老师明确需要交给学校系统 |
 | AI 生成实验 | `EMBED_CATALOG` 的 `src` 可替换，接入点已留 |
+
+---
+
+## 9. 密码哈希的取舍（PBKDF2 迭代次数）
+
+免费版每次调用 10ms CPU。`node scripts/bench-pbkdf2.mjs`（WebCrypto，与 Worker 同一原语）在 Xeon 上的中位数：10k ≈ 2.2ms、20k ≈ 4.0ms、30k ≈ 5.9ms、50k ≈ 9.5ms、100k ≈ 18.7ms。登录做 1 次推导，改密做 2 次（校验旧密码 + 生成新哈希），所以选 **15k（≈ 3ms / 次，改密 ≈ 6ms）**，给路由、D1 绑定和 JSON 留出余量。
+
+代价：离 OWASP 建议的 600k 差 40 倍，数据库泄露后离线猜测更便宜。缓解：只有白名单账号；登录按用户名和 IP 限速（15 分钟 8 次）；密码至少 8 位且含字母和数字；哈希不离开 D1。哈希串自带迭代次数，登录成功时把其他次数的哈希换成当前次数，所以改成付费版（CPU 上限 30s）后只需调大 `PBKDF2_ITERATIONS`（以及 `scripts/create-admin.mjs` 里的同名常量），老用户下次登录自动升级。未知用户名用同样次数的假哈希校验，响应时间一致。

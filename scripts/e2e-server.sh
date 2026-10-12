@@ -6,7 +6,7 @@ PERSIST="$PWD/.wrangler-e2e"
 PORT="${E2E_PORT:-8788}"
 rm -rf "$PERSIST"
 
-pnpm --filter @kj/web build >/dev/null
+KJ_DEV_PAGES=1 pnpm --filter @kj/web build >/dev/null
 cd apps/app
 npx wrangler d1 migrations apply DB --local --persist-to "$PERSIST" >/dev/null
 cd ../..

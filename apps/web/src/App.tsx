@@ -1,10 +1,8 @@
-import type { ReactNode } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { BrowserRouter, Link, NavLink, Route, Routes, useNavigate, useParams } from "react-router";
 import { AuthProvider, RequireAuth, useAuth } from "./auth.tsx";
 import { AdminPage } from "./pages/AdminPage.tsx";
 import { ChangePasswordPage, LoginPage } from "./pages/AuthPages.tsx";
-import { GalleryPage } from "./pages/dev/GalleryPage.tsx";
-import { RenderPage } from "./pages/dev/RenderPage.tsx";
 import { LessonPage } from "./pages/LessonPage.tsx";
 import { LessonsPage } from "./pages/LessonsPage.tsx";
 import { PlayPage, SharePage } from "./pages/PlayPages.tsx";
@@ -60,6 +58,17 @@ function NewChapters() {
   return <ChaptersStep key={docId} documentId={docId} reached="chapters" />;
 }
 
+const devRoutes = __KJ_DEV_PAGES__
+  ? (() => {
+      const GalleryPage = lazy(() => import("./pages/dev/GalleryPage.tsx").then((m) => ({ default: m.GalleryPage })));
+      const RenderPage = lazy(() => import("./pages/dev/RenderPage.tsx").then((m) => ({ default: m.RenderPage })));
+      return [
+        <Route key="gallery" path="/dev/gallery" element={<Suspense><GalleryPage /></Suspense>} />,
+        <Route key="render" path="/dev/render" element={<Suspense><RenderPage /></Suspense>} />,
+      ];
+    })()
+  : [];
+
 const authed = (node: ReactNode, admin = false) => (
   <RequireAuth admin={admin}>
     <Shell>{node}</Shell>
@@ -74,8 +83,7 @@ export function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/change-password" element={<ChangePasswordPage />} />
           <Route path="/s/:token" element={<SharePage />} />
-          <Route path="/dev/gallery" element={<GalleryPage />} />
-          <Route path="/dev/render" element={<RenderPage />} />
+          {devRoutes}
           <Route path="/play/:id" element={<RequireAuth><PlayPage /></RequireAuth>} />
           <Route path="/presenter/:id" element={<RequireAuth><PresenterPage /></RequireAuth>} />
           <Route path="/admin" element={authed(<AdminPage />, true)} />

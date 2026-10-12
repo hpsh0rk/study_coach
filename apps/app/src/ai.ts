@@ -1,32 +1,14 @@
-import { eq } from "drizzle-orm";
-import { createAiLayer, openSecret, type AiConfig, type CapabilityRoute } from "@kj/ai";
+import { and, eq, ne } from "drizzle-orm";
+import { createAiLayer, openSecret, type AiConfig } from "@kj/ai";
 import { db } from "./auth/session.ts";
-import { aiCalls, aiProviders, aiRoutes } from "./db/schema.ts";
+import { aiCalls, aiProviders } from "./db/schema.ts";
 import { secret, type Env } from "./env.ts";
 
 /** Provider, model and API key all come from the admin backend (D1), never from env vars. */
 export async function loadAiConfig(env: Env, orgId: string): Promise<AiConfig> {
-  const d = db(env);
-  const [providers, routes] = await Promise.all([
-    d.select().from(aiProviders).where(eq(aiProviders.orgId, orgId)),
-    d.select().from(aiRoutes).where(eq(aiRoutes.orgId, orgId)),
-  ]);
-  const key = secret(env, "AI_CONFIG_KEY");
-  return {
-    providers: await Promise.all(
-      providers.map(async (p) => ({ id: p.id, kind: p.kind, name: p.name, baseUrl: p.baseUrl, apiKey: await openSecret(p.apiKeySealed, key), enabled: p.enabled })),
-    ),
-    routes: Object.fromEntries(
-      routes.map((r): [string, CapabilityRoute] => [
-        r.capability,
-        {
-          primary: { providerId: r.primaryProviderId, model: r.primaryModel },
-          ...(r.fallbackProviderId && r.fallbackModel ? { fallback: { providerId: r.fallbackProviderId, model: r.fallbackModel } } : {}),
-          ...(r.temperature != null ? { temperature: r.temperature } : {}),
-        },
-      ]),
-    ),
-  };
+  const p = (await db(env).select().from(aiProviders).where(and(eq(aiProviders.orgId, orgId), eq(aiProviders.enabled, true), ne(aiProviders.model, ""))).limit(1))[0];
+  if (!p) return { active: null };
+  return { active: { provider: { id: p.id, kind: p.kind, name: p.name, baseUrl: p.baseUrl, apiKey: await openSecret(p.apiKeySealed, secret(env, "AI_CONFIG_KEY")) }, model: p.model } };
 }
 
 export function makeAi(env: Env, orgId: string) {
