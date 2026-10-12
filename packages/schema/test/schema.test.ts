@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Outline, PageText, suspiciousSpans } from "../src/index.ts";
+import { countWords, Outline, PageText, suspiciousSpans } from "../src/index.ts";
 
 const spec = { id: "s1", pageType: "concept", layout: "statement", title: "Waves carry energy", minutes: 3 };
 
@@ -41,5 +41,15 @@ describe("suspiciousSpans", () => {
     for (const t of ["F = ma, so a = F/m = 5 m/s².", "e.g. 3.14 × 10⁸ m/s", "Newton's first law: an object stays at rest.", "物体保持原有运动状态的性质叫做惯性。", "Ignore air resistance in this problem."]) {
       expect(suspiciousSpans(t), t).toEqual([]);
     }
+  });
+});
+
+describe("countWords", () => {
+  it("does not count links or slash paths toward word budgets", () => {
+    expect(countWords("In a longitudinal wave")).toBe(4);
+    expect(countWords("org/books/physics/pages/13-1-types-of-waves) In a longitudinal wave")).toBe(4);
+    expect(countWords("See https://openstax.org/books/college-physics now")).toBe(2);
+    expect(countWords("speed in km/h, v = d/t")).toBe(7);
+    expect(countWords("波长和频率")).toBe(3);
   });
 });

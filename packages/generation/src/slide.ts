@@ -3,8 +3,9 @@ import { jsonSchemaOf, type AiLayer, type CallContext } from "@kj/ai";
 import { PAGE_TYPES, verifyNumbers } from "@kj/pedagogy";
 import { LAYOUT_IDS, SlideContent, type GlossaryEntry, type LayoutId, type LessonParams, type Outline, type PageText, type SlideSpec, type Unverified } from "@kj/schema";
 import { BUDGETS, LAYOUTS, SLOT_SCHEMAS } from "@kj/templates";
+import { slotIssues, widgetIssues } from "@kj/templates/issues";
 import { findEmbed } from "@kj/widgets";
-import { applyGlossary, problemsOf, sanitizeWidgets, truncateLists } from "./checks.ts";
+import { applyGlossary, clipToBudgets, problemsOf, sanitizeWidgets, truncateLists } from "./checks.ts";
 import { optionsOf, type PipelineOptions } from "./options.ts";
 import { neutralizeSource, SOURCE_RULE, suspiciousContent } from "./safety.ts";
 import { stubSlide } from "./slide-stub.ts";
@@ -72,6 +73,16 @@ export function checkSourceText(sourcePages: number[], pages: PageText[]): strin
   const picked = cited.size ? pages.filter((p) => cited.has(p.no)) : pages;
   return picked.map((p) => p.text).join("\n");
 }
+
+/** The writer and its deterministic fallbacks could not produce a slide the editor accepts. */
+export class SlideInvalidError extends Error {
+  constructor(public readonly problems: string[]) {
+    super(`slide failed its own validation: ${problems.slice(0, 3).join("; ")}`);
+    this.name = "SlideInvalidError";
+  }
+}
+
+const invalidSlots = (c: SlideContent) => [...slotIssues(c), ...widgetIssues(c)].map((i) => `${i.path.join(".")}: ${i.message}`);
 
 export class SpecNotFoundError extends Error {
   constructor(specId: string) {
@@ -231,15 +242,21 @@ export async function writeSlide(ai: AiLayer, outline: Outline, specId: string, 
     content = finish(res.output.content);
     found = problemsOf(content, spec.pageType);
   }
-  if (found.errors.length && o.truncateFallback) {
-    content = truncateLists(content, spec.pageType);
-    found = problemsOf(content, spec.pageType);
-  }
-  const safe = sanitizeWidgets(content);
-  if (safe.replaced.length) {
+  // Fallbacks that always end in a slide the editor accepts (truncateFallback=false is an eval-only ablation).
+  const repair = (c: SlideContent) => {
+    const fixed = o.truncateFallback ? clipToBudgets(truncateLists(c, spec.pageType)) : c;
+    return sanitizeWidgets(fixed);
+  };
+  let safe = repair(content);
+  content = safe.content;
+  if (o.truncateFallback && invalidSlots(content).length) {
+    const before = invalidSlots(content);
+    safe = repair(finish(stubSlide({ spec, outline, lessonTitle: input.lessonTitle, pages }).content));
     content = safe.content;
-    found = problemsOf(content, spec.pageType);
+    if (invalidSlots(content).length) throw new SlideInvalidError(before);
+    safe = { ...safe, replaced: [...safe.replaced, `slide → deterministic fallback (${before.slice(0, 2).join("; ")})`] };
   }
+  found = problemsOf(content, spec.pageType);
   const notes = res.output.notes.slice(0, NOTES_MAX);
   return {
     content,

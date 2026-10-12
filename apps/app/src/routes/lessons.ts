@@ -1,7 +1,7 @@
 import { and, eq, isNull, lt, or } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
-import { checkSourcePages, draftOutline, problemsOf, slideKey, SpecNotFoundError, workedSpecFor, writeSlide, type PlannerSection } from "@kj/generation";
+import { checkSourcePages, draftOutline, problemsOf, slideKey, SlideInvalidError, SpecNotFoundError, workedSpecFor, writeSlide, type PlannerSection } from "@kj/generation";
 import { normalizeRanges, rangesForChapters } from "@kj/pdf-structure";
 import { checkOutline, outlineTiming } from "@kj/pedagogy";
 import { DEFAULT_PARAMS, LessonParams, newId, Outline, PageRange, sha256Hex, SlideContent, ThemeId, type ChapterNode, type LessonScope } from "@kj/schema";
@@ -341,6 +341,9 @@ export const lessonRoutes = new Hono<AppBindings>()
       pages: await scopePages(c.env, lesson.documentId, versionScope(v)),
       workedProblem: workedContent?.layout === "steps" ? workedContent.problem : undefined,
       ctx: { orgId: u.orgId, userId: u.id, lessonId: lesson.id },
+    }).catch((e: unknown) => {
+      if (e instanceof SlideInvalidError) throw new HttpError(502, "SLIDE_INVALID", "这一页没能生成合格的内容，请点“重新生成” · The slide could not be written within its budgets; regenerate it", e.problems.slice(0, 10));
+      throw e;
     });
     const current = (await d.select().from(slides).where(and(eq(slides.outlineVersionId, v.id), eq(slides.specId, specId))).limit(1))[0];
     const row = {
