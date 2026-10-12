@@ -359,7 +359,7 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
     await studentDl.saveAs(studentFile);
     const studentHtml = fs.readFileSync(studentFile, "utf8");
     for (const n of notes) expect(studentHtml).not.toContain(JSON.stringify(n).slice(1, 40));
-    expect(studentHtml).not.toContain("offline-presenter");
+    expect(studentHtml).toContain('"audience":"student"');
 
     const ctx = await browser.newContext({ offline: true, viewport: { width: 1280, height: 720 } });
     const network: string[] = [];
@@ -506,6 +506,25 @@ test("Chinese CID-font PDF: text is extracted, scanned pages are flagged and can
   await other.locator('.stepper [data-step="settings"] a').click();
   await expect.poll(() => asked).toContain("还没保存");
   await expect(other).toHaveURL(/\/outline$/);
+  // …and so does the browser's Back button.
+  let askedBack = "";
+  other.once("dialog", (d) => {
+    askedBack = d.message();
+    void d.dismiss();
+  });
+  await other.evaluate(() => history.back());
+  await expect.poll(() => askedBack).toContain("还没保存");
+  await expect(other).toHaveURL(/\/outline$/);
+  await expect(other.getByTestId("outline-row").first().getByLabel("标题 Title")).toHaveValue("标签页 B 的标题");
+
+  // The minutes box keeps what is typed and clamps only on blur.
+  const minutes = other.getByTestId("outline-row").first().getByLabel("分钟 Minutes");
+  await minutes.fill("");
+  await minutes.pressSequentially("0");
+  await expect(minutes).toHaveValue("0");
+  await minutes.blur();
+  await expect(minutes).toHaveValue("0.5");
+
   const closing = new Promise<string>((resolve) => other.once("dialog", (d) => (resolve(d.type()), void d.accept())));
   await other.close({ runBeforeUnload: true });
   expect(await closing).toBe("beforeunload");

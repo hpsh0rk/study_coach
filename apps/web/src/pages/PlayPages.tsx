@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { Player, presenterSync, type PlayerSlide, type Position, type PresenterSync } from "@kj/player";
-import type { ThemeId } from "@kj/schema";
+import type { TeachingLanguage, ThemeId } from "@kj/schema";
 import { api } from "../api.ts";
 import { documentApi, lessonApi } from "../lessonApi.ts";
 
@@ -18,6 +18,7 @@ export function PlayerHost({
   syncId,
   onPosition,
   onEscape,
+  language,
 }: {
   slides: PlayerSlide[];
   theme: ThemeId;
@@ -26,6 +27,7 @@ export function PlayerHost({
   syncId?: string;
   onPosition?: (pos: Position) => void;
   onEscape?: () => void;
+  language?: TeachingLanguage;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const report = useRef(onPosition);
@@ -43,6 +45,7 @@ export function PlayerHost({
       showNotes: false,
       onSourceClick: onSource,
       pageLabels,
+      language,
       onChange: (pos) => {
         sync?.position(pos);
         report.current?.(pos);
@@ -64,7 +67,7 @@ export function PlayerHost({
       sync?.close();
       p.dispose();
     };
-  }, [slides, theme, onSource, pageLabels, syncId]);
+  }, [slides, theme, onSource, pageLabels, syncId, language]);
   return <div ref={host} className="player-host" data-testid="player" />;
 }
 
@@ -77,13 +80,13 @@ export function PlayPage() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
   const [exit] = useState(() => () => navigate(`/lessons/${id}/slides`));
-  const [data, setData] = useState<{ slides: PlayerSlide[]; theme: ThemeId; documentId: string; pageLabels: Record<number, string> } | null>(null);
+  const [data, setData] = useState<{ slides: PlayerSlide[]; theme: ThemeId; documentId: string; pageLabels: Record<number, string>; language: TeachingLanguage } | null>(null);
   const [error, setError] = useState("");
   const [source, setSource] = useState<{ no: number; text: string; label: string | null } | null>(null);
   useEffect(() => {
     lessonApi
       .get(id)
-      .then((v) => setData({ slides: v.slides.map(({ notes: _n, ...s }) => ({ ...s, notes: "" })), theme: v.lesson.theme, documentId: v.lesson.documentId, pageLabels: v.pageLabels }))
+      .then((v) => setData({ slides: v.slides.map(({ notes: _n, ...s }) => ({ ...s, notes: "" })), theme: v.lesson.theme, documentId: v.lesson.documentId, pageLabels: v.pageLabels, language: (v.confirmed?.params ?? v.lesson.params).language }))
       .catch((e) => setError((e as Error).message));
   }, [id]);
   const docId = useRef<string | null>(null);
@@ -113,7 +116,7 @@ export function PlayPage() {
           演讲者视图 Presenter view ↗
         </button>
       </div>
-      <PlayerHost slides={data.slides} theme={data.theme} onSource={stableSource} pageLabels={data.pageLabels} syncId={id} onEscape={source ? undefined : exit} />
+      <PlayerHost slides={data.slides} theme={data.theme} onSource={stableSource} pageLabels={data.pageLabels} syncId={id} language={data.language} onEscape={source ? undefined : exit} />
       {source && (
         <div className="modal" onClick={() => setSource(null)}>
           <div className="modal-card card" onClick={(e) => e.stopPropagation()}>
@@ -133,18 +136,18 @@ export function PlayPage() {
 
 export function SharePage() {
   const { token = "" } = useParams();
-  const [data, setData] = useState<{ slides: PlayerSlide[]; theme: ThemeId; title: string; pageLabels: Record<number, string> } | null>(null);
+  const [data, setData] = useState<{ slides: PlayerSlide[]; theme: ThemeId; title: string; pageLabels: Record<number, string>; language?: TeachingLanguage } | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
-    api<{ lesson: { title: string; theme: ThemeId; pageLabels: Record<number, string> }; slides: PlayerSlide[] }>(`/api/share/${token}`)
-      .then((r) => setData({ slides: r.slides, theme: r.lesson.theme, title: r.lesson.title, pageLabels: r.lesson.pageLabels }))
+    api<{ lesson: { title: string; theme: ThemeId; pageLabels: Record<number, string>; language?: TeachingLanguage }; slides: PlayerSlide[] }>(`/api/share/${token}`)
+      .then((r) => setData({ slides: r.slides, theme: r.lesson.theme, title: r.lesson.title, pageLabels: r.lesson.pageLabels, language: r.lesson.language }))
       .catch((e) => setError((e as Error).message));
   }, [token]);
   if (error) return <div className="card narrow">{error}</div>;
   if (!data) return <div className="page-loading dark">Loading… 加载中</div>;
   return (
     <div className="play-page">
-      <PlayerHost slides={data.slides} theme={data.theme} pageLabels={data.pageLabels} />
+      <PlayerHost slides={data.slides} theme={data.theme} pageLabels={data.pageLabels} language={data.language} />
     </div>
   );
 }

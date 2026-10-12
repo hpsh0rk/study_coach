@@ -1,4 +1,4 @@
-import type { Slide, ThemeId } from "@kj/schema";
+import type { Slide, TeachingLanguage, ThemeId } from "@kj/schema";
 import { CANVAS, stepsOf } from "@kj/templates";
 import { applyStep, fitSlide, renderSlide, type RenderedSlide } from "@kj/templates/render";
 import { INK_COLORS, InkLayer, type Stroke } from "./ink.ts";
@@ -22,6 +22,7 @@ export interface PlayerOptions {
   onBlank?(on: boolean): void;
   onSourceClick?(page: number): void;
   pageLabels?: Record<number, string>;
+  language?: TeachingLanguage;
   /** The teacher typed a class tally (votes per option) for slide `index`. */
   onTally?(index: number, counts: number[]): void;
   /** Pen strokes of slide `index` changed here (mirror them with `setStrokes` in the other window). */
@@ -57,11 +58,11 @@ function scaleInto(container: HTMLElement, inner: HTMLElement): ResizeObserver {
 }
 
 /** Static, fully revealed thumbnail. Returns a disposer. */
-export function renderThumb(container: HTMLElement, slide: Pick<Slide, "content" | "sources">, theme: ThemeId, opts: { badge?: string; index?: number; pageLabels?: Record<number, string> } = {}): () => void {
+export function renderThumb(container: HTMLElement, slide: Pick<Slide, "content" | "sources">, theme: ThemeId, opts: { badge?: string; index?: number; pageLabels?: Record<number, string>; language?: TeachingLanguage } = {}): () => void {
   container.replaceChildren();
   container.classList.add("kj-thumb");
   const wrap = el("div", "kj-thumb-inner", container);
-  const r = renderSlide(slide, { theme, interactive: false, badge: opts.badge, index: opts.index, pageLabels: opts.pageLabels });
+  const r = renderSlide(slide, { theme, interactive: false, badge: opts.badge, index: opts.index, pageLabels: opts.pageLabels, language: opts.language });
   wrap.append(r.el);
   applyStep(r.el, r.steps);
   const obs = scaleInto(container, wrap);
@@ -291,6 +292,7 @@ export class Player {
       total: this.opts.slides.length,
       onSourceClick: this.opts.onSourceClick,
       pageLabels: this.opts.pageLabels,
+      language: this.opts.language,
       tally: this.tallies.get(this.pos.index),
     });
     this.buildTallyInputs();

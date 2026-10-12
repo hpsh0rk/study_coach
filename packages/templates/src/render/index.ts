@@ -1,4 +1,4 @@
-import type { ContentOf, Slide, SlideContent, ThemeId } from "@kj/schema";
+import type { ContentOf, Slide, SlideContent, TeachingLanguage, ThemeId } from "@kj/schema";
 import { renderRichText, renderWidget, type WidgetHandle } from "@kj/widgets/render";
 import { CANVAS, FONT } from "../budgets.ts";
 import { stepsOf } from "../index.ts";
@@ -21,6 +21,13 @@ export interface RenderOptions {
   pageLabels?: Record<number, string>;
   /** Class tally (votes per option) typed in by the teacher, for poll quizzes and experiment predictions. */
   tally?: number[];
+  /** Built-in labels (objectives, POE phases, sources…) follow the teaching language; default bilingual. */
+  language?: TeachingLanguage;
+}
+
+/** A built-in label in the lesson's teaching language. */
+export function label(opts: Pick<RenderOptions, "language">, en: string, zh: string): string {
+  return opts.language === "en" ? en : opts.language === "zh" ? zh : `${en} · ${zh}`;
 }
 
 export interface Tally {
@@ -182,7 +189,7 @@ const RENDERERS: { [L in SlideContent["layout"]]: (b: Builder, c: ContentOf<L>) 
     if (c.subtitle) text("p", "kj-cover-subtitle", c.subtitle, s);
     if (c.objectives.length) {
       const box = node("div", "kj-objectives", s);
-      node("div", "kj-objectives-label", box).textContent = "Learning objectives · 学习目标";
+      node("div", "kj-objectives-label", box).textContent = label(b.opts, "Learning objectives", "学习目标");
       const ul = node("ul", "kj-list", box);
       for (const o of c.objectives) text("li", "", o, ul);
     }
@@ -243,7 +250,7 @@ const RENDERERS: { [L in SlideContent["layout"]]: (b: Builder, c: ContentOf<L>) 
     const left = node("div", "kj-col", body);
     const predict = slot("predict", left, "kj-fit");
     const q = node("div", "kj-phase", predict);
-    node("span", "kj-phase-tag", q).textContent = "① Predict 预测";
+    node("span", "kj-phase-tag", q).textContent = `① ${label(b.opts, "Predict", "预测")}`;
     text("span", "kj-phase-text", c.predict.question, q);
     const opts = node("div", "kj-chips", predict);
     const chips = c.predict.options.map((o, i) => {
@@ -262,20 +269,20 @@ const RENDERERS: { [L in SlideContent["layout"]]: (b: Builder, c: ContentOf<L>) 
     tally(b, chips, 1, true);
     const observe = step(slot("observe", left, "kj-fit kj-grow"), 1);
     const oh = node("div", "kj-phase", observe);
-    node("span", "kj-phase-tag", oh).textContent = "② Observe 观察";
+    node("span", "kj-phase-tag", oh).textContent = `② ${label(b.opts, "Observe", "观察")}`;
     const ul = node("ul", "kj-list kj-list-sm", observe);
     for (const o of c.observe) text("li", "", o, ul);
     const right = node("div", "kj-col", body);
     widget(b, step(slot("sim", right, "kj-grow"), 1), c.sim);
     const explain = step(slot("explain", right, "kj-fit"), 2);
     const eh = node("div", "kj-phase", explain);
-    node("span", "kj-phase-tag", eh).textContent = "③ Explain 解释";
+    node("span", "kj-phase-tag", eh).textContent = `③ ${label(b.opts, "Explain", "解释")}`;
     text("div", "kj-explain", c.explain, explain);
   },
 
   quiz(b, c) {
     const qs = slot("question", b.root, "kj-fit");
-    node("div", "kj-quiz-tag", qs).textContent = c.poll ? "Check · 检查理解 · Vote first 先举手投票" : "Check · 检查理解";
+    node("div", "kj-quiz-tag", qs).textContent = c.poll ? label(b.opts, "Check · Vote first", "检查理解 · 先举手投票") : label(b.opts, "Check", "检查理解");
     text("h1", "kj-quiz-q", c.question, qs);
     const body = node("div", "kj-body kj-col", b.root);
     const grid = slot("options", body, "kj-fit kj-grow kj-quiz-grid");
@@ -345,7 +352,7 @@ const RENDERERS: { [L in SlideContent["layout"]]: (b: Builder, c: ContentOf<L>) 
     if (b.opts.interactive) swappable(list);
     else list.querySelectorAll<HTMLElement>(".kj-card").forEach((card, i) => card.classList.toggle("kj-right", Number(card.dataset.key) === i));
     // Reveal: cards move to their correct places (CSS order), so the clicker alone can show the answer.
-    step(node("div", "kj-order-reveal", board), 1).textContent = c.mode === "match" ? "✓ Answer · 正确配对" : "✓ Answer · 正确顺序";
+    step(node("div", "kj-order-reveal", board), 1).textContent = `✓ ${c.mode === "match" ? label(b.opts, "Answer", "正确配对") : label(b.opts, "Answer", "正确顺序")}`;
   },
 
   summary(b, c) {
@@ -375,7 +382,7 @@ export function renderSlide(slide: Pick<Slide, "content" | "sources">, opts: Ren
   const foot = node("footer", "kj-foot", root);
   const src = node("div", "kj-sources", foot);
   if (slide.sources.length) {
-    node("span", "kj-sources-label", src).textContent = "Source 教材";
+    node("span", "kj-sources-label", src).textContent = label(opts, "Source", "教材");
     for (const p of slide.sources) {
       const chip = node("button", "kj-source", src);
       chip.type = "button";

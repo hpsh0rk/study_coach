@@ -1,4 +1,4 @@
-import type { Slide, ThemeId } from "@kj/schema";
+import type { Slide, TeachingLanguage, ThemeId } from "@kj/schema";
 import { resolveEmbed } from "@kj/widgets";
 import { lessonApi } from "../lessonApi.ts";
 import type { OfflineDeck } from "./runtime.ts";
@@ -108,7 +108,7 @@ export type OfflineAudience = "teacher" | "student";
  * `student`: the server strips notes and misconception labels (as for the share link). `teacher`: notes open only in a separate presenter window.
  */
 async function buildOfflineHtml(lessonId: string, audience: OfflineAudience): Promise<OfflineFile> {
-  const deck = (await lessonApi.deck(lessonId, audience)) as unknown as { lesson: { title: string; theme: ThemeId; pageLabels: Record<number, string> }; slides: Slide[] };
+  const deck = (await lessonApi.deck(lessonId, audience)) as unknown as { lesson: { title: string; theme: ThemeId; pageLabels: Record<number, string>; language: TeachingLanguage }; slides: Slide[] };
   const [js, css] = await Promise.all([text("/offline/runtime.js"), text("/offline/runtime.css")]);
   const sims: Record<string, string> = {};
   for (const id of simIds(deck.slides)) {
@@ -119,6 +119,7 @@ async function buildOfflineHtml(lessonId: string, audience: OfflineAudience): Pr
     title: deck.lesson.title,
     audience,
     theme: deck.lesson.theme,
+    language: deck.lesson.language,
     pageLabels: deck.lesson.pageLabels,
     slides: deck.slides.map((s) => ({ content: s.content, sources: s.sources, notes: audience === "student" ? "" : s.notes, pageType: s.pageType })),
     sims,

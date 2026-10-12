@@ -3,7 +3,7 @@ import "@kj/templates/slides.css";
 import "@kj/player/player.css";
 import "./runtime.css";
 import { answerKey, keyAction, Player, type PlayerSlide, type Position } from "@kj/player";
-import type { ThemeId } from "@kj/schema";
+import type { TeachingLanguage, ThemeId } from "@kj/schema";
 import { inlineEmbeds } from "@kj/widgets/render";
 
 /** Deck data embedded in an offline file by `buildOfflineHtml`. */
@@ -12,6 +12,7 @@ export interface OfflineDeck {
   /** `student` files carry no notes; `teacher` files show notes only in a separate presenter window. */
   audience: "teacher" | "student";
   theme: ThemeId;
+  language?: TeachingLanguage;
   pageLabels: Record<number, string>;
   slides: PlayerSlide[];
   /** Catalog simulation HTML by embed id, loaded via srcdoc. */
@@ -65,6 +66,7 @@ const player = new Player(document.getElementById("kj-root")!, {
   theme: deck.theme,
   showNotes: false,
   pageLabels: deck.pageLabels,
+  language: deck.language,
   onChange: (p) => {
     pos = p;
     renderPresenter();

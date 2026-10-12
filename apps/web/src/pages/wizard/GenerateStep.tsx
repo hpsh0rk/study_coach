@@ -137,6 +137,7 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
   const [exporting, setExporting] = useState("");
   const [exportError, setExportError] = useState("");
   const theme = view.lesson.theme;
+  const language = (confirmed?.params ?? view.lesson.params).language;
 
   const labels = view.pageLabels;
   const generateOne = useCallback(
@@ -324,7 +325,7 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
                 data-testid="thumb"
               >
                 {slide ? (
-                  <SlideThumb slide={slide} theme={theme} index={i} pageLabels={labels} />
+                  <SlideThumb slide={slide} theme={theme} index={i} pageLabels={labels} language={language} />
                 ) : (
                   <div className="thumb-empty">
                     {running.has(s.id) ? <span className="spinner" /> : failed[s.id] ? "⚠ 失败 failed" : "未生成 not yet"}
@@ -379,7 +380,7 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
               />
             ) : selSlide ? (
               <>
-                <SlidePreview slide={selSlide} theme={theme} onSourceClick={openSource} pageLabels={labels} />
+                <SlidePreview slide={selSlide} theme={theme} onSourceClick={openSource} pageLabels={labels} language={language} />
                 <UnverifiedBox items={selSlide.unverified ?? []} sources={selSlide.sources} onSourceClick={openSource} />
                 <h3>讲稿 Speaker notes</h3>
                 <p className="notes">{selSlide.notes || "—"}</p>
