@@ -239,6 +239,8 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
                 content={selSlide.content}
                 notes={selSlide.notes}
                 unverified={selSlide.unverified}
+                pageType={selSlide.pageType}
+                theme={theme}
                 onCancel={() => setEditing(false)}
                 onSave={async (content, notes) => {
                   replaceSlide((await lessonApi.editSlide(view.lesson.id, selSlide.id, { content, notes })).slide);

@@ -1,6 +1,7 @@
 import { checkSlide, type Violation } from "@kj/pedagogy";
 import type { GlossaryEntry, PageType, SlideContent, TableSpec, WidgetSpec } from "@kj/schema";
-import { BUDGETS, SLOT_SCHEMAS } from "@kj/templates";
+import { BUDGETS } from "@kj/templates";
+import { slotIssues } from "@kj/templates/issues";
 import { validateWidget, type WidgetIssue } from "@kj/widgets";
 
 function widgetsOf(c: SlideContent) {
@@ -8,54 +9,6 @@ function widgetsOf(c: SlideContent) {
   if (c.layout === "chart") return [c.chart];
   if (c.layout === "experiment") return [c.sim];
   return [];
-}
-
-export type Issue = { path: PropertyKey[]; message: string };
-const getIn = (o: unknown, path: PropertyKey[]): unknown => path.reduce<unknown>((x, k) => (x as Record<PropertyKey, unknown> | undefined)?.[k], o);
-function setIn<T>(o: T, path: PropertyKey[], v: unknown): T {
-  const copy = structuredClone(o) as Record<PropertyKey, unknown>;
-  let x = copy;
-  for (const k of path.slice(0, -1)) x = x[k] as Record<PropertyKey, unknown>;
-  x[path[path.length - 1]!] = v;
-  return copy as T;
-}
-
-/**
- * A list over its item limit hides its items' own errors (zod stops at the length check), so a retry
- * would only hear "too many items". Re-checks the items in windows of the allowed size and reports both.
- */
-function maskedItemIssues(c: SlideContent, issues: Issue[]): Issue[] {
-  const out: Issue[] = [];
-  for (const i of issues) {
-    const max = /expected array to have <=\s*(\d+)/.exec(i.message)?.[1];
-    const arr = getIn(c, i.path);
-    if (!max || !Array.isArray(arr)) continue;
-    const n = Number(max);
-    if (n < 1) continue;
-    for (let k = 0; k < arr.length; k += n) {
-      const start = Math.max(0, Math.min(k, arr.length - n));
-      const r = SLOT_SCHEMAS[c.layout].safeParse(setIn(c, i.path, arr.slice(start, start + n)));
-      if (r.success) continue;
-      for (const j of r.error.issues) {
-        const inside = j.path.length > i.path.length && i.path.every((p, d) => j.path[d] === p) && typeof j.path[i.path.length] === "number";
-        if (!inside) continue;
-        const path = [...j.path];
-        path[i.path.length] = (path[i.path.length] as number) + start;
-        out.push({ path, message: j.message });
-      }
-    }
-  }
-  return out;
-}
-
-/** Slot-schema issues of content for its layout, including the item issues a too-long list hides. */
-export function slotIssues(c: SlideContent): Issue[] {
-  const layout = (c as { layout?: unknown }).layout;
-  const schema = SLOT_SCHEMAS[layout as SlideContent["layout"]];
-  if (!schema) return [{ path: ["layout"], message: "unknown layout" }];
-  const strict = schema.safeParse(c);
-  if (strict.success) return [];
-  return [...strict.error.issues, ...maskedItemIssues(c, strict.error.issues)].map((i) => ({ path: i.path, message: i.message }));
 }
 
 /** Everything that would make the slide wrong or over budget. */
@@ -90,7 +43,12 @@ export function truncateLists(c: SlideContent, pageType?: PageType): SlideConten
     case "title":
       return { ...c, objectives: c.objectives.slice(0, B.title.objectives.max) };
     case "statement":
-      return { ...c, bullets: c.bullets.slice(0, B.statement.bullets.max), terms: c.terms.slice(0, B.statement.terms.max), visual: trimTable(c.visual, B.tableNarrow) };
+      return {
+        ...c,
+        bullets: c.bullets.slice(0, B.statement.bullets.max),
+        terms: c.terms.slice(0, B.statement.terms.max),
+        visual: c.visual.kind === "flow" ? { ...c.visual, steps: c.visual.steps.slice(0, B.flow.max) } : trimTable(c.visual, B.tableNarrow),
+      };
     case "chart":
       return { ...c, takeaways: c.takeaways.slice(0, B.chart.takeaways.max), chart: trimTable(c.chart, B.table) };
     case "steps":

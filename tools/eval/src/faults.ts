@@ -5,16 +5,17 @@
  *
  *   pnpm eval:faults --from results/clean --eval-dir <dir> --out results/faults [--seeds 8] [--no-render]
  *
- * Slides: AI-layer structural schema (→ JSON repair), problemsOf (→ slide check-retry), truncateLists,
- * experiment sim pinning, browser overflow (eval:render), and the rule scorer (score.ts).
- * Outlines: normalizeOutline, checkOutline errors (→ outline check-retry) / warnings (UI only),
- * rebalanceMinutes, and the resulting time / check-cadence / source gates.
+ * Slides: AI-layer structural schema (→ JSON repair), problemsOf (→ slide check-retry), the number-source
+ * check (verifyNumbers → writer retry + 待核实), truncateLists, sanitizeWidgets, experiment sim pinning,
+ * browser overflow (eval:render), and the rule scorer (score.ts).
+ * Outlines: normalizeOutline (source-page check, check cadence), checkOutline errors (→ outline check-retry) /
+ * warnings (UI only), rebalanceMinutes, and the resulting time / check-cadence / source gates.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { normalizeOutline, problemsOf, rebalanceMinutes, truncateLists } from "@kj/generation";
-import { checkOutline, outlineTiming, PAGE_TYPES } from "@kj/pedagogy";
+import { checkSourceText, normalizeOutline, problemsOf, rebalanceMinutes, sanitizeWidgets, truncateLists } from "@kj/generation";
+import { checkOutline, outlineTiming, PAGE_TYPES, verifyNumbers } from "@kj/pedagogy";
 import { LessonParams, SlideContent, type Outline, type PageType } from "@kj/schema";
 import { findEmbed } from "@kj/widgets";
 import { deckFiles, loadScorer, parseArgs, readJson, writeJson, type ScoreIssue } from "./common.ts";
@@ -41,6 +42,15 @@ interface Deck {
 }
 
 const ROWS_SLIDE = SLIDE_FAULTS.filter((f) => f !== "invalidJson");
+type Pages = { no: number; text: string }[];
+const pagesOf = (evalDir: string, sourceId: string) => readJson<{ pages: Pages }>(path.join(evalDir, "pdfs", `${sourceId}.pages.json`)).pages;
+/** Number / calculation flags of the 待核实 check (what the writer retries on). */
+const numberFlags = (s: Pick<DeckSlide, "content" | "notes" | "sources" | "pageType">, pages: Pages) =>
+  new Set(
+    verifyNumbers(s.content, checkSourceText(s.sources, pages), { pageType: s.pageType, notes: s.notes })
+      .filter((u) => u.kind === "number" || u.kind === "calc")
+      .map((u) => `${u.kind}:${u.text}`),
+  );
 const has = (content: SlideContent, pageType: PageType, f: SlideFault) => {
   try {
     return problemsOf(content, pageType).errors.some((e) => classifyProblem(e) === f);
@@ -97,8 +107,18 @@ async function slideMatrix(from: string, injectedFiles: string[], evalDir: strin
   const rows: Record<string, Tally> = {};
   const scoreOf = (deck: Deck) => scorer.score(deck);
   const cleanIssues = new Map<string, Set<string>>();
+  const cleanNumbers = new Map<string, Set<string>>();
+  const falseFlags: Tally = { n: 0 };
   for (const file of deckFiles(from)) {
     const deck = readJson<Deck>(file);
+    const pages = pagesOf(evalDir, deck.lesson.sourceId);
+    for (const s of deck.slides) {
+      if (s.failed) continue;
+      const flags = numberFlags(s, pages);
+      cleanNumbers.set(`${path.basename(file, ".json")}|${s.id}`, flags);
+      falseFlags.n++;
+      if (flags.size) bump(falseFlags, "flagged");
+    }
     const r = scoreOf(deck);
     for (const i of r.issues) if (i.slideId && i.level !== "I") cleanIssues.set(`${path.basename(file, ".json")}|${i.slideId}`, (cleanIssues.get(`${path.basename(file, ".json")}|${i.slideId}`) ?? new Set()).add(`${i.rule}:${i.msg}`));
   }
@@ -106,6 +126,7 @@ async function slideMatrix(from: string, injectedFiles: string[], evalDir: strin
     const deck = readJson<Deck>(file);
     const base = path.basename(file).split(".")[0]!;
     const report = scoreOf(deck);
+    const pages = pagesOf(evalDir, deck.lesson.sourceId);
     for (const s of deck.slides) {
       if (!s.inject) continue;
       const f = s.inject.fault;
@@ -116,6 +137,11 @@ async function slideMatrix(from: string, injectedFiles: string[], evalDir: strin
       const checked = !structural && has(s.content, s.pageType, f);
       if (checked) bump(row, "problemsOf");
       if (!structural && checked && !has(truncateLists(s.content, s.pageType), s.pageType, f)) bump(row, "truncate");
+      if (!structural) {
+        const clean = cleanNumbers.get(`${base}|${s.id}`) ?? new Set<string>();
+        if ([...numberFlags(s, pages)].some((k) => !clean.has(k))) bump(row, "numberCheck");
+      }
+      if (!structural && checked && f === "badVisual" && !has(sanitizeWidgets(s.content).content, s.pageType, f)) bump(row, "sanitize");
       if (f === "badVisual" && s.layout === "experiment") {
         const spec = deck.outline?.slides.find((x) => x.id === s.specId);
         if (spec && findEmbed(`${spec.title} ${spec.keyPoints.join(" ")}`)) bump(row, "pinSim");
@@ -156,7 +182,7 @@ async function slideMatrix(from: string, injectedFiles: string[], evalDir: strin
     }
   }
   rows.invalidJson = json;
-  return rows;
+  return { rows, falseFlags };
 }
 
 interface DraftSlide {
@@ -181,18 +207,29 @@ function maxLectureRun(o: Outline): number {
   return max;
 }
 
-function outlineMatrix(from: string, seeds: number) {
+function outlineMatrix(from: string, seeds: number, evalDir: string) {
   const rows: Record<string, Tally> = {};
+  const clean: Tally = { n: 0 };
   for (const file of deckFiles(from)) {
     const deck = readJson<Deck>(file);
     if (!deck.outline) continue;
+    const allPages = pagesOf(evalDir, deck.lesson.sourceId);
     const params = LessonParams.parse({ minutes: deck.lesson.minutes, level: deck.lesson.level, lessonType: deck.lesson.lessonType, language: deck.lesson.language });
     const validPages = [...new Set(deck.lesson.pageRanges.flatMap(([a, b]) => Array.from({ length: b - a + 1 }, (_, i) => a + i)))];
     const simAvailable = deck.outline.slides.some((s) => s.pageType === "experiment");
+    const pages = allPages.filter((p) => validPages.includes(p.no));
     const original = deck.outline.slides.map((s) => s.sourcePages.join(","));
+    {
+      const draft = { ...deck.outline, slides: deck.outline.slides.map(({ id: _id, layout: _l, sourceIssue: _s, ...s }) => structuredClone(s) as DraftSlide) };
+      const norm = normalizeOutline(draft as never, { validPages, simAvailable, pages });
+      const content = norm.slides.filter((s) => s.pageType !== "cover" && !s.id.startsWith("cfu"));
+      bump(clean, "slides", content.length);
+      bump(clean, "flagged", content.filter((s) => s.sourceIssue).length);
+      clean.n++;
+    }
     for (const fault of OUTLINE_FAULTS.filter((f) => f !== "invalidJson")) {
       for (let k = 0; k < seeds; k++) {
-        const draft = { ...deck.outline, slides: deck.outline.slides.map(({ id: _id, layout: _l, ...s }) => structuredClone(s) as DraftSlide) };
+        const draft = { ...deck.outline, slides: deck.outline.slides.map(({ id: _id, layout: _l, sourceIssue: _s, ...s }) => structuredClone(s) as DraftSlide) };
         const keyed = draft.slides.map((s, i) => ({ ...s, _i: i }));
         draft.slides = keyed;
         const inj = injectOutline(draft as never, [fault as OutlineFault], rngFor(`faults|${path.basename(file)}|${fault}|${k}`));
@@ -201,7 +238,8 @@ function outlineMatrix(from: string, seeds: number) {
         const label = inj.modes[fault as OutlineFault] ? `${fault}/${inj.modes[fault as OutlineFault]}` : fault;
         const row = (rows[label] ??= { n: 0 });
         row.n++;
-        const norm = normalizeOutline(draft as never, { validPages, simAvailable });
+        const norm = normalizeOutline(draft as never, { validPages, simAvailable, pages });
+        if (norm.slides.some((s) => s.id.startsWith("cfu"))) bump(row, "cfuInserted");
         const violations = checkOutline(norm, params);
         const t0 = outlineTiming(norm, params);
         if (Math.abs(t0.deviation) > 0.15) bump(row, "timeOffDraft");
@@ -217,40 +255,45 @@ function outlineMatrix(from: string, seeds: number) {
         if (maxLectureRun(final) > 10) bump(row, "cfuGateFail");
         if (fault === "badSourcePages") {
           const content = final.slides.filter((s) => s.pageType !== "cover");
-          const empty = content.filter((s) => s.sourcePages.length === 0).length;
-          const wrong = final.slides.filter((s, i) => s.sourcePages.length && s.sourcePages.join(",") !== original[kept[i]!]).length;
+          const empty = content.filter((s) => s.sourcePages.length === 0 && !s.sourceIssue).length;
+          const lecture = final.slides.filter((s) => !s.id.startsWith("cfu"));
+          const wrong = lecture.filter((s, j) => s.sourcePages.length && s.sourcePages.join(",") !== original[kept[j]!]);
           bump(row, "slides", content.length);
           bump(row, "sourcesDropped", empty);
-          bump(row, "sourcesWrongUndetected", wrong);
+          bump(row, "sourcesWrongUndetected", wrong.filter((s) => !s.sourceIssue).length);
+          bump(row, "sourcesFlagged", final.slides.filter((s) => s.sourceIssue).length);
         }
       }
     }
   }
-  return rows;
+  return { rows, clean };
 }
 
 const pct = (a: number | undefined, n: number) => (n ? `${Math.round((100 * (a ?? 0)) / n)}%` : "–");
 
-function markdown(slide: Record<string, Tally>, outline: Record<string, Tally>): string {
+function markdown(slide: Record<string, Tally>, outline: Record<string, Tally>, falseFlags: Tally, cleanOutline: Tally): string {
   const s = [
-    "| slide fault | n | AI-layer schema → JSON repair | problemsOf → check-retry | truncate fixes | pinSim | overflow (measured) | renderer throws | scorer flags | scorer rules |",
-    "|---|---|---|---|---|---|---|---|---|---|",
+    "| slide fault | n | AI-layer schema → JSON repair | problemsOf → check-retry | 待核实 number check → retry | truncate fixes | sanitize fixes | pinSim | overflow (measured) | renderer throws | scorer flags | scorer rules |",
+    "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ...Object.entries(slide).map(([f, t]) => {
       const rules = Object.keys(t).filter((k) => k.startsWith("rule:")).map((k) => `${k.slice(5)} ${pct(t[k], t.n)}`).join(", ");
-      return `| ${f} | ${t.n} | ${pct(t.layerSchema, t.n)} | ${pct(t.problemsOf, t.n)} | ${pct(t.truncate, t.n)} | ${pct(t.pinSim, t.n)} | ${t.rendered ? pct(t.overflow, t.rendered) : "–"} | ${f === "invalidJson" ? "–" : pct(t.renderThrows, t.n)} | ${f === "invalidJson" ? "–" : pct(t.scorer, t.n)} | ${rules} |`;
+      return `| ${f} | ${t.n} | ${pct(t.layerSchema, t.n)} | ${pct(t.problemsOf, t.n)} | ${f === "invalidJson" ? "–" : pct(t.numberCheck, t.n)} | ${pct(t.truncate, t.n)} | ${f === "badVisual" ? pct(t.sanitize, t.n) : "–"} | ${pct(t.pinSim, t.n)} | ${t.rendered ? pct(t.overflow, t.rendered) : "–"} | ${f === "invalidJson" ? "–" : pct(t.renderThrows, t.n)} | ${f === "invalidJson" ? "–" : pct(t.scorer, t.n)} | ${rules} |`;
     }),
   ];
   const o = [
-    "| outline fault | n | time off (draft) | checkOutline error → retry | warning only | normalize fixes | rebalance fixes time | time off (final) | CFU gate fails | sources dropped | wrong sources undetected |",
-    "|---|---|---|---|---|---|---|---|---|---|---|",
+    "| outline fault | n | time off (draft) | checkOutline error → retry | warning only | normalize fixes | CFU inserted | rebalance fixes time | time off (final) | CFU gate fails | sources dropped | sources flagged 待核实 | wrong sources undetected |",
+    "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ...Object.entries(outline)
       .sort(([a], [b]) => a.localeCompare(b))
       .map(
         ([f, t]) =>
-          `| ${f} | ${t.n} | ${pct(t.timeOffDraft, t.n)} | ${pct(t.checkError, t.n)} | ${pct(t.checkWarning, t.n)} | ${pct(t.normalize, t.n)} | ${pct(t.rebalanceFixes, t.n)} | ${pct(t.timeOffFinal, t.n)} | ${pct(t.cfuGateFail, t.n)} | ${t.slides ? pct(t.sourcesDropped, t.slides) : "–"} | ${t.slides ? pct(t.sourcesWrongUndetected, t.slides) : "–"} |`,
+          `| ${f} | ${t.n} | ${pct(t.timeOffDraft, t.n)} | ${pct(t.checkError, t.n)} | ${pct(t.checkWarning, t.n)} | ${pct(t.normalize, t.n)} | ${pct(t.cfuInserted, t.n)} | ${pct(t.rebalanceFixes, t.n)} | ${pct(t.timeOffFinal, t.n)} | ${pct(t.cfuGateFail, t.n)} | ${t.slides ? pct(t.sourcesDropped, t.slides) : "–"} | ${t.slides ? pct(t.sourcesFlagged, t.slides) : "–"} | ${t.slides ? pct(t.sourcesWrongUndetected, t.slides) : "–"} |`,
       ),
   ];
-  return [...s, "", ...o].join("\n");
+  const fp = [
+    `False flags on clean decks: number check ${pct(falseFlags.flagged, falseFlags.n)} of ${falseFlags.n} slides; source-page check ${pct(cleanOutline.flagged, cleanOutline.slides ?? 0)} of ${cleanOutline.slides ?? 0} outline slides (${cleanOutline.n} outlines).`,
+  ];
+  return [...s, "", ...o, "", ...fp].join("\n");
 }
 
 async function main(argv: string[]) {
@@ -262,10 +305,10 @@ async function main(argv: string[]) {
   fs.rmSync(out, { recursive: true, force: true });
   const injected = writeInjected(from, out, evalDir);
   if (!opts["no-render"]) execFileSync("pnpm", ["-s", "eval:render", out, "--no-build"], { stdio: "inherit" });
-  const slide = await slideMatrix(from, injected, evalDir);
-  const outline = outlineMatrix(from, Number(opts.seeds ?? 8));
-  writeJson(path.join(out, "matrix.json"), { slide, outline });
-  const md = markdown(slide, outline);
+  const { rows: slide, falseFlags } = await slideMatrix(from, injected, evalDir);
+  const { rows: outline, clean } = outlineMatrix(from, Number(opts.seeds ?? 8), evalDir);
+  writeJson(path.join(out, "matrix.json"), { slide, outline, falseFlags, cleanOutline: clean });
+  const md = markdown(slide, outline, falseFlags, clean);
   fs.writeFileSync(path.join(out, "matrix.md"), md + "\n");
   console.log(md);
 }

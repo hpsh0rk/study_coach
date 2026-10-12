@@ -28,6 +28,28 @@ export function parseRanges(text: string, pageCount: number, labels: Map<number,
 const fmtRanges = (r: PageRange[], labels: Map<number, string>) =>
   r.map((x) => (x.start === x.end ? labelOf(labels, x.start) : `${labelOf(labels, x.start)}–${labelOf(labels, x.end)}`)).join(", ");
 
+/** Estimated teaching time of the selection against the lesson length, so teachers see the volume while ticking chapters. */
+function VolumeMeter({ estimated, lessonMinutes }: { estimated: number; lessonMinutes: number }) {
+  const scale = lessonMinutes * 1.6;
+  const state = estimated > lessonMinutes * 1.2 ? "over" : estimated < lessonMinutes * 0.6 ? "under" : "ok";
+  const text = {
+    over: "内容偏多 · more than one lesson",
+    under: "内容偏少 · 课上会多出练习时间 · leaves time for practice",
+    ok: "内容量合适 · fits the lesson",
+  }[state];
+  return (
+    <div className={`volume-meter ${state}`} data-testid="volume-meter">
+      <div className="volume-bar" aria-hidden>
+        <span className="volume-fill" style={{ width: `${Math.min(100, (estimated / scale) * 100)}%` }} />
+        <span className="volume-mark" style={{ left: `${(lessonMinutes / scale) * 100}%` }} />
+      </div>
+      <span className="small">
+        约 {estimated} / {lessonMinutes} 分钟 · {text}
+      </span>
+    </div>
+  );
+}
+
 export function ChaptersStep({ documentId, lesson, reached }: { documentId: string; lesson?: LessonView; reached: StepKey }) {
   const nav = useNavigate();
   const [doc, setDoc] = useState<DocumentRow | null>(null);
@@ -138,6 +160,13 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
               )}
             </div>
           </div>
+          {pages === 0 ? (
+            <div className="empty-inline" data-testid="chapters-empty">
+              还没选内容：勾选下面的章节，或在下方输入页码。· Nothing selected yet: tick chapters below or type page ranges.
+            </div>
+          ) : (
+            <VolumeMeter estimated={advice.estimatedMinutes} lessonMinutes={lessonMinutes} />
+          )}
           {pages > 0 && advice.tooMuch && (
             <div className="alert warn" data-testid="split-hint">
               内容偏多：按 {lessonMinutes} 分钟一节，大约需要 {advice.lessons} 节课。建议拆成 {advice.lessons} 课时，或只选前面几节；放不下的内容会列在大纲顶部的“未覆盖”里。· About {advice.lessons} lessons of {lessonMinutes} min:

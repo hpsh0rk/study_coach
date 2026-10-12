@@ -3,6 +3,7 @@ export class ApiError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    readonly detail?: unknown,
   ) {
     super(message);
   }
@@ -25,8 +26,8 @@ export async function api<T = unknown>(path: string, init: { method?: string; bo
   const text = await res.text();
   const data = text ? JSON.parse(text) : {};
   if (!res.ok) {
-    const err = (data as { error?: { code?: string; message?: string } }).error;
-    throw new ApiError(res.status, err?.code ?? "HTTP", err?.message ?? `HTTP ${res.status}`);
+    const err = (data as { error?: { code?: string; message?: string; detail?: unknown } }).error;
+    throw new ApiError(res.status, err?.code ?? "HTTP", err?.message ?? `HTTP ${res.status}`, err?.detail);
   }
   return data as T;
 }

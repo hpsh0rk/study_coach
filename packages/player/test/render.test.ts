@@ -27,9 +27,9 @@ describe("render safety", () => {
   });
 
   it("a flow longer than the bullet list reveals one step per click, first step shown at once", () => {
-    const cell = galleryCells().find((c) => c.id === "statement-flow-6")!;
+    const cell = galleryCells().find((c) => c.id === "statement-flow-en")!;
     const r = renderSlide({ content: cell.content, sources: [] }, { theme: "classic", interactive: false });
-    expect(r.steps).toBe(5);
+    expect(r.steps).toBe(4);
     applyStep(r.el, 0);
     expect(r.el.querySelectorAll(".kj-flow-step:not(.kj-step-hidden)").length).toBe(1);
     applyStep(r.el, 2);

@@ -1,11 +1,12 @@
 import { and, eq, isNull } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
-import { checkSourcePages, draftOutline, problemsOf, slideKey, slotIssues, SpecNotFoundError, workedSpecFor, writeSlide, type PlannerSection } from "@kj/generation";
+import { checkSourcePages, draftOutline, problemsOf, slideKey, SpecNotFoundError, workedSpecFor, writeSlide, type PlannerSection } from "@kj/generation";
 import { normalizeRanges, rangesForChapters } from "@kj/pdf-structure";
 import { checkOutline, outlineTiming } from "@kj/pedagogy";
 import { DEFAULT_PARAMS, LessonParams, newId, Outline, PageRange, randomToken, sha256Hex, SlideContent, ThemeId, type ChapterNode, type LessonScope } from "@kj/schema";
 import { layoutForPageType, SLOT_SCHEMAS } from "@kj/templates";
+import { describeIssue, slotIssues, widgetIssues } from "@kj/templates/issues";
 import { makeAi } from "../ai.ts";
 import { chapters, lessons, outlineVersions, shareLinks, slides } from "../db/schema.ts";
 import type { AppBindings, Env, SessionUser } from "../env.ts";
@@ -303,18 +304,15 @@ export const lessonRoutes = new Hono<AppBindings>()
     if (body.content !== undefined) {
       const parsed = SLOT_SCHEMAS[row.layout as SlideContent["layout"]].safeParse(body.content);
       if (!parsed.success) {
-        const issues = [...new Map(slotIssues({ ...(body.content as object), layout: row.layout } as SlideContent).map((i) => [`${i.path.join(".")}: ${i.message}`, i])).values()];
-        const shown = issues.length ? issues : parsed.error.issues;
-        throw new HttpError(422, "INVALID_CONTENT", shown.slice(0, 5).map((i) => `${i.path.join(".")}: ${i.message}`).join("; "), shown.slice(0, 20));
+        const issues = slotIssues({ ...(body.content as object), layout: row.layout } as SlideContent);
+        const shown = issues.length ? issues : parsed.error.issues.map((i) => ({ path: i.path, message: i.message }));
+        throw new HttpError(422, "INVALID_CONTENT", shown.slice(0, 5).map(describeIssue).join("；"), shown.slice(0, 20));
       }
       content = parsed.data as SlideContent;
     }
+    const broken = body.content !== undefined ? widgetIssues(content) : [];
+    if (broken.length) throw new HttpError(422, "INVALID_CONTENT", broken.map(describeIssue).join("；"), broken);
     const found = problemsOf(content, row.pageType as Parameters<typeof problemsOf>[1]);
-    const broken = found.errors.filter((e) => e.startsWith("widget:"));
-    if (body.content !== undefined && broken.length) {
-      const path = content.layout === "chart" ? "chart" : content.layout === "experiment" ? "sim" : "visual";
-      throw new HttpError(422, "INVALID_CONTENT", broken.join("; "), broken.map((message) => ({ path: [path], message: message.replace(/^widget:\s*/, "") })));
-    }
     const notes = body.notes ?? row.notes;
     const unverified = await unverifiedFor(c.env, lesson.documentId, row, content, notes);
     await db(c.env)

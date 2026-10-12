@@ -121,6 +121,7 @@ function renderFunction(spec: FunctionSpec, host: HTMLElement, ctx: WidgetContex
 
 function renderFlow(spec: FlowSpec, host: HTMLElement): WidgetHandle {
   const list = el("ol", "kj-flow");
+  list.dataset.n = String(spec.steps.length);
   spec.steps.forEach((s, i) => {
     const li = el("li", "kj-flow-step");
     if (i > 0) li.dataset.step = String(i);

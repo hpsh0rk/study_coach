@@ -7,5 +7,5 @@ export { simFor } from "./sims.ts";
 export { buildMessages as buildSlideMessages, checkSourceText, SLIDE_PROMPT_VERSION, sourceUnverified, SLIDE_SOURCE_CHARS, sourcePagesFor, SpecNotFoundError, visualRuleFor, workedSpecFor, writeSlide, type WriteInput, type WriteResult } from "./slide.ts";
 export { slideKey, slideKeyInput } from "./slide-key.ts";
 export { findFormula, stubSlide, stubTable } from "./slide-stub.ts";
-export { applyGlossary, problemsOf, sanitizeWidgets, slotIssues, truncateLists, type Issue as SlotIssue } from "./checks.ts";
+export { applyGlossary, problemsOf, sanitizeWidgets, truncateLists } from "./checks.ts";
 export { clip, quantitiesIn, sentencesOf } from "./text.ts";

@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./render": "./src/render/index.ts",
+    "./issues": "./src/issues.ts",
     "./slides.css": "./src/render/slides.css"
   },
   "scripts": {

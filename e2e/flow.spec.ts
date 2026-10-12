@@ -112,6 +112,46 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
     await expect(page.getByTestId("unverified")).toHaveCount(0);
   });
 
+  await test.step("slot editor: word counts, Chinese messages, re-adding terms, visual without JSON, A/B/C/D answers", async () => {
+    await page.getByTestId("thumb").filter({ hasText: "概念讲解" }).first().click();
+    await page.getByTestId("edit-slide").click();
+    const editor = page.getByTestId("slot-editor");
+    const titleField = editor.locator(".slot-field").filter({ has: page.locator('[data-slot-path="title"]') });
+    await page.locator('[data-slot-path="title"]').fill("惯性是物体保持原有运动状态不变的性质，一切物体在没有受到外力作用时总保持静止或匀速直线运动");
+    await expect(titleField.locator(".count.over")).toContainText("/ 15 词");
+    await expect(titleField.locator(".slot-issues")).toContainText("标题：太长：最多 15 个英文词");
+    await page.locator('[data-slot-path="title"]').fill("Waves carry energy 波传递能量");
+    await expect(titleField.locator(".count.over")).toHaveCount(0);
+
+    const terms = editor.locator('fieldset[data-slot-path="terms"]');
+    while ((await terms.getByRole("button", { name: "删除 Remove" }).count()) > 0) await terms.getByRole("button", { name: "删除 Remove" }).first().click();
+    await terms.getByTestId("add-terms").click();
+    await page.locator('[data-slot-path="terms.0.term"]').fill("inertia");
+    await page.locator('[data-slot-path="terms.0.zh"]').fill("惯性");
+
+    await editor.getByTestId("visual-kind").selectOption("flow");
+    await page.locator('[data-slot-path="visual.steps"]').fill("Source vibrates\nWave travels\nEar detects");
+    await expect(editor.locator(".slot-preview .kj-flow-step")).toHaveCount(3);
+    await editor.evaluate((e) => (e.scrollTop = 0));
+    await shotOf(page.locator(".preview-pane"), "06d-slot-editor-visual");
+    await page.getByTestId("save-slide").click();
+    await expect(editor).toHaveCount(0);
+    const preview = page.locator(".preview-pane .slide-preview");
+    await expect(preview).toContainText("惯性");
+    await expect(preview.locator(".kj-flow-step")).toHaveCount(3);
+    await expect(preview.locator(".kj-flow-step.kj-step-hidden")).toHaveCount(0);
+    await page.getByTestId("undo-slide").click();
+
+    await page.getByTestId("thumb").filter({ hasText: "检查理解" }).first().click();
+    await page.getByTestId("edit-slide").click();
+    await expect(editor.getByTestId("answer-A")).toBeVisible();
+    await editor.getByTestId("answer-B").check();
+    await shotOf(page.locator(".preview-pane"), "06e-slot-editor-quiz");
+    await page.getByTestId("save-slide").click();
+    await expect(editor).toHaveCount(0);
+    await page.getByTestId("undo-slide").click();
+  });
+
   await test.step("table visual on the data page", async () => {
     await page.getByTestId("thumb").filter({ hasText: "数据图表" }).first().click();
     const table = page.locator(".preview-pane .kj-table");
@@ -191,7 +231,7 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
     const errors: string[] = [];
     off.on("pageerror", (e) => errors.push(e.message));
     await off.goto(`file://${file}`);
-    await expect(off.locator("body")).toHaveAttribute("data-ready", "1");
+    await expect(off.locator("body"), `offline page errors: ${errors.join(" | ")}`).toHaveAttribute("data-ready", "1");
     await expect(off.locator(".kj-counter")).toContainText(`1 / ${count}`);
     const fonts = await off.evaluate(async () => {
       const zh = await document.fonts.load('400 48px "Noto Sans SC"', "波长频率");
@@ -202,7 +242,8 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
     expect(fonts.zh).toBeGreaterThan(0);
     expect(fonts.latin).toBeGreaterThan(0);
     await shot(off, "10-offline-file");
-    for (let i = 0; i < count * 4 && !(await off.locator(".kj-sim iframe").count()); i++) await off.keyboard.press("ArrowRight");
+    const simFrame = off.locator(".kj-sim iframe").first();
+    for (let i = 0; i < count * 4 && !(await simFrame.isVisible()); i++) await off.keyboard.press("ArrowRight");
     await expect(off.frameLocator(".kj-sim iframe").locator("canvas")).toBeVisible();
     await shot(off, "11-offline-sim");
     expect(network).toEqual([]);

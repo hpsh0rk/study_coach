@@ -99,6 +99,7 @@ export const TABLE_SLOT = tableSlot(B.table);
 /** Table in the statement visual column (exactly 2 columns). */
 export const TABLE_NARROW_SLOT = tableSlot(B.tableNarrow);
 export const PLACEHOLDER_SLOT = PlaceholderSpec.extend({ hint: optStr("placeholder hint", B.placeholder.hint) });
+export const FLOW_SLOT = FlowSpec.extend({ steps: arr(str("flow step", B.flow.item), B.flow) });
 
 /** Budget-refined slot schemas: these go to the model as JSON Schema and validate its output. */
 export const SLOT_SCHEMAS = {
@@ -109,7 +110,7 @@ export const SLOT_SCHEMAS = {
   }),
   statement: StatementContent.extend({
     title: str("title", B.statement.title),
-    visual: z.discriminatedUnion("kind", [ChartSpec, FunctionSpec, FlowSpec, FormulaSpec, TABLE_NARROW_SLOT, PLACEHOLDER_SLOT]),
+    visual: z.discriminatedUnion("kind", [ChartSpec, FunctionSpec, FLOW_SLOT, FormulaSpec, TABLE_NARROW_SLOT, PLACEHOLDER_SLOT]),
     bullets: arr(str("bullet", B.statement.bullets.item), B.statement.bullets).refine((xs) => xs.reduce((n, s) => n + countWords(s), 0) <= B.statement.bodyTotal.max, `bullets: at most ${B.statement.bodyTotal.max} words in total`),
     terms: arr(z.object({ term: str("term", B.statement.terms.item), zh: z.string().trim().max(12).default("") }), B.statement.terms),
   }),

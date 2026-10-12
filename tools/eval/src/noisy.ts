@@ -254,6 +254,7 @@ export function classifyProblem(msg: string): SlideFault | "other" {
   if (/屏幕上不应出现/.test(msg)) return "cliche";
   if (/^fadeFrom/.test(msg)) return "fadeFrom";
   if (/^widget:/.test(msg)) return "badVisual";
+  if (/not on the cited pages|does not compute|待核实/.test(msg)) return "wrongNumber";
   if (/at most \d+ words|expected string to have <=/.test(msg)) return "overBudget";
   if (/expected array to have <=/.test(msg)) return "tooManyItems";
   return "other";

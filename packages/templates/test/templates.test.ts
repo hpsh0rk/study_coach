@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { LAYOUT_IDS, PAGE_TYPE_IDS, SlideContent } from "@kj/schema";
+import { describeIssue, slotIssues, widgetIssues } from "../src/issues.ts";
 import { BUDGETS, galleryCells, layoutForPageType, maxBudgetContent, maxBudgetTable, PAGE_TYPE_VISUALS, sampleContent, SLOT_SCHEMAS, stepsOf } from "../src/index.ts";
 
 describe("layouts", () => {
@@ -30,7 +31,7 @@ describe("layouts", () => {
 
   it("gallery cells (incl. table and 图示待补 variants) satisfy the strict slot schemas", () => {
     const cells = galleryCells();
-    expect(cells.length).toBe(LAYOUT_IDS.length * 3 + 5);
+    expect(cells.length).toBe(LAYOUT_IDS.length * 3 + 7);
     expect(new Set(cells.map((c) => c.id)).size).toBe(cells.length);
     for (const g of cells) {
       const strict = SLOT_SCHEMAS[g.layout].safeParse(g.content);
@@ -56,5 +57,31 @@ describe("layouts", () => {
   it("counts reveal steps", () => {
     expect(stepsOf(sampleContent("title"))).toBe(0);
     expect(stepsOf(sampleContent("experiment"))).toBeGreaterThan(0);
+  });
+});
+
+describe("slot issues for teachers", () => {
+  const st = maxBudgetContent("statement", "en");
+  if (st.layout !== "statement") throw new Error("layout");
+
+  it("reports both the list-length error and the item errors it hides, in Chinese", () => {
+    const issues = slotIssues({ ...st, bullets: ["one", "two", "three", "a fourth bullet that runs far past the eight word budget"] });
+    const lines = issues.map(describeIssue);
+    expect(lines).toContain("要点：太多：最多 3 条");
+    expect(lines).toContain("要点 第 4 条：太长：最多 8 个英文词（约 14 个汉字）");
+  });
+
+  it("never repeats the slot name and labels nested fields", () => {
+    const long = slotIssues({ ...st, title: "惯性是物体保持原有运动状态不变的性质，一切物体在没有受到外力作用时总保持静止或匀速直线运动" });
+    expect(long.map(describeIssue)).toEqual(["标题：太长：最多 15 个英文词（约 26 个汉字）"]);
+    expect(describeIssue({ path: ["options", 0, "misconception"], message: "misconception: at most 10 words (about 17 Chinese characters)" })).toBe("选项 第 1 条 · 对应误区：太长：最多 10 个英文词（约 17 个汉字）");
+    expect(describeIssue({ path: ["terms", 0], message: "Invalid input: expected object, received string" })).toBe("术语 第 1 条：格式不对：这里需要分成几个小项填写");
+  });
+
+  it("widget errors land on the visual slot", () => {
+    const issues = widgetIssues({ ...st, visual: { kind: "function", expr: "sin(2*pi*x", x: [0, 4], xLabel: "x", yLabel: "y", params: [] } });
+    expect(issues[0]!.path).toEqual(["visual"]);
+    expect(describeIssue(issues[0]!)).toMatch(/^图示：表达式算不出来/);
+    expect(widgetIssues(st)).toEqual([]);
   });
 });

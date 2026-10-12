@@ -34,4 +34,6 @@ export const BUDGETS = {
   tableNarrow: { columns: list(2, 2, 2, words(1, 2)), rows: list(1, 3, 4, words(1, 2)), caption: words(4, 6) },
   /** "图示待补" placeholder: what visual would help. */
   placeholder: { hint: words(8, 12) },
+  /** Flow chart in the statement visual column: five boxes of up to four words still fit at 48px. */
+  flow: list(2, 4, 5, words(3, 4)),
 } as const;

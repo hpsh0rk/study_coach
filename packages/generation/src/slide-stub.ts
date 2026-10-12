@@ -95,7 +95,7 @@ function visualFor(spec: SlideSpec, source: string, bullets: string[], outline: 
       break;
   }
   if (formula && spec.visual !== "flow") return { kind: "formula", tex: formula.tex };
-  const steps = pad(bullets.map((b) => clip(b, 5).slice(0, 40)), 3, (i) => `Step ${i + 1}`).slice(0, 4);
+  const steps = pad(bullets.map((b) => clip(b, BUDGETS.flow.item.max).slice(0, 40)), 3, (i) => `Step ${i + 1}`).slice(0, BUDGETS.flow.soft);
   return { kind: "flow", steps };
 }
 

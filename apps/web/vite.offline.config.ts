@@ -17,6 +17,8 @@ function stripFontFaces(): Plugin {
 export default defineConfig({
   plugins: [stripFontFaces()],
   publicDir: false,
+  // Library mode leaves process.env.NODE_ENV in dependencies; a file:// page has no `process`.
+  define: { "process.env.NODE_ENV": JSON.stringify("production") },
   build: {
     outDir: "public/offline",
     emptyOutDir: true,
