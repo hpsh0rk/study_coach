@@ -4,11 +4,11 @@ import { PAGE_TYPES, verifyNumbers } from "@kj/pedagogy";
 import { LAYOUT_IDS, SlideContent, type GlossaryEntry, type LayoutId, type LessonParams, type Outline, type PageText, type SlideSpec, type Unverified } from "@kj/schema";
 import { BUDGETS, LAYOUTS, SLOT_SCHEMAS } from "@kj/templates";
 import { findEmbed } from "@kj/widgets";
-import { applyGlossary, problemsOf, truncateLists } from "./checks.ts";
+import { applyGlossary, problemsOf, sanitizeWidgets, truncateLists } from "./checks.ts";
 import { optionsOf, type PipelineOptions } from "./options.ts";
 import { stubSlide } from "./slide-stub.ts";
 
-export const SLIDE_PROMPT_VERSION = "slide.write@4";
+export const SLIDE_PROMPT_VERSION = "slide.write@5";
 /** Source characters the writer sees for one slide. */
 export const SLIDE_SOURCE_CHARS = 12_000;
 
@@ -48,6 +48,21 @@ export interface WriteResult {
   /** 待核实: numbers, formulas and calculations the source check could not confirm. */
   unverified: Unverified[];
   providerId: string;
+}
+
+/** 待核实 entries for an outline spec whose source pages were out of range or look shifted. */
+export function sourceUnverified(spec: Pick<SlideSpec, "sourceIssue">): Unverified[] {
+  const i = spec.sourceIssue;
+  if (!i) return [];
+  const cited = i.cited.length ? `p.${i.cited.join(", ")}` : "—";
+  const suggested = i.suggested.length ? ` · 可能是 p.${i.suggested.join(", ")}` : "";
+  return [
+    {
+      kind: "source",
+      text: cited,
+      detail: (i.kind === "out-of-range" ? `大纲引用的页不在所选范围内${suggested} · cited page outside the selection` : `引用页和这一页的内容对不上${suggested} · cited page does not match the slide`).slice(0, 200),
+    },
+  ];
 }
 
 /** The text a slide is checked against: its cited pages, or the whole selection when it cites none. */
@@ -125,7 +140,7 @@ export function buildMessages(spec: SlideSpec, input: WriteInput, outline: Outli
   const lang = input.params.language === "zh" ? "Simplified Chinese" : "English";
   const def = PAGE_TYPES[spec.pageType];
   const system = [
-    `You write the on-screen content of ONE slide for a ${input.params.minutes}-minute lesson (student level: ${input.params.level}). Screen text in ${lang}.`,
+    `You write the on-screen content of ONE slide of a lesson (student level: ${input.params.level}). Screen text in ${lang}.`,
     input.params.language === "en+zh" ? "Students are Chinese speakers learning in English: give key terms with Chinese translations in `terms` where the layout has them." : "",
     `Layout "${spec.layout}" (${LAYOUTS[spec.layout].label.en}); page type ${spec.pageType} (${def.label.en}), about ${spec.minutes} minutes.`,
     o.budgetsInPrompt ? budgetText(spec.layout) : "",
@@ -196,11 +211,17 @@ export async function writeSlide(ai: AiLayer, outline: Outline, specId: string, 
     });
 
   const finish = (c: SlideContent) => pinSim(applyGlossary(c, outline.glossary), spec, pages);
+  const checkText = checkSourceText(spec.sourcePages, input.pages);
+  const invented = (c: SlideContent, notes: string) =>
+    verifyNumbers(c, checkText, { pageType: spec.pageType, notes })
+      .filter((u) => u.kind === "number" || u.kind === "calc")
+      .map((u) => (u.kind === "number" ? `number ${u.text}: not on the cited pages (待核实) — use only numbers from the source, or remove it` : `calculation ${u.text}: does not compute (待核实) — ${u.detail}`));
   let res = await call();
   let content = finish(res.output.content);
   let found = problemsOf(content, spec.pageType);
-  if (found.errors.length && res.providerId !== "stub" && o.slideCheckRetry) {
-    res = await call(found.errors);
+  const firstInvented = invented(content, res.output.notes);
+  if ((found.errors.length || firstInvented.length) && res.providerId !== "stub" && o.slideCheckRetry) {
+    res = await call([...found.errors, ...firstInvented]);
     content = finish(res.output.content);
     found = problemsOf(content, spec.pageType);
   }
@@ -208,13 +229,18 @@ export async function writeSlide(ai: AiLayer, outline: Outline, specId: string, 
     content = truncateLists(content, spec.pageType);
     found = problemsOf(content, spec.pageType);
   }
+  const safe = sanitizeWidgets(content);
+  if (safe.replaced.length) {
+    content = safe.content;
+    found = problemsOf(content, spec.pageType);
+  }
   const notes = res.output.notes.slice(0, NOTES_MAX);
   return {
     content,
     notes,
     sources: spec.sourcePages,
-    warnings: [...found.errors, ...found.warnings],
-    unverified: verifyNumbers(content, checkSourceText(spec.sourcePages, input.pages), { pageType: spec.pageType, notes }),
+    warnings: [...safe.replaced.map((r) => `widget replaced: ${r}`), ...found.errors, ...found.warnings],
+    unverified: [...sourceUnverified(spec), ...verifyNumbers(content, checkText, { pageType: spec.pageType, notes })].slice(0, 10),
     providerId: res.providerId,
   };
 }

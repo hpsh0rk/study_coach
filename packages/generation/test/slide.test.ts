@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_PARAMS, type Outline, type SlideSpec } from "@kj/schema";
+import { DEFAULT_PARAMS, type LessonParams, type Outline, type SlideSpec } from "@kj/schema";
 import { BUDGETS } from "@kj/templates";
 import { fakeAi } from "../../ai/test/fake.ts";
-import { buildSlideMessages as buildMessages, problemsOf, sourcePagesFor, stubSlide, truncateLists, visualRuleFor, writeSlide, type WriteInput } from "../src/index.ts";
+import { buildSlideMessages as buildMessages, problemsOf, sanitizeWidgets, slideKey, sourcePagesFor, sourceUnverified, stubSlide, truncateLists, visualRuleFor, writeSlide, type WriteInput } from "../src/index.ts";
 
 const spec: SlideSpec = { id: "sp2", pageType: "concept", layout: "statement", title: "Waves carry energy, not matter", purpose: "", keyPoints: ["Energy moves"], visual: "formula", minutes: 3, sourcePages: [2], loop: 1 };
 const outline: Outline = { objectives: ["Describe waves"], slides: [spec], glossary: [{ term: "wavelength", zh: "波长" }], notCovered: [] };
@@ -103,6 +103,18 @@ describe("table and 图示待补 visuals", () => {
     expect(problemsOf(none).warnings.some((w) => w.includes("图示待补"))).toBe(true);
   });
 
+  it("sanitizeWidgets replaces a visual that does not compile by the placeholder", () => {
+    const st = stubSlide({ spec, outline, lessonTitle: "Waves", pages: stubPages }).content;
+    if (st.layout !== "statement") throw new Error("layout");
+    const broken = { ...st, visual: { kind: "function" as const, expr: "sin(2*pi*x", x: [0, 4] as [number, number], xLabel: "x", yLabel: "y", params: [] } };
+    expect(problemsOf(broken).errors.some((e) => e.startsWith("widget:"))).toBe(true);
+    const { content, replaced } = sanitizeWidgets(broken);
+    expect(content.layout === "statement" && content.visual.kind).toBe("placeholder");
+    expect(replaced[0]).toContain("图示待补");
+    expect(problemsOf(content).errors).toEqual([]);
+    expect(sanitizeWidgets(st).replaced).toEqual([]);
+  });
+
   it("truncateLists trims oversized tables to the slot budget", () => {
     const big = { kind: "table" as const, columns: ["a", "b", "c", "d"], rows: Array.from({ length: 6 }, () => ["1", "2", "3", "4"]) };
     const st = stubSlide({ spec, outline, lessonTitle: "Waves", pages: stubPages }).content;
@@ -110,5 +122,60 @@ describe("table and 图示待补 visuals", () => {
     const fixed = truncateLists({ ...st, visual: big });
     expect(fixed.layout === "statement" && fixed.visual).toMatchObject({ columns: ["a", "b"] });
     expect(problemsOf(fixed).errors).toEqual([]);
+  });
+});
+
+describe("writer safety nets", () => {
+  const clean = { ...overBudget, content: { ...overBudget.content, bullets: ["Energy moves along the rope", "Speed is frequency times wavelength"] } };
+
+  it("reports per-item word errors even when the list is also too long", () => {
+    const long = { ...clean.content, bullets: ["One", "Two", "Three", "Four", "This fifth bullet is far too long for the budget of eight words"] } as const;
+    const errors = problemsOf(long as never).errors;
+    expect(errors.some((e) => e.startsWith("bullets:") && e.includes("<="))).toBe(true);
+    expect(errors.some((e) => e.startsWith("bullets.4:"))).toBe(true);
+  });
+
+  it("retries a slide whose numbers are not on the cited pages and flags what is left as 待核实", async () => {
+    const invented = { ...clean, content: { ...clean.content, bullets: ["Sound travels at 343 m/s in air", "Speed is frequency times wavelength"] } };
+    const a = fakeAi([invented, invented]);
+    const res = await writeSlide(a.ai, outline, "sp2", input());
+    expect(a.requests).toHaveLength(2);
+    expect(a.requests[1]!.at(-1)!.content).toContain("not on the cited pages");
+    expect(res.unverified).toEqual([expect.objectContaining({ kind: "number", text: expect.stringContaining("343") })]);
+
+    const b = fakeAi([invented, clean]);
+    const fixed = await writeSlide(b.ai, outline, "sp2", input());
+    expect(fixed.unverified).toEqual([]);
+  });
+
+  it("never saves a visual that cannot render: falls back to 图示待补", async () => {
+    const broken = { ...clean, content: { ...clean.content, visual: { kind: "function", expr: "sin(2*pi*x", x: [0, 4], xLabel: "x", yLabel: "y", params: [] } } };
+    const a = fakeAi([broken, broken]);
+    const res = await writeSlide(a.ai, outline, "sp2", input());
+    expect(a.requests).toHaveLength(2);
+    expect(res.content.layout === "statement" && res.content.visual.kind).toBe("placeholder");
+    expect(res.warnings[0]).toMatch(/^widget replaced: visual → 图示待补/);
+  });
+
+  it("carries the outline's source-page flag into the slide's 待核实 list", async () => {
+    const flagged: SlideSpec = { ...spec, sourceIssue: { kind: "out-of-range", cited: [185], suggested: [2] } };
+    const a = fakeAi([clean]);
+    const res = await writeSlide(a.ai, { ...outline, slides: [flagged] }, "sp2", input());
+    expect(res.unverified[0]).toMatchObject({ kind: "source", text: "p.185" });
+    expect(res.unverified[0]!.detail).toContain("可能是 p.2");
+    expect(sourceUnverified(spec)).toEqual([]);
+  });
+});
+
+describe("slideKey", () => {
+  it("changes only with inputs the writer reads", async () => {
+    const base = await slideKey(spec, DEFAULT_PARAMS);
+    const plannerOnly: LessonParams = { ...DEFAULT_PARAMS, focus: "重点。", minutes: 80, lessonType: "review" };
+    expect(await slideKey({ ...spec, id: "other", loop: 3, sourceIssue: { kind: "mismatch", cited: [2], suggested: [3] } }, plannerOnly)).toBe(base);
+    expect(await slideKey({ ...spec, sourcePages: [2] }, DEFAULT_PARAMS)).toBe(base);
+    expect(await slideKey(spec, { ...DEFAULT_PARAMS, language: "zh" })).not.toBe(base);
+    expect(await slideKey(spec, { ...DEFAULT_PARAMS, level: "advanced" })).not.toBe(base);
+    expect(await slideKey({ ...spec, title: `${spec.title}!` }, DEFAULT_PARAMS)).not.toBe(base);
+    expect(buildMessages(spec, { ...input(), params: { ...DEFAULT_PARAMS, focus: "X", minutes: 90 } }, outline)).toEqual(buildMessages(spec, input(), outline));
   });
 });

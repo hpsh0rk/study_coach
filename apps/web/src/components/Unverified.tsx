@@ -1,7 +1,7 @@
 import { createContext } from "react";
 import type { Unverified } from "@kj/schema";
 
-const KIND: Record<Unverified["kind"], string> = { number: "数字 Number", formula: "公式 Formula", calc: "计算 Calculation" };
+const KIND: Record<Unverified["kind"], string> = { number: "数字 Number", formula: "公式 Formula", calc: "计算 Calculation", source: "页码 Source page" };
 
 /** Texts flagged 待核实 on the slide being edited; matching fields are outlined in yellow. */
 export const FlagContext = createContext<string[]>([]);

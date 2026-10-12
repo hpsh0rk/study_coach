@@ -155,7 +155,7 @@ export function stepsOf(content: SlideContent): number {
     case "title":
       return 0;
     case "statement":
-      return Math.max(0, content.bullets.length - 1);
+      return Math.max(0, content.bullets.length - 1, content.visual.kind === "flow" ? content.visual.steps.length - 1 : 0);
     case "chart":
       return content.takeaways.length;
     case "steps":

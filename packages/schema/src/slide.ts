@@ -87,7 +87,7 @@ export type ContentOf<L extends SlideContent["layout"]> = Extract<SlideContent, 
  * find in the cited source pages (or that does not compute). Teachers verify; nothing is blocked.
  */
 export const Unverified = z.object({
-  kind: z.enum(["number", "formula", "calc"]),
+  kind: z.enum(["number", "formula", "calc", "source"]),
   text: z.string().max(120),
   detail: z.string().max(200).default(""),
 });

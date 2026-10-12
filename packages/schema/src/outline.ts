@@ -24,6 +24,17 @@ export const SlideSpec = z.object({
   sourcePages: z.array(z.number().int().min(1)).max(20).default([]),
   /** Learning loop index; 0 = opening/closing pages. */
   loop: z.number().int().min(0).max(6).default(0),
+  /**
+   * Set by normalization, never by the model: the planner cited pages outside the selection (replaced by
+   * `suggested`) or pages whose text does not match the slide. Shown as 待核实.
+   */
+  sourceIssue: z
+    .object({
+      kind: z.enum(["out-of-range", "mismatch"]),
+      cited: z.array(z.number().int()).max(20),
+      suggested: z.array(z.number().int().min(1)).max(20).default([]),
+    })
+    .optional(),
 });
 export type SlideSpec = z.infer<typeof SlideSpec>;
 

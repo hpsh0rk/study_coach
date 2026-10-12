@@ -149,7 +149,7 @@ export interface GalleryCell {
   content: SlideContent;
 }
 
-/** Every layout as sample / max EN / max ZH, plus the table and "图示待补" visual variants. */
+/** Every layout as sample / max EN / max ZH, plus the table, "图示待补" and longest-flow visual variants. */
 export function galleryCells(): GalleryCell[] {
   const cells: GalleryCell[] = [];
   for (const layout of LAYOUT_IDS) {
@@ -164,5 +164,9 @@ export function galleryCells(): GalleryCell[] {
   }
   const st = maxBudgetContent("statement", "zh");
   if (st.layout === "statement") cells.push({ id: "statement-placeholder", layout: "statement", content: { ...st, visual: { kind: "placeholder", hint: filler(BUDGETS.placeholder.hint.max, "zh", 3) } } });
+  if (st.layout === "statement") {
+    const steps = Array.from({ length: 6 }, (_, i) => filler(3, "zh", i + 4).slice(0, 40));
+    cells.push({ id: "statement-flow-6", layout: "statement", content: { ...st, bullets: st.bullets.slice(0, 1), visual: { kind: "flow", steps } } });
+  }
   return cells;
 }

@@ -1,5 +1,5 @@
 import { checkSlide, type Violation } from "@kj/pedagogy";
-import type { GlossaryEntry, PageType, SlideContent, TableSpec } from "@kj/schema";
+import type { GlossaryEntry, PageType, SlideContent, TableSpec, WidgetSpec } from "@kj/schema";
 import { BUDGETS, SLOT_SCHEMAS } from "@kj/templates";
 import { validateWidget, type WidgetIssue } from "@kj/widgets";
 
@@ -10,12 +10,59 @@ function widgetsOf(c: SlideContent) {
   return [];
 }
 
+export type Issue = { path: PropertyKey[]; message: string };
+const getIn = (o: unknown, path: PropertyKey[]): unknown => path.reduce<unknown>((x, k) => (x as Record<PropertyKey, unknown> | undefined)?.[k], o);
+function setIn<T>(o: T, path: PropertyKey[], v: unknown): T {
+  const copy = structuredClone(o) as Record<PropertyKey, unknown>;
+  let x = copy;
+  for (const k of path.slice(0, -1)) x = x[k] as Record<PropertyKey, unknown>;
+  x[path[path.length - 1]!] = v;
+  return copy as T;
+}
+
+/**
+ * A list over its item limit hides its items' own errors (zod stops at the length check), so a retry
+ * would only hear "too many items". Re-checks the items in windows of the allowed size and reports both.
+ */
+function maskedItemIssues(c: SlideContent, issues: Issue[]): Issue[] {
+  const out: Issue[] = [];
+  for (const i of issues) {
+    const max = /expected array to have <=\s*(\d+)/.exec(i.message)?.[1];
+    const arr = getIn(c, i.path);
+    if (!max || !Array.isArray(arr)) continue;
+    const n = Number(max);
+    if (n < 1) continue;
+    for (let k = 0; k < arr.length; k += n) {
+      const start = Math.max(0, Math.min(k, arr.length - n));
+      const r = SLOT_SCHEMAS[c.layout].safeParse(setIn(c, i.path, arr.slice(start, start + n)));
+      if (r.success) continue;
+      for (const j of r.error.issues) {
+        const inside = j.path.length > i.path.length && i.path.every((p, d) => j.path[d] === p) && typeof j.path[i.path.length] === "number";
+        if (!inside) continue;
+        const path = [...j.path];
+        path[i.path.length] = (path[i.path.length] as number) + start;
+        out.push({ path, message: j.message });
+      }
+    }
+  }
+  return out;
+}
+
+/** Slot-schema issues of content for its layout, including the item issues a too-long list hides. */
+export function slotIssues(c: SlideContent): Issue[] {
+  const layout = (c as { layout?: unknown }).layout;
+  const schema = SLOT_SCHEMAS[layout as SlideContent["layout"]];
+  if (!schema) return [{ path: ["layout"], message: "unknown layout" }];
+  const strict = schema.safeParse(c);
+  if (strict.success) return [];
+  return [...strict.error.issues, ...maskedItemIssues(c, strict.error.issues)].map((i) => ({ path: i.path, message: i.message }));
+}
+
 /** Everything that would make the slide wrong or over budget. */
 export function problemsOf(c: SlideContent, pageType?: PageType): { errors: string[]; warnings: string[] } {
   const errors: string[] = [];
   const warnings: string[] = [];
-  const strict = SLOT_SCHEMAS[c.layout].safeParse(c);
-  if (!strict.success) for (const i of strict.error.issues.slice(0, 10)) errors.push(`${i.path.join(".")}: ${i.message}`);
+  for (const msg of new Set(slotIssues(c).map((i) => `${i.path.join(".")}: ${i.message}`))) if (errors.length < 12) errors.push(msg);
   for (const w of widgetsOf(c)) for (const i of validateWidget(w) as WidgetIssue[]) (i.level === "error" ? errors : warnings).push(`widget: ${i.message}`);
   for (const v of checkSlide(c) as Violation[]) (v.level === "error" ? errors : warnings).push(v.message);
   if (pageType === "faded" && c.layout === "steps" && !(c.fadeFrom !== undefined && c.fadeFrom >= 1 && c.fadeFrom <= c.steps.length - 1)) {
@@ -66,4 +113,26 @@ export function applyGlossary(c: SlideContent, glossary: GlossaryEntry[]): Slide
   if (c.layout !== "statement" || !glossary.length) return c;
   const zh = new Map(glossary.filter((g) => g.zh).map((g) => [g.term.toLowerCase(), g.zh]));
   return { ...c, terms: c.terms.map((t) => ({ ...t, zh: zh.get(t.term.toLowerCase()) ?? t.zh })) };
+}
+
+const PLACEHOLDER_HINT = "Visual could not be drawn; add a diagram";
+
+/**
+ * Last-resort, deterministic: a visual that still fails validation (e.g. an expression that does not
+ * compile) is replaced by the "图示待补" placeholder (experiment plots by a safe wave), so a saved slide always renders.
+ */
+export function sanitizeWidgets(c: SlideContent): { content: SlideContent; replaced: string[] } {
+  const bad = (w: WidgetSpec | undefined) => !!w && validateWidget(w).some((i) => i.level === "error");
+  const why = (w: WidgetSpec) => validateWidget(w).find((i) => i.level === "error")?.message ?? "invalid";
+  const placeholder = { kind: "placeholder" as const, hint: PLACEHOLDER_HINT };
+  if (c.layout === "statement" && bad(c.visual)) return { content: { ...c, visual: placeholder }, replaced: [`visual → 图示待补 (${why(c.visual)})`] };
+  if (c.layout === "chart" && bad(c.chart)) return { content: { ...c, chart: placeholder }, replaced: [`chart → 图示待补 (${why(c.chart)})`] };
+  if (c.layout === "experiment" && bad(c.sim)) {
+    const safe = { kind: "function" as const, expr: "A*sin(2*pi*x/L)", x: [0, 4] as [number, number], y: [-3, 3] as [number, number], xLabel: "distance / m", yLabel: "displacement / cm", params: [
+      { name: "A", label: "Amplitude A / cm", min: 0.5, max: 3, step: 0.1, value: 2 },
+      { name: "L", label: "Wavelength λ / m", min: 0.5, max: 4, step: 0.1, value: 2 },
+    ] };
+    return { content: { ...c, sim: safe }, replaced: [`sim → default wave plot (${why(c.sim)})`] };
+  }
+  return { content: c, replaced: [] };
 }

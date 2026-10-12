@@ -123,7 +123,7 @@ function renderFlow(spec: FlowSpec, host: HTMLElement): WidgetHandle {
   const list = el("ol", "kj-flow");
   spec.steps.forEach((s, i) => {
     const li = el("li", "kj-flow-step");
-    li.dataset.step = String(i + 1);
+    if (i > 0) li.dataset.step = String(i);
     renderRichText(li, s);
     list.append(li);
   });
@@ -191,7 +191,20 @@ function renderPlaceholder(spec: PlaceholderSpec, host: HTMLElement): WidgetHand
 }
 
 /** Renders a widget into `host` (which must already have its final size). */
+/** Renders a widget; a spec that throws (e.g. an expression that does not compile) shows the 图示待补 placeholder instead. */
 export function renderWidget(spec: WidgetSpec, host: HTMLElement, ctx: WidgetContext): WidgetHandle {
+  try {
+    return renderWidgetUnchecked(spec, host, ctx);
+  } catch (e) {
+    host.replaceChildren();
+    host.classList.remove(`kj-widget-${spec.kind}`);
+    host.classList.add("kj-widget-placeholder", "kj-widget-failed");
+    host.dataset.error = (e as Error).message.slice(0, 200);
+    return renderPlaceholder({ kind: "placeholder", hint: "图示无法显示，请在编辑器里修改 · visual could not be drawn" }, host);
+  }
+}
+
+function renderWidgetUnchecked(spec: WidgetSpec, host: HTMLElement, ctx: WidgetContext): WidgetHandle {
   host.classList.add("kj-widget", `kj-widget-${spec.kind}`);
   switch (spec.kind) {
     case "chart": {

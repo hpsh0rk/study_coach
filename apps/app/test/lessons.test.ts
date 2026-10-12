@@ -236,3 +236,68 @@ describe("slide reuse, editing and snapshots", () => {
     expect(row.planned).toBe(v.outline.slides.length);
   });
 });
+
+describe("review #2 regressions", () => {
+  const params = (focus: string) => ({ minutes: 40, level: "intermediate", lessonType: "new", language: "en+zh", focus });
+
+  it("editing the focus (one punctuation mark) keeps every slide, hand-edited ones included, on revise and on a new draft", async () => {
+    const created = await teacher.req("POST", "/api/lessons", { documentId: docId, chapterIds: ["c1", "c2"] });
+    const lessonId = created.json.lesson.id as string;
+    await teacher.req("PATCH", `/api/lessons/${lessonId}`, { params: params("重点讲 v = fλ 的计算") });
+    const v = (await teacher.req("POST", `/api/lessons/${lessonId}/outline`)).json.version;
+    await teacher.req("POST", `/api/lessons/${lessonId}/outline-versions/${v.id}/confirm`, { ackOverBudget: true });
+    for (const s of v.outline.slides) expect((await teacher.req("POST", `/api/lessons/${lessonId}/outline-versions/${v.id}/slides/${s.id}/generate`)).status).toBe(200);
+    const all = (await teacher.req("GET", `/api/lessons/${lessonId}`)).json.slides;
+    expect(all).toHaveLength(v.outline.slides.length);
+    const target = all.find((s: any) => s.layout === "statement");
+    const edited = (await teacher.req("PATCH", `/api/lessons/${lessonId}/slides/${target.id}`, { content: { ...target.content, title: "惯性 inertia 是物体保持运动状态的性质" } })).json.slide;
+    const calls = await aiCalls(lessonId);
+
+    await teacher.req("PATCH", `/api/lessons/${lessonId}`, { params: params("重点讲 v = fλ 的计算。") });
+    const r = (await teacher.req("POST", `/api/lessons/${lessonId}/outline-versions/${v.id}/revise`)).json.version;
+    expect(r.params.focus).toBe("重点讲 v = fλ 的计算");
+    const revised = (await teacher.req("POST", `/api/lessons/${lessonId}/outline-versions/${r.id}/confirm`, { ackOverBudget: true })).json;
+    expect(revised.slides).toHaveLength(v.outline.slides.length);
+    expect(revised.slides.find((s: any) => s.specId === target.specId).content).toEqual(edited.content);
+
+    const fresh = (await teacher.req("POST", `/api/lessons/${lessonId}/outline`)).json.version;
+    expect(fresh.params.focus).toBe("重点讲 v = fλ 的计算。");
+    const redrafted = (await teacher.req("POST", `/api/lessons/${lessonId}/outline-versions/${fresh.id}/confirm`, { ackOverBudget: true })).json;
+    expect(redrafted.slides).toHaveLength(fresh.outline.slides.length);
+    expect(redrafted.slides.find((s: any) => s.specId === target.specId).content.title).toBe("惯性 inertia 是物体保持运动状态的性质");
+    expect(await aiCalls(lessonId)).toBe(calls);
+    expect((await teacher.req("GET", `/api/lessons/${lessonId}/deck`)).json.slides).toHaveLength(fresh.outline.slides.length);
+  });
+
+  it("PATCH rejects a visual that cannot be drawn and reports item errors behind a too-long list", async () => {
+    const { lessonId, v } = await confirmedLesson();
+    const spec = v.outline.slides.find((s: any) => s.layout === "statement");
+    const slide = (await teacher.req("POST", `/api/lessons/${lessonId}/outline-versions/${v.id}/slides/${spec.id}/generate`)).json.slide;
+    const visual = { kind: "function", expr: "sin(2*pi*x", x: [0, 4], xLabel: "x", yLabel: "y", params: [] };
+    const broken = await teacher.req("PATCH", `/api/lessons/${lessonId}/slides/${slide.id}`, { content: { ...slide.content, visual } });
+    expect(broken.status).toBe(422);
+    expect(broken.json.error.detail[0].path).toEqual(["visual"]);
+    const long = await teacher.req("PATCH", `/api/lessons/${lessonId}/slides/${slide.id}`, { content: { ...slide.content, bullets: ["a", "b", "c", "This bullet is much too long for the eight word budget"] } });
+    expect(long.status).toBe(422);
+    const paths = long.json.error.detail.map((i: any) => i.path.join("."));
+    expect(paths).toContain("bullets");
+    expect(paths).toContain("bullets.3");
+  });
+
+  it("flags edited out-of-range source pages as 待核实; the teacher can clear a flag but not forge one", async () => {
+    const created = await teacher.req("POST", "/api/lessons", { documentId: docId, chapterIds: ["c1"] });
+    const lessonId = created.json.lesson.id as string;
+    const v = (await teacher.req("POST", `/api/lessons/${lessonId}/outline`)).json.version;
+    const target = v.outline.slides.find((s: any) => s.pageType === "concept");
+    const put = (slides: any[]) => teacher.req("PUT", `/api/lessons/${lessonId}/outline-versions/${v.id}`, { outline: { ...v.outline, slides } });
+    const moved = (await put(v.outline.slides.map((s: any) => (s.id === target.id ? { ...s, sourcePages: [7] } : s)))).json.version;
+    const flagged = moved.outline.slides.find((s: any) => s.id === target.id);
+    expect(flagged.sourceIssue).toMatchObject({ kind: "out-of-range", cited: [7] });
+    expect(flagged.sourcePages.every((p: number) => p >= 1 && p <= 4)).toBe(true);
+    const other = moved.outline.slides.find((s: any) => s.id !== target.id && s.sourcePages.length);
+    const forged = (await put(moved.outline.slides.map((s: any) => (s.id === other.id ? { ...s, sourceIssue: { kind: "mismatch", cited: [1], suggested: [2] } } : s)))).json.version;
+    expect(forged.outline.slides.find((s: any) => s.id === other.id).sourceIssue).toBeUndefined();
+    const cleared = (await put(forged.outline.slides.map((s: any) => (s.id === target.id ? { ...s, sourceIssue: undefined } : s)))).json.version;
+    expect(cleared.outline.slides.find((s: any) => s.id === target.id).sourceIssue).toBeUndefined();
+  });
+});
