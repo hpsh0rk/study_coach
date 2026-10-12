@@ -342,6 +342,10 @@ export class ProjectDO extends DurableObject<Env> {
   }
 
   override async webSocketClose(ws: WebSocket, code: number): Promise<void> {
-    ws.close(code === 1005 ? 1000 : code, "closing");
+    // 1005/1006/1015 are reserved and cannot be sent in a close frame.
+    const sendable = code === 1000 || (code >= 3000 && code <= 4999) || (code >= 1001 && code <= 1014 && code !== 1005 && code !== 1006);
+    try {
+      ws.close(sendable ? code : 1000, "closing");
+    } catch {}
   }
 }

@@ -2,7 +2,7 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "lib": ["ES2023"],
-    "types": ["@cloudflare/workers-types", "@cloudflare/vitest-pool-workers"]
+    "types": ["@cloudflare/workers-types", "@cloudflare/vitest-pool-workers/types"]
   },
   "include": ["src", "test", "drizzle.config.ts"]
 }

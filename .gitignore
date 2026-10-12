@@ -9,3 +9,7 @@ test-results/
 playwright-report/
 apps/app/.wrangler.deploy.jsonc
 .DS_Store
+.cache
+.wrangler-e2e
+__pycache__/
+.pytest_cache/

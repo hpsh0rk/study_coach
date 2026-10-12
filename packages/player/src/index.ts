@@ -303,7 +303,9 @@ export class Player {
       if (startX === null) return;
       const dx = e.clientX - startX;
       startX = null;
-      if (Math.abs(dx) > 50) (dx < 0 ? this.next() : this.prev());
+      if (Math.abs(dx) <= 50) return;
+      if (dx < 0) this.next();
+      else this.prev();
     };
     this.root.addEventListener("pointerdown", onDown);
     this.root.addEventListener("pointerup", onUp);
