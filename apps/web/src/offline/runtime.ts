@@ -11,6 +11,8 @@ export interface OfflineDeck {
   title: string;
   /** `student` files carry no notes; `teacher` files show notes only in a separate presenter window. */
   audience: "teacher" | "student";
+  /** `hidden`: a 课前预习 file, answers already stripped by the server. */
+  answers?: "hidden" | "shown";
   theme: ThemeId;
   language?: TeachingLanguage;
   pageLabels: Record<number, string>;
@@ -67,6 +69,7 @@ const player = new Player(document.getElementById("kj-root")!, {
   showNotes: false,
   pageLabels: deck.pageLabels,
   language: deck.language,
+  hideAnswers: deck.answers === "hidden",
   onChange: (p) => {
     pos = p;
     renderPresenter();

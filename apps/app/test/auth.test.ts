@@ -69,11 +69,15 @@ describe("whitelist auth", () => {
     const admin = new Client();
     expect((await admin.req("POST", "/api/auth/login", { username: "admin", password: "Admin123456" })).status).toBe(200);
     expect(await loadAiConfig(e, "org_default")).toEqual({ active: null });
+    // No provider and stubs allowed: every page tells the teacher the output is the built-in templates.
+    expect((await admin.req("GET", "/api/auth/me")).json.ai).toBe("stub");
+    expect((await new Client().req("GET", "/api/auth/me")).json).toEqual({ user: null, ai: null });
     expect((await admin.req("POST", "/api/admin/ai/providers", { kind: "deepseek", name: "DS", apiKey: "sk-test-12345678" })).status).toBe(400);
     const a = (await admin.req("POST", "/api/admin/ai/providers", { kind: "deepseek", name: "DS", apiKey: "sk-test-12345678", model: "deepseek-chat" })).json.id;
     const b = (await admin.req("POST", "/api/admin/ai/providers", { kind: "glm", name: "GLM", apiKey: "sk-test-87654321", model: "glm-4-flash" })).json.id;
     const enabled = async () => (await admin.req("GET", "/api/admin/ai")).json.providers.filter((p: any) => p.enabled).map((p: any) => p.id);
     expect(await enabled()).toEqual([b]);
+    expect((await admin.req("GET", "/api/auth/me")).json.ai).toBe("live");
     expect((await loadAiConfig(e, "org_default")).active).toMatchObject({ provider: { id: b }, model: "glm-4-flash" });
     expect((await admin.req("PATCH", `/api/admin/ai/providers/${a}`, { enabled: true, model: "deepseek-reasoner" })).status).toBe(200);
     expect(await enabled()).toEqual([a]);

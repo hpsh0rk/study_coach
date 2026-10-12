@@ -1,6 +1,6 @@
 import type { Slide, TeachingLanguage, ThemeId } from "@kj/schema";
 import { resolveEmbed } from "@kj/widgets";
-import { lessonApi } from "../lessonApi.ts";
+import { lessonApi, type AnswerMode } from "../lessonApi.ts";
 import type { OfflineDeck } from "./runtime.ts";
 
 /** Families the slides use; KaTeX faces only when the deck has math. */
@@ -105,10 +105,13 @@ export type OfflineAudience = "teacher" | "student";
 
 /**
  * One self-contained HTML file: deck + player runtime + catalog sims + the font chunks it needs. No network at all when opened.
- * `student`: the server strips notes and misconception labels (as for the share link). `teacher`: notes open only in a separate presenter window.
+ * `student`: the server strips notes and misconception labels (as for the share link), and answers unless `answers` is `shown`. `teacher`: notes open only in a separate presenter window.
  */
-async function buildOfflineHtml(lessonId: string, audience: OfflineAudience): Promise<OfflineFile> {
-  const deck = (await lessonApi.deck(lessonId, audience)) as unknown as { lesson: { title: string; theme: ThemeId; pageLabels: Record<number, string>; language: TeachingLanguage }; slides: Slide[] };
+async function buildOfflineHtml(lessonId: string, audience: OfflineAudience, answers: AnswerMode): Promise<OfflineFile> {
+  const deck = (await lessonApi.deck(lessonId, audience, answers)) as unknown as {
+    lesson: { title: string; theme: ThemeId; pageLabels: Record<number, string>; language: TeachingLanguage; answers: AnswerMode };
+    slides: Slide[];
+  };
   const [js, css] = await Promise.all([text("/offline/runtime.js"), text("/offline/runtime.css")]);
   const sims: Record<string, string> = {};
   for (const id of simIds(deck.slides)) {
@@ -118,6 +121,7 @@ async function buildOfflineHtml(lessonId: string, audience: OfflineAudience): Pr
   const data: OfflineDeck = {
     title: deck.lesson.title,
     audience,
+    answers: deck.lesson.answers,
     theme: deck.lesson.theme,
     language: deck.lesson.language,
     pageLabels: deck.lesson.pageLabels,
@@ -144,11 +148,11 @@ async function buildOfflineHtml(lessonId: string, audience: OfflineAudience): Pr
   ].join("\n");
   // Dots go too: "… · 4.1 Force" would otherwise end in a fake ".1 Force" extension.
   const base = deck.lesson.title.replace(/[\\/:*?"<>|.]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 60) || "lesson";
-  return { html, filename: `${base}${audience === "student" ? "（学生版）" : ""}.html`, fontFiles: fonts.files };
+  return { html, filename: `${base}${audience === "student" ? (deck.lesson.answers === "hidden" ? "（学生版·预习）" : "（学生版·复习）") : ""}.html`, fontFiles: fonts.files };
 }
 
-export async function downloadOfflineHtml(lessonId: string, audience: OfflineAudience = "teacher"): Promise<OfflineFile> {
-  const file = await buildOfflineHtml(lessonId, audience);
+export async function downloadOfflineHtml(lessonId: string, audience: OfflineAudience = "teacher", answers: AnswerMode = "hidden"): Promise<OfflineFile> {
+  const file = await buildOfflineHtml(lessonId, audience, answers);
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([file.html], { type: "text/html;charset=utf-8" }));
   a.download = file.filename;

@@ -2,8 +2,12 @@ import { createContext, useCallback, useContext, useEffect, useState, type React
 import { Navigate, useLocation } from "react-router";
 import { api, type Me } from "./api.ts";
 
+/** Which model answers: `stub` means the built-in templates, not AI (banner on every page). */
+export type AiMode = "live" | "stub" | "off";
+
 interface AuthState {
   me: Me | null;
+  ai: AiMode | null;
   loading: boolean;
   refresh(): Promise<Me | null>;
   logout(): Promise<void>;
@@ -13,10 +17,12 @@ const AuthContext = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<Me | null>(null);
+  const [ai, setAi] = useState<AiMode | null>(null);
   const [loading, setLoading] = useState(true);
   const refresh = useCallback(async () => {
-    const { user } = await api<{ user: Me | null }>("/api/auth/me");
+    const { user, ai: mode } = await api<{ user: Me | null; ai: AiMode | null }>("/api/auth/me");
     setMe(user);
+    setAi(mode);
     setLoading(false);
     return user;
   }, []);
@@ -27,7 +33,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     refresh().catch(() => setLoading(false));
   }, [refresh]);
-  return <AuthContext.Provider value={{ me, loading, refresh, logout }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ me, ai, loading, refresh, logout }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth(): AuthState {

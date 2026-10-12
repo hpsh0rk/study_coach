@@ -8,15 +8,38 @@ import { PlayerHost } from "./PlayPages.tsx";
 
 const mmss = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
 
-/** Elapsed time with pause; restarts from zero on reset. */
-function useTimer() {
-  const [startedAt, setStartedAt] = useState(() => Date.now());
-  const [pausedAt, setPausedAt] = useState<number | null>(null);
+interface TimerState {
+  startedAt: number;
+  pausedAt: number | null;
+}
+
+function savedTimer(key: string): TimerState | null {
+  try {
+    const t = JSON.parse(sessionStorage.getItem(key) ?? "null") as TimerState | null;
+    return t && Number.isFinite(t.startedAt) && t.startedAt <= Date.now() && (t.pausedAt === null || Number.isFinite(t.pausedAt)) ? t : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Elapsed time with pause; restarts from zero on reset. Kept per tab in sessionStorage, so reloading the presenter window does not restart the lesson clock. */
+function useTimer(lessonId: string) {
+  const key = `kj-presenter-timer:${lessonId}`;
+  const [initial] = useState(() => savedTimer(key));
+  const [startedAt, setStartedAt] = useState(() => initial?.startedAt ?? Date.now());
+  const [pausedAt, setPausedAt] = useState<number | null>(initial?.pausedAt ?? null);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 500);
     return () => clearInterval(t);
   }, []);
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(key, JSON.stringify({ startedAt, pausedAt } satisfies TimerState));
+    } catch {
+      // Storage full or disabled: the timer still works for this page load.
+    }
+  }, [key, startedAt, pausedAt]);
   const elapsed = ((pausedAt ?? now) - startedAt) / 1000;
   return {
     elapsed: Math.max(0, elapsed),
@@ -44,7 +67,7 @@ export function PresenterPage() {
   const [data, setData] = useState<{ title: string; slides: Slide[]; theme: ThemeId; minutes: number; pageLabels: Record<number, string>; language: TeachingLanguage } | null>(null);
   const [error, setError] = useState("");
   const [pos, setPos] = useState<Position>({ index: 0, step: 0 });
-  const timer = useTimer();
+  const timer = useTimer(id);
   useEffect(() => {
     lessonApi
       .get(id)

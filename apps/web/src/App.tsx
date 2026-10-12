@@ -11,7 +11,7 @@ import { ChaptersStep } from "./pages/wizard/ChaptersStep.tsx";
 import { UploadStep } from "./pages/wizard/UploadStep.tsx";
 
 function Shell({ children }: { children: ReactNode }) {
-  const { me, logout } = useAuth();
+  const { me, ai, logout } = useAuth();
   const nav = useNavigate();
   return (
     <div className="shell">
@@ -48,6 +48,24 @@ function Shell({ children }: { children: ReactNode }) {
           )}
         </div>
       </header>
+      {me && ai === "stub" && (
+        <div className="stub-banner" role="status" data-testid="stub-banner">
+          演示模式：还没有配置 AI 模型，大纲和幻灯片由内置模板生成，不是 AI 写的
+          {me.role === "admin" ? (
+            <>
+              {" "}· <Link to="/admin">去后台配置模型</Link>
+            </>
+          ) : (
+            "，请联系管理员配置"
+          )}{" "}
+          · Demo mode: no AI model configured — outlines and slides come from built-in templates, not AI.
+        </div>
+      )}
+      {me && ai === "off" && (
+        <div className="stub-banner" role="status" data-testid="ai-off-banner">
+          还没有配置 AI 模型，暂时无法生成大纲和幻灯片{me.role === "admin" ? "，请到后台配置" : "，请联系管理员"} · No AI model configured yet; generation is unavailable.
+        </div>
+      )}
       <main className="content">{children}</main>
     </div>
   );

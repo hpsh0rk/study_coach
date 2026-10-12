@@ -1,9 +1,9 @@
-import { and, asc, between, count, desc, eq, sql } from "drizzle-orm";
+import { and, asc, between, count, desc, eq, isNull, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { distributeText, isEmptyPage } from "@kj/pdf-structure";
 import { ChapterNode, countWords, newId, PageText } from "@kj/schema";
-import { chapters, documents, pages } from "../db/schema.ts";
+import { auditLog, chapters, documents, lessons, pages } from "../db/schema.ts";
 import type { AppBindings } from "../env.ts";
 import { HttpError, parseJson } from "../http.ts";
 import { requireUser } from "../auth/session.ts";
@@ -26,7 +26,7 @@ export const documentRoutes = new Hono<AppBindings>()
   .use(requireUser())
   .get("/", async (c) => {
     const u = c.get("user");
-    const rows = await db(c.env).select().from(documents).where(and(eq(documents.orgId, u.orgId), eq(documents.ownerId, u.id))).orderBy(desc(documents.createdAt)).limit(100);
+    const rows = await db(c.env).select().from(documents).where(and(eq(documents.orgId, u.orgId), eq(documents.ownerId, u.id), isNull(documents.archivedAt))).orderBy(desc(documents.createdAt)).limit(100);
     return c.json({ documents: rows });
   })
   .post("/", async (c) => {
@@ -64,7 +64,8 @@ export const documentRoutes = new Hono<AppBindings>()
    * pages that have no text (pages with text are never overwritten).
    */
   .post("/:id/pages/paste", async (c) => {
-    const doc = await ownedDocument(c.env, c.get("user"), c.req.param("id"));
+    // Pasting text for scanned pages also serves lessons already made from a deleted document.
+    const doc = await ownedDocument(c.env, c.get("user"), c.req.param("id"), { archived: true });
     const body = await parseJson(c, z.object({ start: z.number().int().min(1), end: z.number().int().min(1), text: z.string().trim().min(1).max(PAGE_BATCH * 8_000) }));
     if (body.end < body.start || body.end > doc.pageCount) throw new HttpError(400, "VALIDATION", "页码范围不对 · Invalid page range");
     const d = db(c.env);
@@ -78,7 +79,7 @@ export const documentRoutes = new Hono<AppBindings>()
     return c.json({ pages: filled.map(({ no, words }) => ({ no, words, chars: filled.find((f) => f.no === no)!.text.length })) });
   })
   .get("/:id", async (c) => {
-    const doc = await ownedDocument(c.env, c.get("user"), c.req.param("id"));
+    const doc = await ownedDocument(c.env, c.get("user"), c.req.param("id"), { archived: true });
     const tree = await db(c.env).select().from(chapters).where(eq(chapters.documentId, doc.id)).orderBy(chapters.ord);
     const sizes = await db(c.env).select({ no: pages.no, words: pages.words, chars: sql<number>`LENGTH(${pages.text})` }).from(pages).where(eq(pages.documentId, doc.id));
     const pageWords = new Array<number>(doc.pageCount).fill(0);
@@ -90,9 +91,32 @@ export const documentRoutes = new Hono<AppBindings>()
     return c.json({ document: doc, chapters: tree.map(({ documentId: _d, ...ch }) => ch), pageLabels: await pageLabels(c.env, doc.id), pageWords, pageChars });
   })
   .get("/:id/pages/:no", async (c) => {
-    const doc = await ownedDocument(c.env, c.get("user"), c.req.param("id"));
+    const doc = await ownedDocument(c.env, c.get("user"), c.req.param("id"), { archived: true });
     const no = Number(c.req.param("no"));
     const row = (await db(c.env).select().from(pages).where(and(eq(pages.documentId, doc.id), eq(pages.no, no))).limit(1))[0];
     if (!row) throw new HttpError(404, "NOT_FOUND", "Page not found");
     return c.json({ no: row.no, text: row.text, label: row.label });
+  })
+  /**
+   * Soft delete, like lessons: gone from the list and from new lessons; lessons already made from it
+   * keep their source pages. `lessons`: how many of those there are.
+   */
+  .delete("/:id", async (c) => {
+    const u = c.get("user");
+    const doc = await ownedDocument(c.env, u, c.req.param("id"));
+    await db(c.env).batch([
+      db(c.env).update(documents).set({ archivedAt: Date.now() }).where(eq(documents.id, doc.id)),
+      db(c.env).insert(auditLog).values({ orgId: doc.orgId, actorId: u.id, action: "document.deleted", target: doc.id }),
+    ]);
+    const [used] = await db(c.env).select({ n: count() }).from(lessons).where(and(eq(lessons.documentId, doc.id), isNull(lessons.archivedAt)));
+    return c.json({ ok: true, lessons: used?.n ?? 0 });
+  })
+  .post("/:id/restore", async (c) => {
+    const u = c.get("user");
+    const doc = await ownedDocument(c.env, u, c.req.param("id"), { archived: true });
+    await db(c.env).batch([
+      db(c.env).update(documents).set({ archivedAt: null }).where(eq(documents.id, doc.id)),
+      db(c.env).insert(auditLog).values({ orgId: doc.orgId, actorId: u.id, action: "document.restored", target: doc.id }),
+    ]);
+    return c.json({ ok: true });
   });

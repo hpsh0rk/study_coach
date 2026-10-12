@@ -19,13 +19,40 @@ export function UploadStep() {
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const [drag, setDrag] = useState(false);
   const [docs, setDocs] = useState<DocumentRow[]>([]);
+  const [deleted, setDeleted] = useState<{ doc: DocumentRow; lessons: number } | null>(null);
+  const [docError, setDocError] = useState("");
 
-  useEffect(() => {
+  const loadDocs = () =>
     documentApi
       .list()
       .then((r) => setDocs(r.documents.filter((d) => d.pagesReceived === d.pageCount)))
       .catch(() => undefined);
+  useEffect(() => {
+    void loadDocs();
   }, []);
+
+  async function removeDoc(d: DocumentRow) {
+    if (!window.confirm(`删除教材“${d.title}”？用它做好的课不受影响，可以撤销。· Delete this PDF? Existing lessons keep working.`)) return;
+    setDocError("");
+    try {
+      const r = await documentApi.archive(d.id);
+      setDeleted({ doc: d, lessons: r.lessons });
+      setDocs((list) => list.filter((x) => x.id !== d.id));
+    } catch (e) {
+      setDocError((e as Error).message);
+    }
+  }
+
+  async function undoDoc() {
+    if (!deleted) return;
+    try {
+      await documentApi.restore(deleted.doc.id);
+      setDeleted(null);
+      await loadDocs();
+    } catch (e) {
+      setDocError((e as Error).message);
+    }
+  }
 
   async function handle(file: File) {
     if (!/\.pdf$/i.test(file.name) && file.type !== "application/pdf") return setPhase({ kind: "error", message: "请选择 PDF 文件 · Please choose a PDF file" });
@@ -105,14 +132,28 @@ export function UploadStep() {
           {phase.message}
         </div>
       )}
+      {deleted && (
+        <div className="alert info row between" data-testid="doc-deleted-note">
+          <span>
+            已删除教材“{deleted.doc.title}”{deleted.lessons > 0 ? `，用它做的 ${deleted.lessons} 节课照常可用` : ""}。· PDF deleted{deleted.lessons > 0 ? `; ${deleted.lessons} lesson(s) made from it still work` : ""}.
+          </span>
+          <button className="btn small" onClick={undoDoc} data-testid="undo-doc-delete">
+            撤销 Undo
+          </button>
+        </div>
+      )}
+      {docError && <div className="alert error">{docError}</div>}
       {docs.length > 0 && (
         <div className="card">
           <h2>或使用之前上传的教材 · Or reuse a PDF</h2>
           <ul className="doc-list">
             {docs.map((d) => (
-              <li key={d.id}>
+              <li key={d.id} className="doc-item">
                 <button className="btn ghost" onClick={() => nav(`/new/${d.id}`)}>
                   📘 {d.title} <span className="muted small">{d.pageCount} 页 pages</span>
+                </button>
+                <button className="btn small ghost danger-text" onClick={() => void removeDoc(d)} data-testid={`delete-doc-${d.id}`} title="删除这份教材（可以撤销）· Delete this PDF (undo available)" aria-label={`删除 ${d.title}`}>
+                  ✕
                 </button>
               </li>
             ))}

@@ -19,6 +19,7 @@ export function PlayerHost({
   onPosition,
   onEscape,
   language,
+  hideAnswers,
 }: {
   slides: PlayerSlide[];
   theme: ThemeId;
@@ -28,6 +29,7 @@ export function PlayerHost({
   onPosition?: (pos: Position) => void;
   onEscape?: () => void;
   language?: TeachingLanguage;
+  hideAnswers?: boolean;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const report = useRef(onPosition);
@@ -46,6 +48,7 @@ export function PlayerHost({
       onSourceClick: onSource,
       pageLabels,
       language,
+      hideAnswers,
       onChange: (pos) => {
         sync?.position(pos);
         report.current?.(pos);
@@ -67,7 +70,7 @@ export function PlayerHost({
       sync?.close();
       p.dispose();
     };
-  }, [slides, theme, onSource, pageLabels, syncId, language]);
+  }, [slides, theme, onSource, pageLabels, syncId, language, hideAnswers]);
   return <div ref={host} className="player-host" data-testid="player" />;
 }
 
@@ -136,18 +139,23 @@ export function PlayPage() {
 
 export function SharePage() {
   const { token = "" } = useParams();
-  const [data, setData] = useState<{ slides: PlayerSlide[]; theme: ThemeId; title: string; pageLabels: Record<number, string>; language?: TeachingLanguage } | null>(null);
+  const [data, setData] = useState<{ slides: PlayerSlide[]; theme: ThemeId; title: string; pageLabels: Record<number, string>; language?: TeachingLanguage; hideAnswers: boolean } | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
-    api<{ lesson: { title: string; theme: ThemeId; pageLabels: Record<number, string>; language?: TeachingLanguage }; slides: PlayerSlide[] }>(`/api/share/${token}`)
-      .then((r) => setData({ slides: r.slides, theme: r.lesson.theme, title: r.lesson.title, pageLabels: r.lesson.pageLabels, language: r.lesson.language }))
+    api<{ lesson: { title: string; theme: ThemeId; pageLabels: Record<number, string>; language?: TeachingLanguage; answers: "hidden" | "shown" }; slides: PlayerSlide[] }>(`/api/share/${token}`)
+      .then((r) => setData({ slides: r.slides, theme: r.lesson.theme, title: r.lesson.title, pageLabels: r.lesson.pageLabels, language: r.lesson.language, hideAnswers: r.lesson.answers !== "shown" }))
       .catch((e) => setError((e as Error).message));
   }, [token]);
   if (error) return <div className="card narrow">{error}</div>;
   if (!data) return <div className="page-loading dark">Loading… 加载中</div>;
   return (
     <div className="play-page">
-      <PlayerHost slides={data.slides} theme={data.theme} pageLabels={data.pageLabels} language={data.language} />
+      {data.hideAnswers && (
+        <div className="share-mode-note" data-testid="share-preview-note">
+          课前预习 · 答案课后公布 Preview — answers after class
+        </div>
+      )}
+      <PlayerHost slides={data.slides} theme={data.theme} pageLabels={data.pageLabels} language={data.language} hideAnswers={data.hideAnswers} />
     </div>
   );
 }

@@ -18,6 +18,19 @@ async function shotOf(el: Locator, name: string) {
 
 const positionOf = async (player: Locator) => `${await player.getAttribute("data-index")}.${await player.getAttribute("data-step")}`;
 
+/** Chapters → settings. The mini fixture PDFs are far below one lesson, so the m3-10 "仍然继续" second click is expected. */
+async function toSettings(page: Page, thinShot?: string) {
+  await page.getByTestId("chapters-next").click();
+  const next = page.getByTestId("chapters-next");
+  await expect(page.getByTestId("thin-warning").or(page.getByTestId("pacing"))).toBeVisible();
+  if (thinShot) await expect(page.getByTestId("thin-warning")).toBeVisible();
+  if (await page.getByTestId("thin-warning").isVisible()) {
+    await expect(next).toHaveText(/仍然继续/);
+    if (thinShot) await shot(page, thinShot);
+    await next.click();
+  }
+}
+
 async function login(page: Page) {
   await page.goto("/login");
   for (const password of [INITIAL, CHANGED]) {
@@ -41,7 +54,10 @@ async function login(page: Page) {
 }
 
 test("upload → chapters → settings → outline (gate) → generate → edit/undo/待核实 → presenter → offline file", async ({ page, browser }) => {
+  test.setTimeout(240_000);
   await login(page);
+  // No model configured (stub server): every page says the output is the built-in templates, not AI.
+  await expect(page.getByTestId("stub-banner")).toContainText("不是 AI 写的");
 
   await page.getByTestId("new-lesson").click();
   await page.getByTestId("pdf-input").setInputFiles(PDF);
@@ -52,7 +68,7 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
   await expect(page.getByTestId("selection")).toContainText("页");
   await expect(page.getByTestId("scope-estimate")).toBeVisible();
   await shot(page, "02-chapters");
-  await page.getByRole("button", { name: /下一步：课时设置/ }).click();
+  await toSettings(page, "23-thin-selection-confirm");
 
   await page.waitForURL(/\/settings$/);
   await expect(page.getByTestId("pacing")).toBeVisible();
@@ -180,17 +196,46 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
 
   // Share: one stable link, students get no speaker notes; unsharing kills the link.
   const lessonUrl = page.url();
+  await expect(page.getByTestId("answers-hidden")).toBeChecked();
   await page.getByTestId("share").click();
   const shareUrl = (await page.getByTestId("share-url").textContent())!;
   expect(shareUrl).toMatch(/\/s\/[\w-]+$/);
+  await expect(page.getByTestId("share-box")).toContainText("答案课后公布");
   await shot(page, "06b-shared");
+  await shotOf(page.getByTestId("share-box").locator(".."), "20-answer-mode-share-panel");
   const student = await page.context().newPage();
   await student.goto(shareUrl);
   await expect(student.locator(".kj-player")).toBeVisible();
   await expect(student.locator(".kj-notes")).toBeHidden();
-  const pub = await (await student.request.get(shareUrl.replace("/s/", "/api/share/"))).json();
+  const pubUrl = shareUrl.replace("/s/", "/api/share/");
+  const pub = await (await student.request.get(pubUrl)).json();
   expect(pub.slides).toHaveLength(count);
   expect(pub.slides.every((s: { notes: string }) => s.notes === "")).toBe(true);
+  // 课前预习 (default): no quiz answer or explanation leaves the server.
+  const teacherDeck = await (await page.request.get(`/api/lessons/${lessonId}/deck`)).json();
+  const quizzes = (d: { slides: { content: { layout: string; answer?: number; explain?: string } }[] }) => d.slides.map((s) => s.content).filter((c) => c.layout === "quiz");
+  expect(quizzes(teacherDeck).length).toBeGreaterThan(0);
+  expect(pub.lesson.answers).toBe("hidden");
+  expect(quizzes(pub).every((q) => q.answer === -1 && q.explain === "")).toBe(true);
+  expect(quizzes(teacherDeck).every((q) => q.answer! >= 0 && q.explain!.length > 0)).toBe(true);
+  await expect(student.getByTestId("share-preview-note")).toBeVisible();
+  const quizSlide = student.locator(".kj-slide.kj-layout-quiz");
+  for (let i = 0; i < count * 4 && !(await quizSlide.isVisible()); i++) await student.keyboard.press("ArrowRight");
+  for (let i = 0; i < 3; i++) await student.keyboard.press("ArrowRight");
+  if (!(await quizSlide.isVisible())) await student.keyboard.press("ArrowLeft");
+  await expect(quizSlide.locator(".kj-after-class")).toBeVisible();
+  await expect(quizSlide.locator("[data-correct]")).toHaveCount(0);
+  await shot(student, "21-student-link-preview-no-answers");
+  // 课后复习: same link, answers back.
+  await page.getByTestId("answers-shown").check();
+  await expect(page.getByTestId("share-box")).toContainText("含答案");
+  const review = await (await student.request.get(pubUrl)).json();
+  expect(review.lesson.answers).toBe("shown");
+  expect(quizzes(review).map((q) => q.answer)).toEqual(quizzes(teacherDeck).map((q) => q.answer));
+  await student.reload();
+  await expect(student.getByTestId("share-preview-note")).toHaveCount(0);
+  await page.getByTestId("answers-hidden").check();
+  await expect(page.getByTestId("share-box")).toContainText("答案课后公布");
 
   // A new, unconfirmed outline draft does not hide the confirmed deck or its link.
   await page.goto(lessonUrl.replace(/\/slides$/, "/outline"));
@@ -288,6 +333,17 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
     await expect.poll(() => inkedOn(page)).toBe(true);
     await shot(page, "18-audience-ink-from-presenter");
     await presenter.getByRole("button", { name: /清除 Clear/ }).click();
+    // m3-6: reloading the presenter window keeps the lesson clock running.
+    const secs = (t: string | null) => {
+      const [m, s] = (t ?? "").split("/")[0]!.trim().split(":").map(Number);
+      return m! * 60 + s!;
+    };
+    await expect.poll(async () => secs(await presenter.getByTestId("presenter-timer").textContent())).toBeGreaterThan(1);
+    const before = secs(await presenter.getByTestId("presenter-timer").textContent());
+    await presenter.reload();
+    await expect(presenter.getByTestId("presenter")).toBeVisible();
+    expect(secs(await presenter.getByTestId("presenter-timer").textContent())).toBeGreaterThanOrEqual(before);
+    await shot(presenter, "24-presenter-timer-after-reload");
     await expect.poll(() => inkedOn(page)).toBe(false);
     await presenter.keyboard.press("Escape");
     await presenter.close();
@@ -354,12 +410,18 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
     const notes: string[] = deck.slides.map((s: { notes: string }) => s.notes).filter((n: string) => n.length > 20);
     expect(notes.length).toBeGreaterThan(0);
     const [studentDl] = await Promise.all([page.waitForEvent("download"), page.getByTestId("export-student").click()]);
-    expect(studentDl.suggestedFilename()).toContain("学生版");
+    expect(studentDl.suggestedFilename()).toContain("学生版·预习");
     const studentFile = path.join(os.tmpdir(), `kj-student-${Date.now()}.html`);
     await studentDl.saveAs(studentFile);
     const studentHtml = fs.readFileSync(studentFile, "utf8");
     for (const n of notes) expect(studentHtml).not.toContain(JSON.stringify(n).slice(1, 40));
     expect(studentHtml).toContain('"audience":"student"');
+    // Default 课前预习: the file carries no quiz explanations either.
+    expect(studentHtml).toContain('"answers":"hidden"');
+    const embedded = JSON.parse(/<script type="application\/json" id="kj-deck">([\s\S]*?)<\/script>/.exec(studentHtml)![1]!) as { slides: { content: { layout: string; answer?: number; explain?: string } }[] };
+    const fileQuizzes = embedded.slides.map((s) => s.content).filter((c) => c.layout === "quiz");
+    expect(fileQuizzes.length).toBeGreaterThan(0);
+    expect(fileQuizzes.every((q) => q.answer === -1 && q.explain === "")).toBe(true);
 
     const ctx = await browser.newContext({ offline: true, viewport: { width: 1280, height: 720 } });
     const network: string[] = [];
@@ -456,6 +518,21 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
     await expect(cards).toHaveCount(before);
     await expect(page.getByTestId(`delete-${lessonId}`)).toBeVisible();
   });
+
+  await test.step("delete an uploaded PDF (soft): gone from the list, lessons keep working, Undo restores it", async () => {
+    const { lesson } = await (await page.request.get(`/api/lessons/${lessonId}`)).json();
+    await page.goto("/new");
+    const del = page.getByTestId(`delete-doc-${lesson.documentId}`);
+    await expect(del).toBeVisible();
+    page.once("dialog", (d) => void d.accept());
+    await del.click();
+    await expect(page.getByTestId("doc-deleted-note")).toContainText("照常可用");
+    await expect(del).toHaveCount(0);
+    await shot(page, "22-document-deleted-undo");
+    expect((await page.request.get(`/api/lessons/${lessonId}`)).status()).toBe(200);
+    await page.getByTestId("undo-doc-delete").click();
+    await expect(del).toBeVisible();
+  });
 });
 
 test("Chinese CID-font PDF: text is extracted, scanned pages are flagged and can be pasted", async ({ page }) => {
@@ -479,7 +556,7 @@ test("Chinese CID-font PDF: text is extracted, scanned pages are flagged and can
   await page.getByTestId("paste-save").click();
   await expect(page.getByTestId("empty-pages")).toHaveCount(0);
   await expect(scanned.getByTestId("chapter-empty")).toHaveCount(0);
-  await page.getByRole("button", { name: /下一步：课时设置/ }).click();
+  await toSettings(page);
 
   await page.waitForURL(/\/settings$/);
   await expect(page.getByTestId("no-text")).toHaveCount(0);

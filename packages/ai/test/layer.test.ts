@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { createAiLayer, openSecret, sealSecret, type AiCallRecord, type AiConfig, type FetchLike } from "../src/index.ts";
 
@@ -24,6 +24,29 @@ const provider = (id: string) => ({ id, kind: "deepseek" as const, name: id, bas
 const only = (id: string, model = "m"): AiConfig => ({ active: { provider: provider(id), model } });
 
 describe("AI layer", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("shares one model-time deadline across every call and retry of a request", async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    let fetches = 0;
+    const replies: unknown[] = [{ title: "ok", n: 1 }, "not json"];
+    const fetchImpl: FetchLike = async () => {
+      fetches++;
+      now += 30_000;
+      return okResponse(replies.shift());
+    };
+    const records: AiCallRecord[] = [];
+    const ai = createAiLayer({ config: { load: async () => only("a") }, meter: { record: async (r) => void records.push(r) }, allowStubFallback: true, fetch: fetchImpl, deadlineMs: 64_000 });
+    expect((await ai.callStructured(req)).output).toEqual({ title: "ok", n: 1 });
+    // Second call: its first attempt is invalid and takes 30 s; the repair attempt would start with 4 s left.
+    await expect(ai.callStructured(req)).rejects.toThrow(/took too long/);
+    expect(fetches).toBe(2);
+    expect(records.at(-1)).toMatchObject({ status: "error" });
+    await expect(ai.callStructured(req)).rejects.toThrow(/took too long/);
+    expect(fetches).toBe(2);
+  });
+
   it("answers from the stub when nothing is configured", async () => {
     const { ai, records } = setup({ active: null });
     const res = await ai.callStructured(req);

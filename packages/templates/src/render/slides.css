@@ -515,6 +515,12 @@
 .kj-layout-experiment .kj-explain {
   font-size: 48px;
 }
+.kj-after-class {
+  display: block;
+  font-size: 48px;
+  font-style: italic;
+  color: var(--kj-soft);
+}
 
 /* ---- quiz ---- */
 .kj-layout-quiz {

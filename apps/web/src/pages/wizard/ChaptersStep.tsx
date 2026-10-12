@@ -187,9 +187,14 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
     return true;
   });
 
+  // A selection far below one lesson (under 30 %) needs a second, explicit click, like an over-long outline.
+  const thin = pages > 0 && stats.unread.length === 0 && advice.estimatedMinutes < lessonMinutes * 0.3;
+  const [thinAck, setThinAck] = useState(false);
+
   async function next() {
     if (extra === null) return setError("页码格式不对，例如 3-8, 12 · Page ranges look wrong, e.g. 3-8, 12");
     if (!pages) return setError("请至少选择一个章节或输入页码 · Choose at least one chapter or page range");
+    if (thin && !thinAck) return setThinAck(true);
     setBusy(true);
     setError("");
     try {
@@ -205,7 +210,10 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
   // `count` undefined: the server picks the fewest lessons that each fit the lesson length.
   const [unitPlan, setUnitPlan] = useState<{ count?: number; preview: UnitPreview } | null>(null);
   const selection = JSON.stringify([[...picked].sort(), extra]);
-  useEffect(() => setUnitPlan(null), [selection]);
+  useEffect(() => {
+    setUnitPlan(null);
+    setThinAck(false);
+  }, [selection]);
   const unitRequest = (count?: number) => ({ documentId, chapterIds: [...picked], ranges: extra ?? [], count, lessonId: lesson?.lesson.id, params: lesson?.lesson.params });
   async function previewUnit(count?: number) {
     if (extra === null) return;
@@ -381,12 +389,17 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
         </div>
       )}
       {error && <div className="alert error">{error}</div>}
+      {thin && thinAck && (
+        <div className="alert warn" role="alert" data-testid="thin-warning">
+          只选了约 {advice.estimatedMinutes} 分钟的内容，一节课是 {lessonMinutes} 分钟：大纲会用很多练习和讨论来填满。可以再勾选几节，或者确定就这么多。· About {advice.estimatedMinutes} of {lessonMinutes} min — add more, or continue anyway.
+        </div>
+      )}
       <div className="wizard-actions">
         <button className="btn ghost" onClick={() => nav(lesson ? "/" : "/new")}>
           ← 返回 Back
         </button>
-        <button className="btn primary" disabled={busy || !pages} onClick={next}>
-          下一步：课时设置 Next →
+        <button className="btn primary" disabled={busy || !pages} onClick={next} data-testid="chapters-next">
+          {thin && thinAck ? "仍然继续 Continue anyway →" : "下一步：课时设置 Next →"}
         </button>
       </div>
     </div>

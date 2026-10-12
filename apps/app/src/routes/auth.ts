@@ -7,6 +7,7 @@ import { HttpError, parseJson } from "../http.ts";
 import { DUMMY_HASH, hashPassword, needsRehash, passwordProblem, verifyPassword } from "../auth/password.ts";
 import { createSession, destroySession, destroyUserSessions, loadSessionUser, requireUser } from "../auth/session.ts";
 import { db } from "../db/index.ts";
+import { aiMode } from "../ai.ts";
 
 const WINDOW_MS = 15 * 60_000;
 const MAX_FAILURES = 8;
@@ -58,7 +59,7 @@ export const authRoutes = new Hono<AppBindings>()
   })
   .get("/me", async (c) => {
     const user = await loadSessionUser(c);
-    return c.json({ user });
+    return c.json({ user, ai: user ? await aiMode(c.env, user.orgId) : null });
   })
   .post("/change-password", requireUser({ allowPasswordChange: true }), async (c) => {
     const body = await parseJson(c, z.object({ currentPassword: z.string().min(1), newPassword: z.string().min(1) }));
