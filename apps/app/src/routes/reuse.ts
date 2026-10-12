@@ -33,6 +33,7 @@ function piecesOf(scope: LessonScope, tree: ChapterNode[], words: Map<number, nu
   return out;
 }
 
+/** A copy starts a fresh edit history (`rev` 0); share links stay with the source lesson. */
 const copyVersion = (v: VersionRow, lessonId: string, version: number) => ({
   id: newId("ov"),
   lessonId,
@@ -41,7 +42,7 @@ const copyVersion = (v: VersionRow, lessonId: string, version: number) => ({
   params: v.params,
   scope: v.scope,
   specCount: v.specCount,
-  totalMinutes: v.totalMinutes,
+  rev: 0,
   ackOverBudget: v.ackOverBudget,
   confirmedAt: v.confirmedAt,
 });
@@ -94,7 +95,8 @@ export const reuseRoutes = new Hono<AppBindings>()
     );
     const { scope, title } = await scopeFor(c.env, u, body.documentId, body.chapterIds, body.ranges);
     const reuse = body.lessonId ? await ownedLesson(c.env, u, body.lessonId) : null;
-    if (reuse && (reuse.documentId !== body.documentId || (await latestVersion(c.env, reuse.id)))) throw new HttpError(409, "LESSON_IN_USE", "This lesson already has an outline · 这节课已经有大纲，不能并入单元");
+    const drafting = !!reuse?.draftingUntil && reuse.draftingUntil > Date.now();
+    if (reuse && (drafting || reuse.documentId !== body.documentId || (await latestVersion(c.env, reuse.id)))) throw new HttpError(409, "LESSON_IN_USE", "This lesson already has an outline · 这节课已经有大纲，不能并入单元");
     const params = body.params ?? (reuse ? LessonParams.parse(JSON.parse(reuse.params)) : DEFAULT_PARAMS);
     const d = db(c.env);
     const nos = pagesInRanges(scope.ranges);

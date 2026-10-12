@@ -37,12 +37,17 @@ const aiCalls = async (lessonId: string) => (await e.DB.prepare("SELECT COUNT(*)
 describe("复制这节课到新学期 (duplicate)", () => {
   it("copies the confirmed outline and every slide (hand edits kept); revising regenerates only the changed slide", async () => {
     const lessonId = (await teacher.req("POST", "/api/lessons", { documentId: docId, chapterIds: ["c1", "c2"] })).json.lesson.id as string;
-    const v = (await teacher.req("POST", `/api/lessons/${lessonId}/outline`)).json.version;
+    const drafted = (await teacher.req("POST", `/api/lessons/${lessonId}/outline`)).json.version;
+    const v = (await teacher.req("PUT", `/api/lessons/${lessonId}/outline-versions/${drafted.id}`, { outline: drafted.outline, rev: drafted.rev })).json.version;
+    expect(v.rev).toBe(1);
     await teacher.req("POST", `/api/lessons/${lessonId}/outline-versions/${v.id}/confirm`, { ackOverBudget: true });
     for (const s of v.outline.slides) await teacher.req("POST", `/api/lessons/${lessonId}/outline-versions/${v.id}/slides/${s.id}/generate`);
     const slides = (await teacher.req("GET", `/api/lessons/${lessonId}`)).json.slides;
     const target = slides.find((s: any) => s.layout === "statement");
     const edited = (await teacher.req("PATCH", `/api/lessons/${lessonId}/slides/${target.id}`, { content: { ...target.content, title: "Hand-edited for this class" } })).json.slide;
+
+    const share = await teacher.req("POST", `/api/lessons/${lessonId}/share`, { ack: true });
+    expect(share.status).toBe(201);
 
     const other = await loggedIn("reuse2", "Teach12345");
     expect((await other.req("POST", `/api/lessons/${lessonId}/duplicate`, {})).status).toBe(404);
@@ -52,8 +57,12 @@ describe("复制这节课到新学期 (duplicate)", () => {
     const copyId = dup.json.lesson.id as string;
     expect(copyId).not.toBe(lessonId);
     expect(dup.json.lesson.title).toBe(`${(await teacher.req("GET", `/api/lessons/${lessonId}`)).json.lesson.title}（新学期）`);
-    expect(dup.json.version.confirmedAt).not.toBeNull();
-    expect(dup.json.version.outline).toEqual(v.outline);
+    expect(dup.json.confirmed.confirmedAt).not.toBeNull();
+    expect(dup.json.confirmed.outline).toEqual(v.outline);
+    expect(dup.json.confirmed.rev).toBe(0);
+    expect(dup.json.share).toBeNull();
+    expect((await e.DB.prepare("SELECT COUNT(*) AS n FROM share_links WHERE lesson_id = ?").bind(copyId).first<{ n: number }>())!.n).toBe(0);
+    expect((await teacher.req("GET", `/api/lessons/${lessonId}`)).json.share.path).toBe(share.json.path);
     expect(dup.json.slides).toHaveLength(slides.length);
     expect(dup.json.slides.find((s: any) => s.specId === target.specId).content).toEqual(edited.content);
     expect(dup.json.slides.every((s: any) => s.canUndo === false)).toBe(true);
@@ -66,9 +75,9 @@ describe("复制这节课到新学期 (duplicate)", () => {
 
     // Incremental revision of the copy: retitle one other slide; only that one needs the model.
     const changed = v.outline.slides.find((s: any) => s.layout === "statement" && s.id !== target.specId) ?? v.outline.slides.find((s: any) => s.id !== target.specId && s.layout !== "title");
-    const r = (await teacher.req("POST", `/api/lessons/${copyId}/outline-versions/${dup.json.version.id}/revise`)).json.version;
+    const r = (await teacher.req("POST", `/api/lessons/${copyId}/outline-versions/${dup.json.confirmed.id}/revise`)).json.version;
     const outline = { ...r.outline, slides: r.outline.slides.map((s: any) => (s.id === changed.id ? { ...s, title: `${s.title} — new term` } : s)) };
-    await teacher.req("PUT", `/api/lessons/${copyId}/outline-versions/${r.id}`, { outline });
+    await teacher.req("PUT", `/api/lessons/${copyId}/outline-versions/${r.id}`, { outline, rev: r.rev });
     const confirmed = (await teacher.req("POST", `/api/lessons/${copyId}/outline-versions/${r.id}/confirm`, { ackOverBudget: true })).json;
     expect(confirmed.slides).toHaveLength(slides.length - 1);
     expect(confirmed.slides.find((s: any) => s.specId === target.specId).content.title).toBe("New term wording");
@@ -81,7 +90,8 @@ describe("复制这节课到新学期 (duplicate)", () => {
     await teacher.req("POST", `/api/lessons/${lessonId}/outline`);
     const dup = await teacher.req("POST", `/api/lessons/${lessonId}/duplicate`, { title: "Superposition 2027" });
     expect(dup.json.lesson.title).toBe("Superposition 2027");
-    expect(dup.json.version.confirmedAt).toBeNull();
+    expect(dup.json.confirmed).toBeNull();
+    expect(dup.json.draft.rev).toBe(0);
     expect(dup.json.slides).toEqual([]);
   });
 });
@@ -111,5 +121,8 @@ describe("整单元规划 (unit)", () => {
     await teacher.req("POST", `/api/lessons/${lessonId}/outline`);
     expect((await teacher.req("POST", "/api/lessons/unit", { documentId: docId, chapterIds: ["c1", "c2"], count: 2, lessonId })).status).toBe(409);
     expect((await teacher.req("POST", "/api/lessons/unit", { documentId: docId, chapterIds: ["c1"] })).status).toBe(400);
+    const busy = (await teacher.req("POST", "/api/lessons", { documentId: docId, chapterIds: ["c2"] })).json.lesson.id as string;
+    await e.DB.prepare("UPDATE lessons SET drafting_until = ? WHERE id = ?").bind(Date.now() + 60_000, busy).run();
+    expect((await teacher.req("POST", "/api/lessons/unit", { documentId: docId, chapterIds: ["c1", "c2"], count: 2, lessonId: busy })).status).toBe(409);
   });
 });
