@@ -78,10 +78,9 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
   await expect(page.getByTestId("ack-box")).toBeVisible();
   await page.getByTestId("ack-box").getByRole("button").click();
 
+  // Confirming starts generation by itself (no second "generate all" click).
   await page.waitForURL(/\/slides$/);
   const lessonId = /\/lessons\/([^/]+)\//.exec(page.url())![1]!;
-  await expect(page.getByTestId("present")).toHaveCount(0);
-  await page.getByTestId("generate-all").click();
   await expect(page.getByTestId("gen-progress")).toContainText(`已生成 ${count} / ${count}`, { timeout: 60_000 });
   await expect(page.getByTestId("generate-all")).toHaveCount(0);
   await shot(page, "05-slides");
@@ -223,7 +222,9 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
     await expect(page.locator(".kj-counter")).toContainText(`1 / ${count}`);
     await page.keyboard.press("End");
     await expect(player).toHaveAttribute("data-index", String(count - 1));
+    await expect(player).toHaveAttribute("data-step", "0");
     await page.keyboard.press("Home");
+    await expect(page.locator(".kj-player .kj-badge")).toHaveCount(0);
     await expect(player).toHaveAttribute("data-index", "0");
     await page.keyboard.press("s");
     await expect(page.locator(".kj-notes")).toBeHidden();
@@ -274,6 +275,21 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
     await expect(page.locator(".kj-slide.kj-poll .kj-explain")).toBeVisible();
     await shot(presenter, "09-presenter");
     await shot(page, "13-poll-tally");
+
+    // R3-M2: a stroke drawn in the presenter window appears on the projector.
+    const inkedOn = (p: typeof page) => p.locator("canvas.kj-ink").evaluate((c: HTMLCanvasElement) => c.getContext("2d")!.getImageData(0, 0, c.width, c.height).data.some((v, i) => i % 4 === 3 && v > 0));
+    expect(await inkedOn(page)).toBe(false);
+    await presenter.keyboard.press("d");
+    const pBox = (await presenter.locator("canvas.kj-ink").boundingBox())!;
+    await presenter.mouse.move(pBox.x + pBox.width * 0.3, pBox.y + pBox.height * 0.5);
+    await presenter.mouse.down();
+    for (let i = 1; i <= 10; i++) await presenter.mouse.move(pBox.x + pBox.width * (0.3 + i * 0.03), pBox.y + pBox.height * 0.5);
+    await presenter.mouse.up();
+    await expect.poll(() => inkedOn(page)).toBe(true);
+    await shot(page, "18-audience-ink-from-presenter");
+    await presenter.getByRole("button", { name: /清除 Clear/ }).click();
+    await expect.poll(() => inkedOn(page)).toBe(false);
+    await presenter.keyboard.press("Escape");
     await presenter.close();
   });
 
@@ -316,6 +332,9 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
     await page.keyboard.press("Escape");
     await page.keyboard.press("PageDown");
     await expect.poll(() => positionOf(player)).not.toBe("0.0");
+    // Esc with the pen off leaves the presentation.
+    await page.keyboard.press("Escape");
+    await page.waitForURL(/\/lessons\/[^/]+\/slides$/);
   });
 
   await test.step("offline single-file export runs with the network blocked", async () => {
@@ -328,6 +347,19 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
     const html = fs.readFileSync(file, "utf8");
     expect(html).not.toMatch(/<(script|link|img|iframe)[^>]+(src|href)=["']?https?:/i);
     expect(html).toContain("Noto Sans SC");
+    expect(download.suggestedFilename()).not.toMatch(/\.\d.*\.html$/);
+
+    // R3-M1: the student copy carries no speaker notes; the teacher copy keeps them out of the projected slide.
+    const deck = await (await page.request.get(`/api/lessons/${lessonId}/deck`)).json();
+    const notes: string[] = deck.slides.map((s: { notes: string }) => s.notes).filter((n: string) => n.length > 20);
+    expect(notes.length).toBeGreaterThan(0);
+    const [studentDl] = await Promise.all([page.waitForEvent("download"), page.getByTestId("export-student").click()]);
+    expect(studentDl.suggestedFilename()).toContain("学生版");
+    const studentFile = path.join(os.tmpdir(), `kj-student-${Date.now()}.html`);
+    await studentDl.saveAs(studentFile);
+    const studentHtml = fs.readFileSync(studentFile, "utf8");
+    for (const n of notes) expect(studentHtml).not.toContain(JSON.stringify(n).slice(1, 40));
+    expect(studentHtml).toContain('"audience":"student"');
 
     const ctx = await browser.newContext({ offline: true, viewport: { width: 1280, height: 720 } });
     const network: string[] = [];
@@ -394,7 +426,11 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
 
   await test.step("整单元规划: one chapter range planned as a unit of lessons", async () => {
     const { lesson } = await (await page.request.get(`/api/lessons/${lessonId}`)).json();
-    const res = await page.request.post("/api/lessons/unit", { data: { documentId: lesson.documentId, chapterIds: lesson.scope.chapterIds, ranges: lesson.scope.ranges, count: 2, title: "Waves unit 波动单元" }, headers: { "x-kj-csrf": "1" } });
+    const body = { documentId: lesson.documentId, chapterIds: lesson.scope.chapterIds, ranges: lesson.scope.ranges, count: 2, title: "Waves unit 波动单元" };
+    const preview = await page.request.post("/api/lessons/unit?dryRun=1", { data: body, headers: { "x-kj-csrf": "1" } });
+    expect(preview.status()).toBe(200);
+    expect((await preview.json()).lessons).toHaveLength(2);
+    const res = await page.request.post("/api/lessons/unit", { data: body, headers: { "x-kj-csrf": "1" } });
     expect(res.status()).toBe(201);
     const { unit } = await res.json();
     await page.goto(`/?unit=${unit.id}`);
@@ -402,6 +438,23 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
     await expect(group).toContainText("Waves unit 波动单元");
     await expect(group.getByTestId("lesson-card")).toHaveCount(2);
     await shot(page, "17-unit-group");
+  });
+
+  await test.step("delete a lesson (soft): it leaves the list, Undo brings it back", async () => {
+    await page.goto("/");
+    const cards = page.getByTestId("lesson-card");
+    await expect(page.getByTestId(`delete-${lessonId}`)).toBeVisible();
+    const before = await cards.count();
+    page.once("dialog", (d) => void d.accept());
+    await page.getByTestId(`delete-${lessonId}`).click();
+    await expect(page.getByTestId("deleted-note")).toBeVisible();
+    await expect(cards).toHaveCount(before - 1);
+    await expect(page.getByTestId(`delete-${lessonId}`)).toHaveCount(0);
+    await shot(page, "19-lesson-deleted");
+    expect((await page.request.get(`/api/lessons/${lessonId}`)).status()).toBe(404);
+    await page.getByTestId("undo-delete").click();
+    await expect(cards).toHaveCount(before);
+    await expect(page.getByTestId(`delete-${lessonId}`)).toBeVisible();
   });
 });
 
@@ -454,6 +507,25 @@ test("Chinese CID-font PDF: text is extracted, scanned pages are flagged and can
   await other.locator('.stepper [data-step="settings"] a').click();
   await expect.poll(() => asked).toContain("还没保存");
   await expect(other).toHaveURL(/\/outline$/);
+  // …and so does the browser's Back button.
+  let askedBack = "";
+  other.once("dialog", (d) => {
+    askedBack = d.message();
+    void d.dismiss();
+  });
+  await other.evaluate(() => history.back());
+  await expect.poll(() => askedBack).toContain("还没保存");
+  await expect(other).toHaveURL(/\/outline$/);
+  await expect(other.getByTestId("outline-row").first().getByLabel("标题 Title")).toHaveValue("标签页 B 的标题");
+
+  // The minutes box keeps what is typed and clamps only on blur.
+  const minutes = other.getByTestId("outline-row").first().getByLabel("分钟 Minutes");
+  await minutes.fill("");
+  await minutes.pressSequentially("0");
+  await expect(minutes).toHaveValue("0");
+  await minutes.blur();
+  await expect(minutes).toHaveValue("0.5");
+
   const closing = new Promise<string>((resolve) => other.once("dialog", (d) => (resolve(d.type()), void d.accept())));
   await other.close({ runBeforeUnload: true });
   expect(await closing).toBe("beforeunload");

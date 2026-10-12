@@ -4,9 +4,9 @@ export { buildMessages as buildOutlineMessages, draftOutline, normalizeOutline, 
 export { stubOutline } from "./outline-stub.ts";
 export { checkSourcePages, contentTokens, enforceCheckCadence } from "./outline-repair.ts";
 export { simFor } from "./sims.ts";
-export { buildMessages as buildSlideMessages, checkSourceText, SLIDE_PROMPT_VERSION, sourceUnverified, SLIDE_SOURCE_CHARS, sourcePagesFor, SpecNotFoundError, visualRuleFor, workedSpecFor, writeSlide, type WriteInput, type WriteResult } from "./slide.ts";
+export { buildMessages as buildSlideMessages, checkSourceText, SLIDE_PROMPT_VERSION, sourceUnverified, SLIDE_SOURCE_CHARS, SlideInvalidError, sourcePagesFor, SpecNotFoundError, visualRuleFor, workedSpecFor, writeSlide, type WriteInput, type WriteResult } from "./slide.ts";
 export { slideKey, slideKeyInput } from "./slide-key.ts";
 export { findFormula, stubSlide, stubTable } from "./slide-stub.ts";
-export { applyGlossary, problemsOf, sanitizeWidgets, truncateLists } from "./checks.ts";
+export { applyGlossary, clipToBudgets, problemsOf, sanitizeWidgets, truncateLists } from "./checks.ts";
 export { clip, quantitiesIn, sentencesOf } from "./text.ts";
 export { neutralizeSource, suspiciousContent } from "./safety.ts";

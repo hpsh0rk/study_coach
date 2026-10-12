@@ -2,14 +2,14 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { normalizeRanges, pagesInRanges } from "@kj/pdf-structure";
-import { planUnit, scopeAdvice, type UnitPiece } from "@kj/pedagogy";
+import { planBudget, planUnit, unitGroupLabel, unitGroupMinutes, type UnitPiece } from "@kj/pedagogy";
 import { DEFAULT_PARAMS, LessonParams, newId, PageRange, type ChapterNode, type LessonScope } from "@kj/schema";
-import { db, requireUser } from "../auth/session.ts";
+import { requireUser } from "../auth/session.ts";
+import { db } from "../db/index.ts";
 import { lessons, outlineVersions, pages, slides } from "../db/schema.ts";
 import type { AppBindings } from "../env.ts";
 import { HttpError, parseJson } from "../http.ts";
-import { latestConfirmed, latestVersion, lessonScope, ownedLesson, type VersionRow } from "../store.ts";
-import { lessonView, scopeFor, treeOf } from "./lessons.ts";
+import { latestConfirmed, latestVersion, lessonScope, lessonView, ownedLesson, scopeFor, treeOf, type VersionRow } from "../store.ts";
 
 /** Selected chapters with no selected child: they own their pages in the unit split. */
 function leafChapters(tree: ChapterNode[], ids: string[]): ChapterNode[] {
@@ -119,21 +119,28 @@ export const reuseRoutes = new Hono<AppBindings>()
     const groups = planUnit(piecesOf(scope, tree, words), params.minutes, body.count);
     if (groups.length < 2) throw new HttpError(400, "UNIT_TOO_SMALL", "The selection fits one lesson · 所选内容一节课就够了，不需要拆分");
     const unit = { id: newId("unit", 8), title: (body.title ?? title).slice(0, 160), count: groups.length };
-    const created = [];
-    for (const [k, group] of groups.entries()) {
+    const maxMinutes = planBudget(params).maxMinutes;
+    const plan = groups.map((group) => {
       const groupPages = group.flatMap((p) => p.pages.map((x) => x.no));
       const ranges = normalizeRanges(
         groupPages.map((no) => ({ start: no, end: no })),
         Math.max(...groupPages),
       );
+      // The title doubles as the cover title students see, so it carries no "第 N/M 课".
+      const lessonTitle = `${unit.title} · ${unitGroupLabel(group)}`.slice(0, 200);
+      const estimatedMinutes = unitGroupMinutes(group, params.minutes);
+      return { group, groupPages, ranges, title: lessonTitle, estimatedMinutes, over: estimatedMinutes > maxMinutes };
+    });
+    if (c.req.query("dryRun") === "1")
+      return c.json({ unit: { title: unit.title, count: groups.length }, minutes: params.minutes, maxMinutes, lessons: plan.map(({ title: t, ranges, estimatedMinutes, over }) => ({ title: t, ranges, estimatedMinutes, over })) });
+    const created = [];
+    for (const [k, { group, groupPages, ranges, title: lessonTitle, estimatedMinutes: est }] of plan.entries()) {
       const owned = new Set(groupPages);
       const chapterIds = [...new Set(group.flatMap((p) => (p.chapterId ? [p.chapterId] : [])))].filter((cid) => {
         const ch = tree.find((t) => t.id === cid);
         return !!ch && Array.from({ length: ch.pageEnd - ch.pageStart + 1 }, (_, i) => ch.pageStart + i).every((no) => owned.has(no) || !nos.includes(no));
       });
       const lessonScopeJson = JSON.stringify({ chapterIds, ranges, unit: { ...unit, index: k + 1 } } satisfies LessonScope);
-      const lessonTitle = `${unit.title} · 第 ${k + 1}/${groups.length} 课 · ${group[0]!.title}`.slice(0, 200);
-      const est = scopeAdvice(group.reduce((n, p) => n + p.pages.reduce((m, x) => m + x.words, 0), 0), params.minutes).estimatedMinutes;
       if (k === 0 && reuse) {
         await d.update(lessons).set({ title: lessonTitle, scope: lessonScopeJson, params: JSON.stringify(params), updatedAt: Date.now() }).where(eq(lessons.id, reuse.id));
         created.push({ id: reuse.id, title: lessonTitle, ranges, estimatedMinutes: est });

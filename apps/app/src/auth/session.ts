@@ -1,8 +1,8 @@
 import { and, eq, gt, isNull } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/d1";
 import type { Context, MiddlewareHandler } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { randomToken, sha256Hex } from "@kj/schema";
+import { db } from "../db/index.ts";
 import { sessions, users } from "../db/schema.ts";
 import type { AppBindings, Env, SessionUser } from "../env.ts";
 import { HttpError } from "../http.ts";
@@ -10,9 +10,6 @@ import { HttpError } from "../http.ts";
 export const SESSION_COOKIE = "kj_session";
 const SESSION_TTL_MS = 14 * 24 * 3600 * 1000;
 
-export function db(env: Env) {
-  return drizzle(env.DB);
-}
 
 export async function createSession(c: Context<AppBindings>, userId: string): Promise<void> {
   const token = randomToken(32);

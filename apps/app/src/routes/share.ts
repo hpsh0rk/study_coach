@@ -1,23 +1,12 @@
 import { and, eq, isNull } from "drizzle-orm";
 import { Hono } from "hono";
 import { sha256Hex } from "@kj/schema";
-import { db } from "../auth/session.ts";
+import { db } from "../db/index.ts";
 import { lessons, shareLinks, users } from "../db/schema.ts";
-import { secret, type AppBindings, type Env } from "../env.ts";
+import type { AppBindings } from "../env.ts";
 import { HttpError } from "../http.ts";
 import { deckExport, pageLabels, sharedSlides, versionOf } from "../store.ts";
 
-/**
- * A link's token is derived from its id (HMAC with the app secret), so sharing again can hand out
- * the same URL while the database only stores sha256(token).
- */
-export async function shareToken(env: Env, linkId: string): Promise<string> {
-  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret(env, "AI_CONFIG_KEY")), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`kj-share-link:v1:${linkId}`)));
-  let bin = "";
-  for (const b of mac.slice(0, 24)) bin += String.fromCharCode(b);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
 
 /**
  * Public, read-only decks frozen at the version the teacher shared. No speaker notes or misconception

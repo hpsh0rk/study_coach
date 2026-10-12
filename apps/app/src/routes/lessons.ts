@@ -1,88 +1,56 @@
 import { and, eq, isNull, lt, or } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
-import { checkSourcePages, draftOutline, problemsOf, slideKey, SpecNotFoundError, workedSpecFor, writeSlide, type PlannerSection } from "@kj/generation";
-import { normalizeRanges, rangesForChapters } from "@kj/pdf-structure";
-import { checkOutline, outlineTiming } from "@kj/pedagogy";
+import { checkSourcePages, draftOutline, problemsOf, slideKey, SlideInvalidError, SpecNotFoundError, workedSpecFor, writeSlide, type PlannerSection } from "@kj/generation";
+import { outlineTiming } from "@kj/pedagogy";
 import { DEFAULT_PARAMS, LessonParams, newId, Outline, PageRange, sha256Hex, SlideContent, ThemeId, type ChapterNode, type LessonScope } from "@kj/schema";
 import { layoutForPageType, SLOT_SCHEMAS } from "@kj/templates";
 import { describeIssue, slotIssues, widgetIssues } from "@kj/templates/issues";
 import { makeAi } from "../ai.ts";
-import { chapters, lessons, outlineVersions, shareLinks, slides } from "../db/schema.ts";
-import type { AppBindings, Env, SessionUser } from "../env.ts";
+import { auditLog, lessons, outlineVersions, shareLinks, slides } from "../db/schema.ts";
+import type { AppBindings, Env } from "../env.ts";
 import { HttpError, parseJson } from "../http.ts";
-import { db, requireUser } from "../auth/session.ts";
-import { shareToken } from "./share.ts";
+import { requireUser } from "../auth/session.ts";
+import { db } from "../db/index.ts";
 import {
+  activeShare,
   carryOverSlides,
+  DRAFT_LOCK_MS,
   confirmedOutline,
   deckExport,
   flaggedSlides,
   latestConfirmed,
   latestVersion,
   lessonList,
+  lessonView,
   lessonParams,
   lessonScope,
   outlineOf,
-  ownedDocument,
   ownedLesson,
   pageLabels,
+  scopeFor,
   scopePages,
-  scopeStats,
   shareableVersion,
-  sharedSlides,
+  shareToken,
+  shareView,
   slideFromRow,
   unverifiedFor,
   slidesOf,
+  treeOf,
   versionOf,
   versionParams,
   versionScope,
+  versionView,
   type LessonRow,
   type SlideRow,
   type VersionRow,
 } from "../store.ts";
-
-export async function treeOf(env: Env, documentId: string): Promise<ChapterNode[]> {
-  const rows = await db(env).select().from(chapters).where(eq(chapters.documentId, documentId)).orderBy(chapters.ord);
-  return rows.map(({ documentId: _d, ...ch }) => ch);
-}
-
-export async function scopeFor(env: Env, user: SessionUser, documentId: string, chapterIds: string[], ranges: PageRange[]): Promise<{ scope: LessonScope; title: string }> {
-  const doc = await ownedDocument(env, user, documentId);
-  if (doc.pagesReceived < doc.pageCount) throw new HttpError(409, "DOCUMENT_INCOMPLETE", "The PDF is still uploading · PDF 还在上传");
-  const tree = await treeOf(env, doc.id);
-  const known = new Set(tree.map((c) => c.id));
-  const ids = chapterIds.filter((id) => known.has(id));
-  const fromChapters = ids.length ? rangesForChapters(tree, ids, doc.pageCount) : [];
-  const merged = normalizeRanges([...fromChapters, ...ranges], doc.pageCount);
-  if (!merged.length) throw new HttpError(400, "EMPTY_SCOPE", "Choose at least one chapter or page range · 请至少选择一个章节或页码范围");
-  const picked = tree.filter((c) => ids.includes(c.id) && !(c.parentId && ids.includes(c.parentId)));
-  const title = picked.length ? picked.map((c) => c.title).join(" · ") : `${doc.title} pp. ${merged.map((r) => `${r.start}–${r.end}`).join(", ")}`;
-  return { scope: { chapterIds: ids, ranges: merged }, title: title.slice(0, 200) };
-}
 
 /** Deepest selected chapters in reading order become the planner's sections. */
 function sectionsOf(tree: ChapterNode[], scope: LessonScope): PlannerSection[] {
   const ids = new Set(scope.chapterIds);
   const leaves = tree.filter((c) => ids.has(c.id) && !tree.some((k) => k.parentId === c.id && ids.has(k.id)));
   return leaves.map((c) => ({ title: c.title, pageStart: c.pageStart, pageEnd: c.pageEnd }));
-}
-
-function versionView(v: VersionRow) {
-  const outline = outlineOf(v);
-  const params = versionParams(v);
-  return {
-    id: v.id,
-    version: v.version,
-    outline,
-    params,
-    scope: versionScope(v),
-    rev: v.rev,
-    confirmedAt: v.confirmedAt,
-    ackOverBudget: v.ackOverBudget,
-    timing: outlineTiming(outline, params),
-    warnings: checkOutline(outline, params),
-  };
 }
 
 /** Teacher edits may change page types; layouts always follow the page type, ids stay unique. */
@@ -134,59 +102,6 @@ async function insertVersion(env: Env, lesson: LessonRow, outline: Outline, snap
     .insert(outlineVersions)
     .values({ id, lessonId: lesson.id, version: (prev?.version ?? 0) + 1, outline: JSON.stringify(outline), params: snapshot.params, scope: snapshot.scope, specCount: outline.slides.length });
   return versionOf(env, lesson.id, id);
-}
-
-/** A draft holds this long at most: a request that dies mid-draft (closed tab, Worker limit) frees the lesson on its own. */
-export const DRAFT_LOCK_MS = 150_000;
-
-async function activeShare(env: Env, lessonId: string) {
-  return (await db(env).select().from(shareLinks).where(and(eq(shareLinks.lessonId, lessonId), isNull(shareLinks.revokedAt))).limit(1))[0] ?? null;
-}
-
-/** `held`: pages students do not see until the teacher shares again (flagged after the last review). */
-async function shareView(env: Env, lessonId: string) {
-  const link = await activeShare(env, lessonId);
-  if (!link?.versionId) return null;
-  const v = await versionOf(env, lessonId, link.versionId);
-  const { held } = await sharedSlides(env, v, link.reviewedAt);
-  return { path: `/s/${await shareToken(env, link.id)}`, versionId: v.id, version: v.version, held };
-}
-
-/**
- * `confirmed` (newest confirmed version and its slides) is what step 5 presents and shares; `draft`
- * is a newer unconfirmed outline, if any. A draft never hides the generated deck.
- */
-export async function lessonView(env: Env, lesson: LessonRow) {
-  const scope = lessonScope(lesson);
-  const [latest, confirmed, labels, stats, share] = await Promise.all([
-    latestVersion(env, lesson.id),
-    latestConfirmed(env, lesson.id),
-    pageLabels(env, lesson.documentId),
-    scopeStats(env, lesson.documentId, scope),
-    shareView(env, lesson.id),
-  ]);
-  const drafting = lesson.draftingUntil !== null && lesson.draftingUntil > Date.now();
-  return {
-    lesson: {
-      id: lesson.id,
-      title: lesson.title,
-      documentId: lesson.documentId,
-      theme: lesson.theme,
-      params: lessonParams(lesson),
-      scope,
-      scopeWords: stats.words,
-      emptyPages: stats.emptyPages,
-      unreadPages: stats.unreadPages,
-      createdAt: lesson.createdAt,
-      updatedAt: lesson.updatedAt,
-    },
-    draft: latest && latest.confirmedAt === null ? versionView(latest) : null,
-    confirmed: confirmed ? versionView(confirmed) : null,
-    slides: confirmed ? await slidesOf(env, confirmed) : [],
-    pageLabels: labels,
-    share,
-    drafting: drafting ? { startedAt: lesson.draftingUntil! - DRAFT_LOCK_MS } : null,
-  };
 }
 
 async function ownedSlide(env: Env, lessonId: string, slideId: string): Promise<SlideRow> {
@@ -341,6 +256,9 @@ export const lessonRoutes = new Hono<AppBindings>()
       pages: await scopePages(c.env, lesson.documentId, versionScope(v)),
       workedProblem: workedContent?.layout === "steps" ? workedContent.problem : undefined,
       ctx: { orgId: u.orgId, userId: u.id, lessonId: lesson.id },
+    }).catch((e: unknown) => {
+      if (e instanceof SlideInvalidError) throw new HttpError(502, "SLIDE_INVALID", "这一页没能生成合格的内容，请点“重新生成” · The slide could not be written within its budgets; regenerate it", e.problems.slice(0, 10));
+      throw e;
     });
     const current = (await d.select().from(slides).where(and(eq(slides.outlineVersionId, v.id), eq(slides.specId, specId))).limit(1))[0];
     const row = {
@@ -412,7 +330,9 @@ export const lessonRoutes = new Hono<AppBindings>()
     const lesson = await ownedLesson(c.env, c.get("user"), c.req.param("id"));
     const v = await latestConfirmed(c.env, lesson.id);
     if (!v) throw new HttpError(409, "OUTLINE_NOT_CONFIRMED", "No confirmed outline yet");
-    return c.json(deckExport(lesson, v, await slidesOf(c.env, v), { includeNotes: true, pageLabels: await pageLabels(c.env, lesson.documentId) }));
+    // `audience=student`: the same stripping as the share link (no notes, checks or misconception labels).
+    const includeNotes = c.req.query("audience") !== "student";
+    return c.json(deckExport(lesson, v, await slidesOf(c.env, v), { includeNotes, pageLabels: await pageLabels(c.env, lesson.documentId) }));
   })
   /**
    * Shares a frozen version. With a link already active this keeps the same URL (on the same
@@ -445,5 +365,24 @@ export const lessonRoutes = new Hono<AppBindings>()
   .delete("/:id/share", async (c) => {
     const lesson = await ownedLesson(c.env, c.get("user"), c.req.param("id"));
     await db(c.env).update(shareLinks).set({ revokedAt: Date.now() }).where(and(eq(shareLinks.lessonId, lesson.id), isNull(shareLinks.revokedAt)));
+    return c.json({ ok: true });
+  })
+  /** Soft delete (archive): the share link stops working at once and is not brought back by a restore. */
+  .delete("/:id", async (c) => {
+    const lesson = await ownedLesson(c.env, c.get("user"), c.req.param("id"));
+    const at = Date.now();
+    await db(c.env).batch([
+      db(c.env).update(shareLinks).set({ revokedAt: at }).where(and(eq(shareLinks.lessonId, lesson.id), isNull(shareLinks.revokedAt))),
+      db(c.env).update(lessons).set({ archivedAt: at, draftingUntil: null }).where(eq(lessons.id, lesson.id)),
+      db(c.env).insert(auditLog).values({ orgId: lesson.orgId, actorId: c.get("user").id, action: "lesson.deleted", target: lesson.id }),
+    ]);
+    return c.json({ ok: true });
+  })
+  .post("/:id/restore", async (c) => {
+    const lesson = await ownedLesson(c.env, c.get("user"), c.req.param("id"), { archived: true });
+    await db(c.env).batch([
+      db(c.env).update(lessons).set({ archivedAt: null }).where(eq(lessons.id, lesson.id)),
+      db(c.env).insert(auditLog).values({ orgId: lesson.orgId, actorId: c.get("user").id, action: "lesson.restored", target: lesson.id }),
+    ]);
     return c.json({ ok: true });
   });

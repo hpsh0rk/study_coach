@@ -32,7 +32,7 @@ function grouped(lessons: LessonListItem[]): { unit: LessonListItem["unit"]; les
   return out;
 }
 
-function LessonCard({ l, onDuplicate, busy }: { l: LessonListItem; onDuplicate: () => void; busy: boolean }) {
+function LessonCard({ l, onDuplicate, onDelete, busy }: { l: LessonListItem; onDuplicate: () => void; onDelete: () => void; busy: boolean }) {
   return (
     <li className="card lesson-card" data-testid="lesson-card">
       <Link to={`/lessons/${l.id}/${STATUS[l.status].step}`}>
@@ -59,6 +59,9 @@ function LessonCard({ l, onDuplicate, busy }: { l: LessonListItem; onDuplicate: 
             ⧉ 复制到新学期
           </button>
         )}
+        <button className="btn small ghost danger-text" disabled={busy} onClick={onDelete} data-testid={`delete-${l.id}`} title="删除这节课；分享链接立即失效，可以撤销 · Delete (undo available)">
+          删除 Delete
+        </button>
       </div>
     </li>
   );
@@ -70,12 +73,40 @@ export function LessonsPage() {
   const [lessons, setLessons] = useState<LessonListItem[] | null>(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
-  useEffect(() => {
+  const [deleted, setDeleted] = useState<LessonListItem | null>(null);
+  const reload = () =>
     lessonApi
       .list()
       .then((r) => setLessons(r.lessons))
       .catch(() => setLessons([]));
+  useEffect(() => {
+    void reload();
   }, []);
+  async function remove(l: LessonListItem) {
+    if (!window.confirm(`删除“${l.title}”？分享出去的链接会立即失效。· Delete this lesson? Its share link stops working.`)) return;
+    setBusy(l.id);
+    setError("");
+    try {
+      await lessonApi.archive(l.id);
+      setDeleted(l);
+      setLessons((list) => list?.filter((x) => x.id !== l.id) ?? null);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+  async function undo() {
+    if (!deleted) return;
+    setError("");
+    try {
+      await lessonApi.restore(deleted.id);
+      setDeleted(null);
+      await reload();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
   async function duplicate(id: string) {
     setBusy(id);
     setError("");
@@ -100,6 +131,14 @@ export function LessonsPage() {
         </Link>
       </div>
       {error && <div className="alert error">{error}</div>}
+      {deleted && (
+        <div className="alert info row between" data-testid="deleted-note">
+          <span>已删除“{deleted.title}”，分享链接已失效。· Deleted; the share link no longer works.</span>
+          <button className="btn small" onClick={undo} data-testid="undo-delete">
+            撤销 Undo
+          </button>
+        </div>
+      )}
       {lessons === null ? (
         <div className="page-loading">Loading… 加载中</div>
       ) : lessons.length === 0 ? (
@@ -120,14 +159,14 @@ export function LessonsPage() {
               </h2>
               <ul className="lesson-grid">
                 {g.lessons.map((l) => (
-                  <LessonCard key={l.id} l={l} busy={!!busy} onDuplicate={() => duplicate(l.id)} />
+                  <LessonCard key={l.id} l={l} busy={!!busy} onDuplicate={() => duplicate(l.id)} onDelete={() => remove(l)} />
                 ))}
               </ul>
             </section>
           ) : (
             <ul key={g.lessons[0]!.id} className="lesson-grid">
               {g.lessons.map((l) => (
-                <LessonCard key={l.id} l={l} busy={!!busy} onDuplicate={() => duplicate(l.id)} />
+                <LessonCard key={l.id} l={l} busy={!!busy} onDuplicate={() => duplicate(l.id)} onDelete={() => remove(l)} />
               ))}
             </ul>
           ),

@@ -15,7 +15,9 @@ pnpm admin:create --username admin          # prints a one-time password; change
 pnpm dev                                    # builds the web app, serves everything on http://127.0.0.1:8787
 ```
 
-- Flow: upload PDF → choose chapters/pages (printed page numbers; scanned pages are flagged and their text can be pasted) → lesson settings → outline (±15% time budget; over-budget confirm needs an explicit acknowledgement) → generate, edit/undo/regenerate per slide → present (←/→, S speaker notes, F fullscreen, B blank) or share a read-only link frozen at one outline version (unshare any time).
+- Flow: upload PDF → choose chapters/pages (printed page numbers; scanned pages are flagged and their text can be pasted; a selection worth several lessons can be previewed and planned as a unit) → lesson settings → outline (±15% time budget; over-budget confirm needs an explicit acknowledgement) → confirming starts generation; edit/undo/regenerate per slide → present (←/→ or a clicker, F fullscreen, B blank, D pen, End last slide, Esc back to step 5) with notes, timer and answers in a separate presenter window, or share a read-only link frozen at one outline version (unshare any time).
+- Offline: 导出 → “离线放映文件” is the teacher's copy (speaker notes only in its own pop-up window, never on the projected page); “下载学生版离线文件” in the share panel is stripped on the server like the share link (no notes or misconception labels) and is the one to send to students. Share links and the student file still contain quiz answers and the correct order of order slides, so students can reveal them step by step.
+- Lessons can be deleted from “我的课” (a soft delete: the share link stops working at once; Undo restores the lesson but not the link).
 - `/admin` creates teacher accounts and configures the AI model: one enabled provider (DeepSeek, GLM, or any OpenAI-compatible endpoint: base URL + key) plus one model name serves every call. Keys are encrypted in D1 with `AI_CONFIG_KEY`. With no model enabled, local dev falls back to a deterministic stub (`AI_ALLOW_STUB=true`).
 - `/dev/gallery` renders every layout at its hard content budget (English and Chinese); `/dev/render` renders a deck JSON. Both exist only under `vite dev` and in builds made with `KJ_DEV_PAGES=1` (the e2e server and `eval:render` set it); production builds leave them out.
 - Built-in simulations live in `apps/web/public/sims/` and are listed in `EMBED_CATALOG` (`packages/widgets`). Experiment pages are only planned when a catalog sim matches the chapter.
@@ -23,6 +25,13 @@ pnpm dev                                    # builds the web app, serves everyth
 - For web-only work, run `pnpm --filter @kj/web dev` (Vite on :5173, proxying the API to :8787).
 
 ## Tests
+
+The e2e and overflow tests need Chromium and CJK fonts once per machine:
+
+```bash
+pnpm exec playwright install --with-deps chromium   # browser + its system libraries
+sudo apt-get install -y fonts-noto-cjk               # real CJK glyph metrics for the overflow test
+```
 
 ```bash
 pnpm lint          # ESLint + model SDKs/endpoints only in packages/ai + dependency-cruiser boundaries
@@ -58,4 +67,4 @@ China notes: fonts (Arimo, Noto Sans SC), KaTeX and the simulations are self-hos
 ## Pending
 
 - Everything that needs a real Cloudflare account: the first deploy, remote D1, and mainland-China access tests.
-- Next iteration: number-source check on generated slides, table visual and more sims, a presenter window for notes, an offline single-file deck export, figures from the PDF.
+- Figures from the PDF (pages only contribute text today), more catalog sims, a stub-mode banner for teachers and a request-level model deadline, a "preview, no answers" share mode, deleting uploaded documents.

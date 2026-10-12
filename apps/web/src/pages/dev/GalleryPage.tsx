@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
 import { useSearchParams } from "react-router";
 import type { LayoutId, ThemeId } from "@kj/schema";
-import { CANVAS, galleryCells, LAYOUTS } from "@kj/templates";
+import { CANVAS, LAYOUTS } from "@kj/templates";
+import { galleryCells } from "@kj/templates/testing";
 import { applyStep, fitSlide, measureOverflow, minBodyFontPx, renderSlide } from "@kj/templates/render";
 
 /**

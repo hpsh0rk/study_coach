@@ -1,12 +1,16 @@
 const CJK = /[\u3400-\u9fff\uf900-\ufaff\u3000-\u303f\uff00-\uffef]/g;
 
+/** Links and slash paths (a textbook's URL footer): not words a student reads, so budgets ignore them. */
+const URLISH = /\bhttps?:\/\/\S+|\bwww\.\S+|\S*[A-Za-z0-9]\.[a-z]{2,}\/\S*|\S+\/\S+\/\S+/g;
+
 /**
  * Word-equivalents for mixed Chinese/English text: Latin words count 1 each, and
- * 1.7 CJK characters count as one word (pedagogy-rules §4).
+ * 1.7 CJK characters count as one word (pedagogy-rules §4). URLs do not count.
  */
 export function countWords(text: string): number {
-  const cjk = (text.match(CJK) ?? []).length;
-  const latin = text.replace(CJK, " ").match(/[A-Za-z0-9][A-Za-z0-9'’\-.]*/g)?.length ?? 0;
+  const plain = text.replace(URLISH, " ");
+  const cjk = (plain.match(CJK) ?? []).length;
+  const latin = plain.replace(CJK, " ").match(/[A-Za-z0-9][A-Za-z0-9'’\-.]*/g)?.length ?? 0;
   return Math.round(latin + cjk / 1.7);
 }
 

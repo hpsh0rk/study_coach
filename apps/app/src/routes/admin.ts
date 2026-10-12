@@ -7,7 +7,8 @@ import { aiCalls, aiProviders, auditLog, users } from "../db/schema.ts";
 import { secret, type AppBindings, type Env } from "../env.ts";
 import { HttpError, parseJson } from "../http.ts";
 import { generatePassword, hashPassword, passwordProblem } from "../auth/password.ts";
-import { db, destroyUserSessions, requireAdmin, requireUser } from "../auth/session.ts";
+import { destroyUserSessions, requireAdmin, requireUser } from "../auth/session.ts";
+import { db } from "../db/index.ts";
 
 const Username = z
   .string()
@@ -26,6 +27,17 @@ export const adminRoutes = new Hono<AppBindings>()
   .get("/users", async (c) => {
     const rows = await db(c.env).select().from(users).where(eq(users.orgId, c.get("user").orgId)).orderBy(users.createdAt);
     return c.json({ users: rows.map(publicUser) });
+  })
+  /** The 20 newest audit entries (logins, password changes, account and model changes, lesson deletes). */
+  .get("/audit", async (c) => {
+    const rows = await db(c.env)
+      .select({ id: auditLog.id, action: auditLog.action, target: auditLog.target, createdAt: auditLog.createdAt, actor: users.username })
+      .from(auditLog)
+      .leftJoin(users, eq(users.id, auditLog.actorId))
+      .where(eq(auditLog.orgId, c.get("user").orgId))
+      .orderBy(desc(auditLog.id))
+      .limit(20);
+    return c.json({ entries: rows });
   })
   .post("/users", async (c) => {
     const body = await parseJson(

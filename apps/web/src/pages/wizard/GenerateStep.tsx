@@ -1,5 +1,5 @@
-import { useCallback, useMemo, useState } from "react";
-import { useNavigate } from "react-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router";
 import { PAGE_TYPES } from "@kj/pedagogy";
 import type { Slide, SlideSpec } from "@kj/schema";
 import { ApiError } from "../../api.ts";
@@ -9,7 +9,6 @@ import { UnverifiedBadge, UnverifiedBox } from "../../components/Unverified.tsx"
 import { documentApi, lessonApi, type FlaggedSlide, type LessonView, type ShareView } from "../../lessonApi.ts";
 import { downloadOfflineHtml } from "../../offline/exportDeck.ts";
 import { downloadPptx } from "../../offline/exportPptx.ts";
-import { openPresenter } from "../PlayPages.tsx";
 import { Stepper, StepIntro, type StepKey } from "./Stepper.tsx";
 
 const CONCURRENCY = 2;
@@ -35,6 +34,19 @@ function SharePanel({ lessonId, initial, current, canShare }: { lessonId: string
     } catch (e) {
       if (e instanceof ApiError && e.code === "SHARE_REVIEW_REQUIRED") setReview({ body, pages: e.detail as FlaggedSlide[] });
       else setError(e instanceof ApiError ? e.message : (e as Error).message);
+    }
+  }
+
+  const [packing, setPacking] = useState(false);
+  async function studentFile() {
+    setPacking(true);
+    setError("");
+    try {
+      await downloadOfflineHtml(lessonId, "student");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setPacking(false);
     }
   }
 
@@ -104,6 +116,9 @@ function SharePanel({ lessonId, initial, current, canShare }: { lessonId: string
           </button>
         </div>
       )}
+      <button className="btn ghost small" disabled={!canShare || packing} onClick={studentFile} data-testid="export-student" title="不含讲稿、误区提示和检查标记，可以发到班级群 · No notes or misconception labels">
+        {packing ? "打包中… Packing" : "下载学生版离线文件 Student offline file"}
+      </button>
       {error && <div className="alert error">{error}</div>}
     </>
   );
@@ -122,6 +137,7 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
   const [exporting, setExporting] = useState("");
   const [exportError, setExportError] = useState("");
   const theme = view.lesson.theme;
+  const language = (confirmed?.params ?? view.lesson.params).language;
 
   const labels = view.pageLabels;
   const generateOne = useCallback(
@@ -157,6 +173,16 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
       );
     }
   }
+
+  // Arriving from "confirm outline" (?generate=1) starts generation; a reload or a later visit does not.
+  const [search, setSearch] = useSearchParams();
+  const autoStarted = useRef(false);
+  useEffect(() => {
+    if (search.get("generate") !== "1" || autoStarted.current) return;
+    autoStarted.current = true;
+    setSearch({}, { replace: true });
+    void generateAll();
+  });
 
   const replaceSlide = (slide: Slide) => setSlides((m) => ({ ...m, [slide.specId]: slide }));
 
@@ -210,9 +236,6 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
               ▶ 放映已生成的 Present
             </button>
           )}
-          <button className="btn ghost" disabled={done === 0} onClick={() => openPresenter(view.lesson.id)} title="讲稿、下一页、计时和答案，在你自己的屏幕上 · notes, next slide, timer and answers on your own screen">
-            演讲者视图 Presenter
-          </button>
           <details className="menu">
             <summary className="btn ghost" aria-disabled={done === 0}>
               导出 Export ▾
@@ -302,7 +325,7 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
                 data-testid="thumb"
               >
                 {slide ? (
-                  <SlideThumb slide={slide} theme={theme} index={i} pageLabels={labels} />
+                  <SlideThumb slide={slide} theme={theme} index={i} pageLabels={labels} language={language} />
                 ) : (
                   <div className="thumb-empty">
                     {running.has(s.id) ? <span className="spinner" /> : failed[s.id] ? "⚠ 失败 failed" : "未生成 not yet"}
@@ -357,7 +380,7 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
               />
             ) : selSlide ? (
               <>
-                <SlidePreview slide={selSlide} theme={theme} onSourceClick={openSource} pageLabels={labels} />
+                <SlidePreview slide={selSlide} theme={theme} onSourceClick={openSource} pageLabels={labels} language={language} />
                 <UnverifiedBox items={selSlide.unverified ?? []} sources={selSlide.sources} onSourceClick={openSource} />
                 <h3>讲稿 Speaker notes</h3>
                 <p className="notes">{selSlide.notes || "—"}</p>

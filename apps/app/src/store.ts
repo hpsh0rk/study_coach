@@ -1,11 +1,11 @@
-import { and, asc, desc, eq, gte, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { checkSourceText, slideKey, sourceUnverified, suspiciousContent } from "@kj/generation";
-import { isEmptyPage, MIN_PAGE_WORDS, pagesInRanges, sourceCut } from "@kj/pdf-structure";
-import { OUTLINE_SOURCE_CHARS, verifyNumbers } from "@kj/pedagogy";
-import { LessonParams, LessonScope, newId, Outline, SlideContent, type PageText, type PageType, type Slide, type Unverified } from "@kj/schema";
-import { db } from "./auth/session.ts";
-import { documents, lessons, outlineVersions, pages, slides } from "./db/schema.ts";
-import type { Env, SessionUser } from "./env.ts";
+import { isEmptyPage, MIN_PAGE_WORDS, normalizeRanges, pagesInRanges, rangesForChapters, sourceCut } from "@kj/pdf-structure";
+import { checkOutline, OUTLINE_SOURCE_CHARS, outlineTiming, verifyNumbers } from "@kj/pedagogy";
+import { LessonParams, LessonScope, newId, Outline, SlideContent, type ChapterNode, type PageRange, type PageText, type PageType, type Slide, type Unverified } from "@kj/schema";
+import { db } from "./db/index.ts";
+import { chapters, documents, lessons, outlineVersions, pages, shareLinks, slides } from "./db/schema.ts";
+import { secret, type Env, type SessionUser } from "./env.ts";
 import { HttpError } from "./http.ts";
 
 export type LessonRow = typeof lessons.$inferSelect;
@@ -18,9 +18,10 @@ export async function ownedDocument(env: Env, user: SessionUser, id: string) {
   return row;
 }
 
-export async function ownedLesson(env: Env, user: SessionUser, id: string): Promise<LessonRow> {
+/** Archived lessons are not found unless `archived` is set (only restore asks for them). */
+export async function ownedLesson(env: Env, user: SessionUser, id: string, opts: { archived?: boolean } = {}): Promise<LessonRow> {
   const row = (await db(env).select().from(lessons).where(and(eq(lessons.id, id), eq(lessons.orgId, user.orgId), eq(lessons.ownerId, user.id))).limit(1))[0];
-  if (!row) throw new HttpError(404, "NOT_FOUND", "Lesson not found · 找不到该课");
+  if (!row || (row.archivedAt !== null && !opts.archived)) throw new HttpError(404, "NOT_FOUND", "Lesson not found · 找不到该课");
   return row;
 }
 
@@ -230,7 +231,7 @@ export async function lessonList(env: Env, user: SessionUser) {
       slides: sql<number>`(SELECT COUNT(*) FROM slides s WHERE s.outline_version_id = ${confirmedId})`,
     })
     .from(lessons)
-    .where(and(eq(lessons.orgId, user.orgId), eq(lessons.ownerId, user.id)))
+    .where(and(eq(lessons.orgId, user.orgId), eq(lessons.ownerId, user.id), isNull(lessons.archivedAt)))
     .orderBy(desc(lessons.updatedAt))
     .limit(100);
   return rows.map((r) => ({
@@ -271,4 +272,105 @@ export function deckExport(lesson: LessonRow, version: VersionRow, list: Slide[]
     outline: outlineOf(version),
     slides: list.map((s) => (extra.includeNotes ? (({ canUndo: _u, ...rest }) => rest)(s) : studentSlide(s))),
   };
+}
+
+export async function treeOf(env: Env, documentId: string): Promise<ChapterNode[]> {
+  const rows = await db(env).select().from(chapters).where(eq(chapters.documentId, documentId)).orderBy(chapters.ord);
+  return rows.map(({ documentId: _d, ...ch }) => ch);
+}
+
+export async function scopeFor(env: Env, user: SessionUser, documentId: string, chapterIds: string[], ranges: PageRange[]): Promise<{ scope: LessonScope; title: string }> {
+  const doc = await ownedDocument(env, user, documentId);
+  if (doc.pagesReceived < doc.pageCount) throw new HttpError(409, "DOCUMENT_INCOMPLETE", "The PDF is still uploading · PDF 还在上传");
+  const tree = await treeOf(env, doc.id);
+  const known = new Set(tree.map((c) => c.id));
+  const ids = chapterIds.filter((id) => known.has(id));
+  const fromChapters = ids.length ? rangesForChapters(tree, ids, doc.pageCount) : [];
+  const merged = normalizeRanges([...fromChapters, ...ranges], doc.pageCount);
+  if (!merged.length) throw new HttpError(400, "EMPTY_SCOPE", "Choose at least one chapter or page range · 请至少选择一个章节或页码范围");
+  const picked = tree.filter((c) => ids.includes(c.id) && !(c.parentId && ids.includes(c.parentId)));
+  const title = picked.length ? picked.map((c) => c.title).join(" · ") : `${doc.title} pp. ${merged.map((r) => `${r.start}–${r.end}`).join(", ")}`;
+  return { scope: { chapterIds: ids, ranges: merged }, title: title.slice(0, 200) };
+}
+
+export function versionView(v: VersionRow) {
+  const outline = outlineOf(v);
+  const params = versionParams(v);
+  return {
+    id: v.id,
+    version: v.version,
+    outline,
+    params,
+    scope: versionScope(v),
+    rev: v.rev,
+    confirmedAt: v.confirmedAt,
+    ackOverBudget: v.ackOverBudget,
+    timing: outlineTiming(outline, params),
+    warnings: checkOutline(outline, params),
+  };
+}
+
+/** A draft holds this long at most: a request that dies mid-draft (closed tab, Worker limit) frees the lesson on its own. */
+export const DRAFT_LOCK_MS = 150_000;
+
+export async function activeShare(env: Env, lessonId: string) {
+  return (await db(env).select().from(shareLinks).where(and(eq(shareLinks.lessonId, lessonId), isNull(shareLinks.revokedAt))).limit(1))[0] ?? null;
+}
+
+/** `held`: pages students do not see until the teacher shares again (flagged after the last review). */
+export async function shareView(env: Env, lessonId: string) {
+  const link = await activeShare(env, lessonId);
+  if (!link?.versionId) return null;
+  const v = await versionOf(env, lessonId, link.versionId);
+  const { held } = await sharedSlides(env, v, link.reviewedAt);
+  return { path: `/s/${await shareToken(env, link.id)}`, versionId: v.id, version: v.version, held };
+}
+
+/**
+ * `confirmed` (newest confirmed version and its slides) is what step 5 presents and shares; `draft`
+ * is a newer unconfirmed outline, if any. A draft never hides the generated deck.
+ */
+export async function lessonView(env: Env, lesson: LessonRow) {
+  const scope = lessonScope(lesson);
+  const [latest, confirmed, labels, stats, share] = await Promise.all([
+    latestVersion(env, lesson.id),
+    latestConfirmed(env, lesson.id),
+    pageLabels(env, lesson.documentId),
+    scopeStats(env, lesson.documentId, scope),
+    shareView(env, lesson.id),
+  ]);
+  const drafting = lesson.draftingUntil !== null && lesson.draftingUntil > Date.now();
+  return {
+    lesson: {
+      id: lesson.id,
+      title: lesson.title,
+      documentId: lesson.documentId,
+      theme: lesson.theme,
+      params: lessonParams(lesson),
+      scope,
+      scopeWords: stats.words,
+      emptyPages: stats.emptyPages,
+      unreadPages: stats.unreadPages,
+      createdAt: lesson.createdAt,
+      updatedAt: lesson.updatedAt,
+    },
+    draft: latest && latest.confirmedAt === null ? versionView(latest) : null,
+    confirmed: confirmed ? versionView(confirmed) : null,
+    slides: confirmed ? await slidesOf(env, confirmed) : [],
+    pageLabels: labels,
+    share,
+    drafting: drafting ? { startedAt: lesson.draftingUntil! - DRAFT_LOCK_MS } : null,
+  };
+}
+
+/**
+ * A link's token is derived from its id (HMAC with the app secret), so sharing again can hand out
+ * the same URL while the database only stores sha256(token).
+ */
+export async function shareToken(env: Env, linkId: string): Promise<string> {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret(env, "AI_CONFIG_KEY")), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`kj-share-link:v1:${linkId}`)));
+  let bin = "";
+  for (const b of mac.slice(0, 24)) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }

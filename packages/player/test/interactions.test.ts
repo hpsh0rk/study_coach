@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SlideContent } from "@kj/schema";
-import { sampleContent } from "@kj/templates";
+import { sampleContent } from "@kj/templates/testing";
 import { applyStep, renderSlide, shuffledOrder } from "@kj/templates/render";
 import { answerKey, keyAction, Player, strokeHits, type PlayerSlide } from "../src/index.ts";
 
@@ -115,8 +115,20 @@ describe("class tally", () => {
     expect(host.querySelector(".kj-player")!.getAttribute("data-step")).toBe("0");
     inputs[1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "PageDown", bubbles: true }));
     expect(host.querySelector(".kj-player")!.getAttribute("data-step")).toBe("1");
-    inputs[1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    // Cheap clickers send arrow keys: they navigate from the vote box and never change a count.
+    expect(inputs[1]!.type).toBe("text");
+    inputs[1]!.focus();
+    inputs[1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    expect(host.querySelector(".kj-player")!.getAttribute("data-step")).toBe("0");
+    inputs[2]!.focus();
+    inputs[2]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
     expect(host.querySelector(".kj-player")!.getAttribute("data-step")).toBe("1");
+    expect(document.activeElement).not.toBe(inputs[2]);
+    inputs[2]!.value = "7a";
+    inputs[2]!.dispatchEvent(new Event("input"));
+    expect(inputs[2]!.value).toBe("7");
+    expect(reported.at(-1)).toEqual([1, [1, 1, 7]]);
+    p.setTally(1, [1, 1, 2]);
     p.prev();
     p.next();
     expect(host.querySelectorAll(".kj-tally-n")[2]!.textContent).toBe("2 · 50%");
@@ -157,6 +169,43 @@ describe("pen annotations", () => {
     expect(p.position).not.toEqual(at);
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     expect(p.inkTool).toBeNull();
+    p.dispose();
+    host.remove();
+  });
+
+  it("End lands on the last slide before any reveal; Escape without the pen leaves the presentation", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const slides: PlayerSlide[] = [{ content: sampleContent("title"), sources: [], notes: "", pageType: "cover" }, { content: sampleContent("quiz"), sources: [], notes: "", pageType: "check" }];
+    let exits = 0;
+    const p = new Player(host, { slides, theme: "classic", showNotes: false, onEscape: () => exits++ });
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "End" }));
+    expect(p.position).toEqual({ index: 1, step: 0 });
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "d" }));
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    expect(exits).toBe(0);
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    expect(exits).toBe(1);
+    p.dispose();
+    host.remove();
+  });
+
+  it("strokes are reported for the other window and mirrored strokes do not echo", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const slides: PlayerSlide[] = [{ content: sampleContent("statement"), sources: [], notes: "", pageType: "concept" }];
+    const sent: [number, number][] = [];
+    const p = new Player(host, { slides, theme: "classic", showNotes: false, onInk: (i, strokes) => sent.push([i, strokes.length]) });
+    const canvas = host.querySelector<HTMLCanvasElement>(".kj-ink")!;
+    p.setInk("pen");
+    pointer(canvas, "pointerdown", 10, 10);
+    pointer(canvas, "pointermove", 40, 40);
+    pointer(canvas, "pointerup", 40, 40);
+    expect(sent).toEqual([[0, 1]]);
+    p.setStrokes(0, [{ color: "#2563eb", points: [[5, 5]] }]);
+    expect(sent).toHaveLength(1);
+    (host.querySelectorAll<HTMLButtonElement>(".kj-ink-tools button")).forEach((b) => b.textContent === "清除 Clear" && b.click());
+    expect(sent.at(-1)).toEqual([0, 0]);
     p.dispose();
     host.remove();
   });

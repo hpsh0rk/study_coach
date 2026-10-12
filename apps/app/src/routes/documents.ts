@@ -6,7 +6,8 @@ import { ChapterNode, countWords, newId, PageText } from "@kj/schema";
 import { chapters, documents, pages } from "../db/schema.ts";
 import type { AppBindings } from "../env.ts";
 import { HttpError, parseJson } from "../http.ts";
-import { db, requireUser } from "../auth/session.ts";
+import { requireUser } from "../auth/session.ts";
+import { db } from "../db/index.ts";
 import { ownedDocument, pageLabels } from "../store.ts";
 
 export const MAX_PAGES = 600;

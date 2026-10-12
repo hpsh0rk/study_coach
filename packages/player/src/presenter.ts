@@ -1,7 +1,13 @@
 import type { SlideContent } from "@kj/schema";
+import type { Stroke } from "./ink.ts";
 import type { Position } from "./navigation.ts";
 
-export type SyncMessage = { type: "pos"; index: number; step: number } | { type: "blank"; on: boolean } | { type: "tally"; index: number; counts: number[] } | { type: "hello" };
+export type SyncMessage =
+  | { type: "pos"; index: number; step: number }
+  | { type: "blank"; on: boolean }
+  | { type: "tally"; index: number; counts: number[] }
+  | { type: "ink"; index: number; strokes: Stroke[] }
+  | { type: "hello" };
 
 export interface PresenterSync {
   /** Report a local change; ignored if it only echoes the last position received (unless `force`). */
@@ -9,6 +15,8 @@ export interface PresenterSync {
   blank(on: boolean): void;
   /** Class tally for slide `index`, typed in either window. */
   tally(index: number, counts: number[]): void;
+  /** All pen strokes of slide `index` after a stroke, erase or clear in either window. */
+  ink(index: number, strokes: Stroke[]): void;
   close(): void;
 }
 
@@ -18,10 +26,10 @@ export interface PresenterSync {
  */
 export function presenterSync(
   lessonId: string,
-  handlers: { onPosition(pos: Position): void; onBlank?(on: boolean): void; onTally?(index: number, counts: number[]): void; onHello?(): void },
+  handlers: { onPosition(pos: Position): void; onBlank?(on: boolean): void; onTally?(index: number, counts: number[]): void; onInk?(index: number, strokes: Stroke[]): void; onHello?(): void },
 ): PresenterSync {
   const Channel = (globalThis as { BroadcastChannel?: typeof BroadcastChannel }).BroadcastChannel;
-  if (!Channel) return { position() {}, blank() {}, tally() {}, close() {} };
+  if (!Channel) return { position() {}, blank() {}, tally() {}, ink() {}, close() {} };
   const ch = new Channel(`kj-present-${lessonId}`);
   let last = "";
   const key = (p: Position) => `${p.index}:${p.step}`;
@@ -32,6 +40,7 @@ export function presenterSync(
       handlers.onPosition({ index: m.index, step: m.step });
     } else if (m?.type === "blank") handlers.onBlank?.(m.on);
     else if (m?.type === "tally" && Array.isArray(m.counts)) handlers.onTally?.(m.index, m.counts.slice(0, 8).map((n) => Math.max(0, Math.min(9999, Number(n) || 0))));
+    else if (m?.type === "ink" && Number.isInteger(m.index) && Array.isArray(m.strokes)) handlers.onInk?.(m.index, cleanStrokes(m.strokes));
     else if (m?.type === "hello") handlers.onHello?.();
   };
   ch.postMessage({ type: "hello" } satisfies SyncMessage);
@@ -47,10 +56,22 @@ export function presenterSync(
     tally(index, counts) {
       ch.postMessage({ type: "tally", index, counts } satisfies SyncMessage);
     },
+    ink(index, strokes) {
+      ch.postMessage({ type: "ink", index, strokes } satisfies SyncMessage);
+    },
     close() {
       ch.close();
     },
   };
+}
+
+function cleanStrokes(raw: unknown[]): Stroke[] {
+  return raw.slice(0, 500).flatMap((s) => {
+    const { color, points } = (s ?? {}) as Partial<Stroke>;
+    if (typeof color !== "string" || !/^#[0-9a-f]{3,8}$/i.test(color) || !Array.isArray(points)) return [];
+    const pts = points.slice(0, 5000).filter((p): p is [number, number] => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1]));
+    return pts.length ? [{ color, points: pts.map(([x, y]) => [x, y] as [number, number]) }] : [];
+  });
 }
 
 const LETTERS = "ABCDEFGH";

@@ -1,0 +1,1 @@
+ALTER TABLE `lessons` ADD `archived_at` integer;

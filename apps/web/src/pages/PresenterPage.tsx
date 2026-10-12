@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
 import { answerKey, type Position } from "@kj/player";
-import type { Slide, ThemeId } from "@kj/schema";
+import type { Slide, TeachingLanguage, ThemeId } from "@kj/schema";
 import { SlideThumb } from "../components/SlideView.tsx";
 import { lessonApi } from "../lessonApi.ts";
 import { PlayerHost } from "./PlayPages.tsx";
@@ -41,14 +41,14 @@ function useTimer() {
  */
 export function PresenterPage() {
   const { id = "" } = useParams();
-  const [data, setData] = useState<{ title: string; slides: Slide[]; theme: ThemeId; minutes: number; pageLabels: Record<number, string> } | null>(null);
+  const [data, setData] = useState<{ title: string; slides: Slide[]; theme: ThemeId; minutes: number; pageLabels: Record<number, string>; language: TeachingLanguage } | null>(null);
   const [error, setError] = useState("");
   const [pos, setPos] = useState<Position>({ index: 0, step: 0 });
   const timer = useTimer();
   useEffect(() => {
     lessonApi
       .get(id)
-      .then((v) => setData({ title: v.lesson.title, slides: v.slides, theme: v.lesson.theme, minutes: v.confirmed?.params.minutes ?? v.lesson.params.minutes, pageLabels: v.pageLabels }))
+      .then((v) => setData({ title: v.lesson.title, slides: v.slides, theme: v.lesson.theme, minutes: v.confirmed?.params.minutes ?? v.lesson.params.minutes, pageLabels: v.pageLabels, language: (v.confirmed?.params ?? v.lesson.params).language }))
       .catch((e) => setError((e as Error).message));
   }, [id]);
   useEffect(() => {
@@ -99,12 +99,12 @@ export function PresenterPage() {
       </header>
       <div className="presenter-grid">
         <section className="presenter-current">
-          <PlayerHost slides={data.slides} theme={data.theme} pageLabels={data.pageLabels} syncId={id} onPosition={setPos} />
+          <PlayerHost slides={data.slides} theme={data.theme} pageLabels={data.pageLabels} syncId={id} onPosition={setPos} language={data.language} />
         </section>
         <aside className="presenter-side">
           <div className="presenter-next" data-testid="presenter-next">
             <h3>下一页 Next</h3>
-            {next ? <SlideThumb slide={next} theme={data.theme} index={pos.index + 1} pageLabels={data.pageLabels} /> : <p className="muted">最后一页 · Last slide</p>}
+            {next ? <SlideThumb slide={next} theme={data.theme} index={pos.index + 1} pageLabels={data.pageLabels} language={data.language} /> : <p className="muted">最后一页 · Last slide</p>}
           </div>
           <div className="presenter-notes" data-testid="presenter-notes">
             <h3>讲稿 Speaker notes</h3>

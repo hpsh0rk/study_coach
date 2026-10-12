@@ -1,6 +1,6 @@
 import { and, eq, ne } from "drizzle-orm";
 import { createAiLayer, openSecret, type AiConfig } from "@kj/ai";
-import { db } from "./auth/session.ts";
+import { db } from "./db/index.ts";
 import { aiCalls, aiProviders } from "./db/schema.ts";
 import { secret, type Env } from "./env.ts";
 

@@ -4,7 +4,7 @@ import { countPages, isEmptyPage, labelOf, normalizeRanges, pageForLabel, pagesI
 import { OUTLINE_SOURCE_CHARS, scopeAdvice } from "@kj/pedagogy";
 import type { ChapterNode, PageRange } from "@kj/schema";
 import { ApiError } from "../../api.ts";
-import { documentApi, lessonApi, type DocumentRow, type LessonView } from "../../lessonApi.ts";
+import { documentApi, lessonApi, type DocumentRow, type LessonView, type UnitPreview } from "../../lessonApi.ts";
 import { Stepper, StepIntro, type StepKey } from "./Stepper.tsx";
 
 /**
@@ -202,12 +202,29 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
     }
   }
 
-  async function planUnit() {
+  // `count` undefined: the server picks the fewest lessons that each fit the lesson length.
+  const [unitPlan, setUnitPlan] = useState<{ count?: number; preview: UnitPreview } | null>(null);
+  const selection = JSON.stringify([[...picked].sort(), extra]);
+  useEffect(() => setUnitPlan(null), [selection]);
+  const unitRequest = (count?: number) => ({ documentId, chapterIds: [...picked], ranges: extra ?? [], count, lessonId: lesson?.lesson.id, params: lesson?.lesson.params });
+  async function previewUnit(count?: number) {
     if (extra === null) return;
     setBusy(true);
     setError("");
     try {
-      const res = await lessonApi.planUnit({ documentId, chapterIds: [...picked], ranges: extra, count: advice.lessons, lessonId: lesson?.lesson.id, params: lesson?.lesson.params });
+      setUnitPlan({ count, preview: await lessonApi.previewUnit(unitRequest(count)) });
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : (e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function planUnit() {
+    if (extra === null || !unitPlan) return;
+    setBusy(true);
+    setError("");
+    try {
+      const res = await lessonApi.planUnit(unitRequest(unitPlan.count));
       nav(`/?unit=${res.unit.id}`);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : (e as Error).message);
@@ -279,9 +296,37 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
                 </>
               )}
               </span>
-              <button className="btn small" disabled={busy || extra === null} onClick={planUnit} data-testid="plan-unit">
-                整单元规划：拆成 {advice.lessons} 节课 Plan as a unit
+              <button className="btn small" disabled={busy || extra === null} onClick={() => previewUnit()} data-testid="plan-unit">
+                整单元规划：先看怎么拆 Preview a unit plan
               </button>
+            </div>
+          )}
+          {pages > 0 && unitPlan && (
+            <div className="card unit-preview" data-testid="unit-preview">
+              <h3>
+                整单元规划预览 · {unitPlan.preview.lessons.length} 节课，每节 {unitPlan.preview.minutes} 分钟 <span className="muted small">（超过 {unitPlan.preview.maxMinutes} 分钟会标 ⚠）</span>
+              </h3>
+              <ol>
+                {unitPlan.preview.lessons.map((l, i) => (
+                  <li key={i} className={l.over ? "over" : ""} data-testid="unit-preview-lesson">
+                    <b>{l.title}</b> <span className="muted small">p. {fmtRanges(l.ranges, labels)}</span> · 约 {l.estimatedMinutes} 分钟 {l.over && <span className="badge warn">⚠ 内容偏多 over</span>}
+                  </li>
+                ))}
+              </ol>
+              <div className="row">
+                <button className="btn small ghost" disabled={busy || unitPlan.preview.lessons.length <= 2} onClick={() => previewUnit(unitPlan.preview.lessons.length - 1)} data-testid="unit-fewer">
+                  − 少一节 Fewer
+                </button>
+                <button className="btn small ghost" disabled={busy || unitPlan.preview.lessons.length >= 12} onClick={() => previewUnit(unitPlan.preview.lessons.length + 1)} data-testid="unit-more">
+                  ＋ 多一节 More
+                </button>
+                <button className="btn small ghost" disabled={busy} onClick={() => setUnitPlan(null)}>
+                  取消 Cancel
+                </button>
+                <button className="btn primary small" disabled={busy} onClick={planUnit} data-testid="unit-confirm">
+                  确定，建 {unitPlan.preview.lessons.length} 节课 Create lessons
+                </button>
+              </div>
             </div>
           )}
           {tree.length > 0 && (

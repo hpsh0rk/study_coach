@@ -202,7 +202,6 @@ if (gate === "ack") {
 await page.waitForURL(/\/slides$/);
 const lessonId = /\/lessons\/([^/]+)\//.exec(page.url())[1];
 await caption(page, "第 5 步 · 逐页生成：每页是固定版式 + 有字数预算的槽位，学生要读的字 ≥ 48px", "Each slide = fixed layout + budgeted slots; rendered and measured for overflow");
-await click(page, page.getByTestId("generate-all"));
 await page.getByTestId("generate-all").waitFor({ state: "detached", timeout: 120_000 });
 await pause(1500);
 

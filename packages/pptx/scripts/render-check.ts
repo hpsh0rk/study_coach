@@ -16,7 +16,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ThemeId } from "@kj/schema";
-import { galleryCells } from "@kj/templates";
+import { galleryCells } from "@kj/templates/testing";
 import { exportPptx, PALETTES, planDeck, PPTX_FONT, writePptx, type PptxDeck, type TextItem } from "../src/index.ts";
 
 const args = process.argv.slice(2);

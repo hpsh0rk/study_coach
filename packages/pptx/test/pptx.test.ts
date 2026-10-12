@@ -1,7 +1,8 @@
 import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 import { LAYOUT_IDS, type ChartSpec, type SlideContent } from "@kj/schema";
-import { CANVAS, FONT, galleryCells, maxBudgetContent, sampleContent } from "@kj/templates";
+import { CANVAS, FONT } from "@kj/templates";
+import { galleryCells, maxBudgetContent, sampleContent } from "@kj/templates/testing";
 import { exportPptx, overflowingSlots, planSlide, shuffledOrder, texToText, type Item, type SlidePlan, type TextItem } from "../src/index.ts";
 
 const plan = (content: SlideContent, notes = "", extra: { sources?: number[] } = {}) => planSlide({ content, notes, sources: extra.sources ?? [], unverified: [] }, { theme: "classic" });

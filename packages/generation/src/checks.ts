@@ -68,6 +68,39 @@ export function truncateLists(c: SlideContent, pageType?: PageType): SlideConten
   }
 }
 
+const TOO_LONG = /at most|too long|太长|最多/i;
+
+function at(root: unknown, path: PropertyKey[]): unknown {
+  return path.reduce<unknown>((o, k) => (o && typeof o === "object" ? (o as Record<PropertyKey, unknown>)[k] : undefined), root);
+}
+
+/** One word (or one CJK character) off the end; links go first since they are rarely what the student reads. */
+function shorter(s: string): string {
+  const noLink = s.replace(/\s*\S*\/\S*\/\S*\s*/, " ").trim();
+  if (noLink !== s.trim() && noLink) return noLink;
+  const t = s.trim();
+  const cut = /[\u3400-\u9fff]$/.test(t) ? t.slice(0, -1) : t.replace(/\s*\S+$/, "");
+  return cut.replace(/[\s,;:，；：、—-]+$/, "");
+}
+
+/**
+ * Last-resort, deterministic: shortens every text slot that is over its hard budget (word or character
+ * limit) until the slot schema accepts it, so no saved slide fails the editor's own validation.
+ */
+export function clipToBudgets(c: SlideContent): SlideContent {
+  const out = structuredClone(c) as SlideContent;
+  for (let guard = 0; guard < 600; guard++) {
+    const issue = slotIssues(out).find((i) => TOO_LONG.test(i.message) && typeof at(out, i.path) === "string" && (at(out, i.path) as string).trim().length > 0);
+    if (!issue) break;
+    const key = issue.path[issue.path.length - 1]!;
+    const parent = at(out, issue.path.slice(0, -1)) as Record<PropertyKey, unknown>;
+    const next = shorter(parent[key] as string);
+    if (next === parent[key]) break;
+    parent[key] = next;
+  }
+  return out;
+}
+
 /** Replaces term translations with the lesson glossary's, so every slide uses the same wording. */
 export function applyGlossary(c: SlideContent, glossary: GlossaryEntry[]): SlideContent {
   if (c.layout !== "statement" || !glossary.length) return c;
