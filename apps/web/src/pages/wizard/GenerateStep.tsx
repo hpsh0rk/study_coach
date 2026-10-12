@@ -7,6 +7,8 @@ import { SlotEditor } from "../../components/SlotEditor.tsx";
 import { SlidePreview, SlideThumb } from "../../components/SlideView.tsx";
 import { UnverifiedBadge, UnverifiedBox } from "../../components/Unverified.tsx";
 import { documentApi, lessonApi, type LessonView } from "../../lessonApi.ts";
+import { downloadOfflineHtml } from "../../offline/exportDeck.ts";
+import { openPresenter } from "../PlayPages.tsx";
 import { Stepper, StepIntro, type StepKey } from "./Stepper.tsx";
 
 const CONCURRENCY = 2;
@@ -22,6 +24,8 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [source, setSource] = useState<{ no: number; text: string; label: string | null } | null>(null);
   const [editing, setEditing] = useState(false);
+  const [exporting, setExporting] = useState("");
+  const [exportError, setExportError] = useState("");
   const stop = useRef(false);
   const theme = view.lesson.theme;
 
@@ -99,41 +103,77 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
           </div>
         </div>
         <div className="gen-actions">
-          {!all && (
+          {!all ? (
             <button className="btn primary" disabled={running.size > 0} onClick={generateAll} data-testid="generate-all">
-              {running.size ? "生成中… Generating" : done ? "继续生成 Continue" : "生成全部幻灯片 Generate all"}
+              {running.size ? "生成中… Generating" : done ? `继续生成剩下 ${specs.length - done} 页 Continue` : "生成全部幻灯片 Generate all"}
+            </button>
+          ) : (
+            <button className="btn primary" onClick={() => nav(`/play/${view.lesson.id}`)} data-testid="present">
+              ▶ 放映 Present
             </button>
           )}
-          <button className="btn primary" disabled={done === 0} onClick={() => nav(`/play/${view.lesson.id}`)} data-testid="present">
-            ▶ 放映 Present
+          {!all && (
+            <button className="btn ghost" disabled={done === 0} onClick={() => nav(`/play/${view.lesson.id}`)} data-testid="present-partial">
+              ▶ 放映已生成的 Present
+            </button>
+          )}
+          <button className="btn ghost" disabled={done === 0} onClick={() => openPresenter(view.lesson.id)} title="讲稿、下一页、计时和答案，在你自己的屏幕上 · notes, next slide, timer and answers on your own screen">
+            演讲者视图 Presenter
           </button>
-          <button
-            className="btn ghost"
-            disabled={done === 0}
-            onClick={async () => {
-              const deck = await lessonApi.deck(view.lesson.id);
-              const a = document.createElement("a");
-              a.href = URL.createObjectURL(new Blob([JSON.stringify(deck, null, 2)], { type: "application/json" }));
-              a.download = `${view.lesson.title.slice(0, 60)}.json`;
-              a.click();
-            }}
-          >
-            导出 JSON Export
-          </button>
-          <button
-            className="btn ghost"
-            disabled={done === 0}
-            onClick={async () => {
-              const r = await lessonApi.share(view.lesson.id);
-              const url = `${location.origin}${r.path}`;
-              setShareUrl(url);
-              await navigator.clipboard?.writeText(url).catch(() => undefined);
-            }}
-          >
-            分享链接 Share
-          </button>
+          <details className="menu">
+            <summary className="btn ghost" aria-disabled={done === 0}>
+              导出 / 分享 Export ▾
+            </summary>
+            <div className="menu-list card">
+              <button
+                className="btn ghost"
+                disabled={done === 0 || !!exporting}
+                data-testid="export-offline"
+                onClick={async () => {
+                  setExporting("offline");
+                  setExportError("");
+                  try {
+                    await downloadOfflineHtml(view.lesson.id);
+                  } catch (e) {
+                    setExportError((e as Error).message);
+                  } finally {
+                    setExporting("");
+                  }
+                }}
+              >
+                {exporting === "offline" ? "打包中… Packing" : "离线放映文件（单个 HTML）Offline file"}
+              </button>
+              <span className="muted small">无网络也能放映：幻灯片、模拟实验、字体都在一个文件里 · runs with no internet</span>
+              <button
+                className="btn ghost"
+                disabled={done === 0}
+                onClick={async () => {
+                  const deck = await lessonApi.deck(view.lesson.id);
+                  const a = document.createElement("a");
+                  a.href = URL.createObjectURL(new Blob([JSON.stringify(deck, null, 2)], { type: "application/json" }));
+                  a.download = `${view.lesson.title.slice(0, 60)}.json`;
+                  a.click();
+                }}
+              >
+                数据 JSON
+              </button>
+              <button
+                className="btn ghost"
+                disabled={done === 0}
+                onClick={async () => {
+                  const r = await lessonApi.share(view.lesson.id);
+                  const url = `${location.origin}${r.path}`;
+                  setShareUrl(url);
+                  await navigator.clipboard?.writeText(url).catch(() => undefined);
+                }}
+              >
+                学生分享链接 Share link
+              </button>
+            </div>
+          </details>
         </div>
       </div>
+      {exportError && <div className="alert error">导出失败 Export failed: {exportError}</div>}
       {shareUrl && (
         <div className="alert success">
           学生可以用这个链接查看（不含讲稿）· Read-only link (no speaker notes): <a href={shareUrl}>{shareUrl}</a>

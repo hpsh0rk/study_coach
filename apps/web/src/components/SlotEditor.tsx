@@ -106,7 +106,7 @@ function Field({ name, value, path, onChange }: { name: string | number; value: 
   if (Array.isArray(value)) {
     if (value.every((x) => typeof x === "string")) {
       return (
-        <label className="slot-field">
+        <label className={`slot-field ${isFlagged(flags, value.join("\n")) ? "flagged" : ""}`}>
           <span>{label(name)}（每行一条 one per line）</span>
           <textarea
             rows={Math.max(2, value.length)}

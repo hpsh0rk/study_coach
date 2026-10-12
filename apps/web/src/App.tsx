@@ -8,6 +8,7 @@ import { RenderPage } from "./pages/dev/RenderPage.tsx";
 import { LessonPage } from "./pages/LessonPage.tsx";
 import { LessonsPage } from "./pages/LessonsPage.tsx";
 import { PlayPage, SharePage } from "./pages/PlayPages.tsx";
+import { PresenterPage } from "./pages/PresenterPage.tsx";
 import { ChaptersStep } from "./pages/wizard/ChaptersStep.tsx";
 import { UploadStep } from "./pages/wizard/UploadStep.tsx";
 
@@ -76,6 +77,7 @@ export function App() {
           <Route path="/dev/gallery" element={<GalleryPage />} />
           <Route path="/dev/render" element={<RenderPage />} />
           <Route path="/play/:id" element={<RequireAuth><PlayPage /></RequireAuth>} />
+          <Route path="/presenter/:id" element={<RequireAuth><PresenterPage /></RequireAuth>} />
           <Route path="/admin" element={authed(<AdminPage />, true)} />
           <Route path="/new" element={authed(<UploadStep />)} />
           <Route path="/new/:docId" element={authed(<NewChapters />)} />

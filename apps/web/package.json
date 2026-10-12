@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build --config vite.offline.config.ts && vite build",
+    "build:offline": "vite build --config vite.offline.config.ts",
     "typecheck": "tsc -p tsconfig.json",
     "test": "echo 'web: covered by e2e'"
   },

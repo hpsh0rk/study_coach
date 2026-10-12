@@ -14,3 +14,4 @@ apps/app/.wrangler.deploy.jsonc
 __pycache__/
 .pytest_cache/
 results/
+apps/web/public/offline/

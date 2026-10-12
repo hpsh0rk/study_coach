@@ -292,7 +292,9 @@ export function verifyNumbers(content: SlideContent, source: string, opts: Verif
   const seen = new Set<string>();
   const add = (u: Unverified) => {
     const key = `${u.kind}:${u.text}`;
-    if (!seen.has(key)) seen.add(key), out.push(u);
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(u);
   };
 
   const calc = calcIssues([...prose, ...tex, ...(opts.notes ? opts.notes.split(/\n/) : [])]);
