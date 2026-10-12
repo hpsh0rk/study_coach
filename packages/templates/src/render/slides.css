@@ -623,7 +623,7 @@
   padding-right: 200px;
 }
 .kj-chip.kj-tallied {
-  padding-right: 180px;
+  padding-right: 90px;
 }
 .kj-tally {
   position: absolute;
@@ -648,9 +648,6 @@
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: var(--kj-accent);
-}
-.kj-poll-tag {
-  color: var(--kj-soft);
 }
 .kj-poll .kj-option:disabled {
   cursor: default;

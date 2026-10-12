@@ -76,8 +76,8 @@ function title(b: Builder, value: string): void {
 
 const LETTERS = "ABCD";
 
-/** Vote bars inside each option, revealed at step `k`; counts come from the teacher (RenderOptions.tally). */
-function tally(b: Builder, hosts: HTMLElement[], k: number): void {
+/** Vote bars inside each option, revealed at step `k`; counts come from the teacher (RenderOptions.tally). `compact` shows counts only. */
+function tally(b: Builder, hosts: HTMLElement[], k: number, compact = false): void {
   const parts = hosts.map((host) => {
     host.classList.add("kj-tallied");
     const box = step(node("span", "kj-tally", host), k);
@@ -91,7 +91,7 @@ function tally(b: Builder, hosts: HTMLElement[], k: number): void {
       const v = Math.max(0, counts[i] || 0);
       const pct = total ? Math.round((v / total) * 100) : 0;
       p.bar.style.width = `${pct}%`;
-      p.n.textContent = total ? `${v} · ${pct}%` : "–";
+      p.n.textContent = !total ? "–" : compact ? String(v) : `${v} · ${pct}%`;
     });
   };
   set(b.opts.tally ?? []);
@@ -259,7 +259,7 @@ const RENDERERS: { [L in SlideContent["layout"]]: (b: Builder, c: ContentOf<L>) 
       });
       return chip;
     });
-    tally(b, chips, 1);
+    tally(b, chips, 1, true);
     const observe = step(slot("observe", left, "kj-fit kj-grow"), 1);
     const oh = node("div", "kj-phase", observe);
     node("span", "kj-phase-tag", oh).textContent = "② Observe 观察";
@@ -275,15 +275,12 @@ const RENDERERS: { [L in SlideContent["layout"]]: (b: Builder, c: ContentOf<L>) 
 
   quiz(b, c) {
     const qs = slot("question", b.root, "kj-fit");
-    node("div", "kj-quiz-tag", qs).textContent = "Check · 检查理解";
+    node("div", "kj-quiz-tag", qs).textContent = c.poll ? "Check · 检查理解 · Vote first 先举手投票" : "Check · 检查理解";
     text("h1", "kj-quiz-q", c.question, qs);
     const body = node("div", "kj-body kj-col", b.root);
     const grid = slot("options", body, "kj-fit kj-grow kj-quiz-grid");
     const feedback = node("div", "kj-quiz-feedback", grid);
-    if (c.poll) {
-      b.root.classList.add("kj-poll");
-      node("div", "kj-quiz-tag kj-poll-tag", qs).textContent = "Vote first · 先举手投票";
-    }
+    if (c.poll) b.root.classList.add("kj-poll");
     const buttons = c.options.map((o, i) => {
       const btn = node("button", "kj-option", grid);
       btn.type = "button";
