@@ -216,21 +216,32 @@ function renderShape(doc: Document, el: ShapeEl, ctx: RenderContext): HTMLElemen
   const { w, hgt } = { w: Math.max(el.frame.w, 1), hgt: Math.max(el.frame.h, 1) };
   const svgNs = "http://www.w3.org/2000/svg";
   const svg = doc.createElementNS(svgNs, "svg");
-  svg.setAttribute("viewBox", `0 0 ${w} ${hgt}`);
-  svg.setAttribute("preserveAspectRatio", "none");
-  svg.setAttribute("width", "100%");
-  svg.setAttribute("height", "100%");
-  svg.style.overflow = "visible";
   const stroke = el.stroke ? resolveColor(el.stroke.color) : "none";
   const strokeW = el.stroke?.width ?? 0;
   const fill = el.fill ? resolveColor(el.fill) : "none";
+  const isLine = el.geometry === "line" || el.geometry === "arrow";
+  // A zero-height frame is a horizontal line; a 100%-height SVG would collapse to nothing.
+  const flat = isLine && el.frame.h === 0;
+  const pad = Math.max(strokeW || 2, 2) * 3;
+  if (flat) {
+    svg.setAttribute("viewBox", `0 ${-pad} ${w} ${pad * 2}`);
+    svg.setAttribute("width", "100%");
+    svg.setAttribute("height", px(pad * 2));
+    Object.assign(svg.style, { position: "absolute", left: "0", top: px(-pad) });
+  } else {
+    svg.setAttribute("viewBox", `0 0 ${w} ${hgt}`);
+    svg.setAttribute("preserveAspectRatio", "none");
+    svg.setAttribute("width", "100%");
+    svg.setAttribute("height", "100%");
+  }
+  svg.style.overflow = "visible";
   let shape: SVGElement;
-  if (el.geometry === "line" || el.geometry === "arrow") {
+  if (isLine) {
     shape = doc.createElementNS(svgNs, "line");
     shape.setAttribute("x1", "0");
-    shape.setAttribute("y1", el.frame.h === 0 ? "0.5" : "0");
+    shape.setAttribute("y1", "0");
     shape.setAttribute("x2", String(w));
-    shape.setAttribute("y2", el.frame.h === 0 ? "0.5" : String(hgt));
+    shape.setAttribute("y2", flat ? "0" : String(hgt));
     shape.setAttribute("stroke", el.stroke ? stroke : "currentColor");
     shape.setAttribute("stroke-width", String(strokeW || 2));
     shape.setAttribute("vector-effect", "non-scaling-stroke");

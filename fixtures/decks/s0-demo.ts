@@ -100,6 +100,7 @@ export const DEMO_ASSETS: Record<string, string> = {
   ast_wavediagram: "/demo-assets/wave-diagram.svg",
   ast_transverse: "/demo-assets/transverse.svg",
   ast_longitudinal: "/demo-assets/longitudinal.svg",
+  ast_wavequiz: "/demo-assets/wave-quiz.svg",
 };
 
 function build(): Deck {
@@ -362,10 +363,10 @@ function build(): Deck {
       [
         title(["Check your understanding ", "小测验"]),
         accentBar(),
-        { id: id("el"), type: "image", assetId: "ast_wavediagram", fit: "contain", frame: { x: 48, y: 130, w: 480, h: 272 }, radius: 10, border: { width: 1.5, color: "#e2e8f0" } },
-        { id: id("el"), type: "reveal", frame: { x: 142, y: 160, w: 36, h: 36 }, trigger: { kind: "hotspot" }, revealIds: [ansA.id], label: "A" },
-        { id: id("el"), type: "reveal", frame: { x: 238, y: 336, w: 36, h: 36 }, trigger: { kind: "hotspot" }, revealIds: [ansB.id], label: "B" },
-        { id: id("el"), type: "reveal", frame: { x: 300, y: 214, w: 36, h: 36 }, trigger: { kind: "hotspot" }, revealIds: [ansC.id], label: "C" },
+        { id: id("el"), type: "image", assetId: "ast_wavequiz", fit: "contain", frame: { x: 48, y: 130, w: 480, h: 272 }, radius: 10, border: { width: 1.5, color: "#e2e8f0" }, alt: "Unlabelled wave for the quiz" },
+        { id: id("el"), type: "reveal", frame: { x: 94, y: 176, w: 36, h: 36 }, trigger: { kind: "hotspot" }, revealIds: [ansA.id], label: "A" },
+        { id: id("el"), type: "reveal", frame: { x: 190, y: 344, w: 36, h: 36 }, trigger: { kind: "hotspot" }, revealIds: [ansB.id], label: "B" },
+        { id: id("el"), type: "reveal", frame: { x: 190, y: 139, w: 36, h: 36 }, trigger: { kind: "hotspot" }, revealIds: [ansC.id], label: "C" },
         ansA,
         ansB,
         ansC,
