@@ -16,6 +16,7 @@
     "@kj/pdf-structure": "workspace:*",
     "@kj/pedagogy": "workspace:*",
     "@kj/player": "workspace:*",
+    "@kj/pptx": "workspace:*",
     "@kj/schema": "workspace:*",
     "@kj/templates": "workspace:*",
     "@kj/widgets": "workspace:*",

@@ -8,6 +8,7 @@ import { SlidePreview, SlideThumb } from "../../components/SlideView.tsx";
 import { UnverifiedBadge, UnverifiedBox } from "../../components/Unverified.tsx";
 import { documentApi, lessonApi, type FlaggedSlide, type LessonView, type ShareView } from "../../lessonApi.ts";
 import { downloadOfflineHtml } from "../../offline/exportDeck.ts";
+import { downloadPptx } from "../../offline/exportPptx.ts";
 import { openPresenter } from "../PlayPages.tsx";
 import { Stepper, StepIntro, type StepKey } from "./Stepper.tsx";
 
@@ -236,6 +237,27 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
                 {exporting === "offline" ? "打包中… Packing" : "离线放映文件（单个 HTML）Offline file"}
               </button>
               <span className="muted small">无网络也能放映：幻灯片、模拟实验、字体都在一个文件里 · runs with no internet</span>
+              <button
+                className="btn ghost"
+                disabled={done === 0 || !!exporting}
+                data-testid="export-pptx"
+                onClick={async () => {
+                  setExporting("pptx");
+                  setExportError("");
+                  try {
+                    await downloadPptx(view.lesson.id);
+                  } catch (e) {
+                    setExportError((e as Error).message);
+                  } finally {
+                    setExporting("");
+                  }
+                }}
+              >
+                {exporting === "pptx" ? "生成中… Building" : "可编辑 PPT（.pptx）Editable PPTX"}
+              </button>
+              <span className="muted small">
+                给 WPS / PowerPoint / Keynote 用：文字、表格、图表都可编辑；互动（实验、投票、排序）变成静态版，做法和答案写在讲稿里。字体用苹方（Mac 自带，不嵌入）· interactions become static, answers go to speaker notes
+              </span>
               <button
                 className="btn ghost"
                 disabled={done === 0}

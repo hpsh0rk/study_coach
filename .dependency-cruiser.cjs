@@ -54,6 +54,13 @@ module.exports = {
       to: { path: "^packages/", pathNot: "^packages/(ai|schema)/" },
     },
     {
+      name: "pptx-export-reads-the-deck-only",
+      comment: "packages/pptx maps slide content to PPTX objects: schema, template budgets and widget data only — no app, DOM renderers, player or model calls.",
+      severity: "error",
+      from: { path: "^packages/pptx/" },
+      to: { path: ["^packages/(ai|generation|player|pedagogy|pdf-structure)/", BROWSER_ONLY] },
+    },
+    {
       name: "pedagogy-has-no-io",
       severity: "error",
       from: { path: "^packages/pedagogy/" },

@@ -69,7 +69,8 @@ D1：orgs, users, sessions, login_attempts, ai_providers, ai_calls, audit_log,
         │            └──────────► generation ◄───────┴──────────┘
         │                              ▲
         │                 apps/app（routes → store）     tools/eval（消融驱动、渲染测量）
-   apps/web（pdf-structure/browser, templates/render, widgets/render, player, pedagogy）
+   apps/web（pdf-structure/browser, templates/render, widgets/render, player, pedagogy, pptx）
+   pptx（schema + templates 核心 + widgets 核心 → 可编辑 .pptx；不依赖应用、渲染入口、player、模型）
 ```
 
 **规则（`.dependency-cruiser.cjs`，`pnpm lint` 执行，违反即失败）**
@@ -85,6 +86,7 @@ D1：orgs, users, sessions, login_attempts, ai_providers, ai_calls, audit_log,
 | `product-code-never-imports-tools` | `apps/*`、`packages/*` 不得导入 `tools/*` |
 | `ai-layer-is-generic` | `ai` 只依赖 `schema`，不认识课、版式、教学规则 |
 | `pedagogy-has-no-io` | `pedagogy` 不得依赖 `ai`、`generation`、`player`、`pdf-structure` |
+| `pptx-export-reads-the-deck-only` | `pptx` 只依赖 `schema`、`templates` / `widgets` 的核心入口（和 pptxgenjs），不得导入渲染入口、player、`ai`、`generation`、`pedagogy`、`pdf-structure` |
 | AI 出口检查 | 只有 `packages/ai` 能导入模型 SDK 或写模型端点（`scripts/check-ai-boundary.mjs`，扫描 apps、packages、tools、scripts；这是这条边界唯一的检查） |
 
 ---
@@ -103,6 +105,7 @@ D1：orgs, users, sessions, login_attempts, ai_providers, ai_calls, audit_log,
 | `player` | 放映壳：16:9 缩放、翻页、分步、全屏、黑屏、讲稿；双窗口同步 | `new Player(host, {slides, theme, showNotes, badge, onSourceClick, pageLabels, start, onChange, onBlank, onTally})`（按键监听在 document 上，翻页器在任何焦点下都有效；焦点在投票输入框里时 PageUp/PageDown 仍翻页）、`setBlank`、`setTally(index, counts)`、`setInk("pen"|"eraser"|null)`、`renderThumb`；`InkLayer`（逻辑 1920×1080 坐标的笔画，按页保存）；`presenterSync(lessonId, {onPosition, onBlank, onHello, onTally}) → {position, blank, tally, close}`、`answerKey(content)`；纯函数 `keyAction` / `nextPosition` / `prevPosition` |
 | `apps/app` | HTTP 边界 + 用例编排 + 持久化 | 路由见 §6（复用在 `routes/reuse.ts`）；`store.ts`（快照、复用、聚合列表、导出）；`auth/*`（PBKDF2 + 会话 + 登录限速） |
 | `apps/web` | 老师界面 | 登录 / 改密 / 后台 / 我的课（单元成组、“复制到新学期”）/ 五步向导（章节步显示内容量条，内容偏多时可“整单元规划”）/ 槽位编辑器（按版式生成表单：实时字数、中文报错、图示无需 JSON、A/B/C/D 选答案、先投票开关、实验结果、排序 / 配对卡片、实时预览）/ 放映 / 演讲者窗口 / 离线导出（`src/offline/*`）/ 分享；`/dev/gallery`、`/dev/render` 只在 `vite dev` 和 `KJ_DEV_PAGES=1` 构建里（E2E、评测用），生产包不含 |
+| `pptx` | 兼容导出：课件 → 可编辑 .pptx（HTML 课件仍是主格式） | `planSlide(slide, {theme, pageLabels}) → {items, notes, degraded}`（9 个版式 → 原生文本框 / 形状 / 表格 / 图表，逻辑 1920×1080 坐标，56px = 28pt；`fitFont` 按 56→48px 降档）、`exportPptx(deck, {chartImage?}) → {data, filename, degraded, overflow}`、`PPTX_FONT`（PingFang SC，macOS 自带，不嵌入字体）、`texToText`；`scripts/render-check.ts`（LibreOffice headless：自增高探针比对每个文本框的实际高度、PDF 每个词都在页内、导出 PNG） |
 | `tools/eval` | 消融评测（不属于产品） | `pnpm eval:run`（manifest 场景 → 流水线 → 每场景 × 次数一个 deck JSON）、`pnpm eval:render`（Chromium 渲染，写回 `slides[].overflow`）；`pnpm eval:run --noise` / `pnpm eval:faults`（注入故障，量每道防线的拦截率与干净数据上的误报率）；`AblationFlags = PipelineOptions + {scope, outline, renderMode, autoConfirm}` |
 
 ---
@@ -236,6 +239,10 @@ PipelineOptions = { budgetsInPrompt, outlineCheckRetry, slideCheckRetry, truncat
                     画笔：canvas 盖在页面上，笔画按页存在内存（换页再回来还在，刷新即清空）；画笔开着时点击不翻页
 ⑪ 离线导出（浏览器）GET deck → 内联 runtime.js / runtime.css、内置实验 HTML（srcdoc）、
                     与课件字符相交的 Noto Sans SC / Arimo unicode-range 字体块和（有公式时）KaTeX 字体 → 一个 .html
+⑫ PPTX 导出（浏览器，次要格式）GET deck → pptx.exportPptx：每页一张 16:9 幻灯片，槽位 = 原生文本框（PingFang SC）；
+                    图表 → 原生图表（类别数据、共享 x 的散点、函数在滑块初始值下的曲线；其余用 ECharts 截图），表格 → 原生表格；
+                    逐步揭示变成一次全显示；答案、解释、误区、正确顺序 / 配对、实验结果 → 讲稿；
+                    互动（实验、先投票、排序 / 配对、POE、滑块）→ 静态版 + 讲稿里写明课堂上怎么做
 ```
 
 **卡点的最小正确设计**
@@ -312,7 +319,6 @@ PipelineOptions = { budgetsInPrompt, outlineCheckRetry, slideCheckRetry, truncat
 | 无书签教材的启发式建树 | 真实教材无书签比例 > 30% |
 | 大纲批注 → AI 修订 → diff | 纵切第 2 片 |
 | 先查库再新建（按教材找已有的课） | M1b |
-| pptx 导出 | 有老师明确需要交给学校系统 |
 | AI 生成实验 | `EMBED_CATALOG` 的 `src` 可替换，接入点已留 |
 
 ---
