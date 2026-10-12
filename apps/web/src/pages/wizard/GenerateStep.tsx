@@ -38,6 +38,19 @@ function SharePanel({ lessonId, initial, current, canShare }: { lessonId: string
     }
   }
 
+  const [packing, setPacking] = useState(false);
+  async function studentFile() {
+    setPacking(true);
+    setError("");
+    try {
+      await downloadOfflineHtml(lessonId, "student");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setPacking(false);
+    }
+  }
+
   async function unshare() {
     if (!window.confirm("取消分享后，学生手里的链接会立即失效。确定吗？· Students' link stops working. Unshare?")) return;
     setError("");
@@ -104,6 +117,9 @@ function SharePanel({ lessonId, initial, current, canShare }: { lessonId: string
           </button>
         </div>
       )}
+      <button className="btn ghost small" disabled={!canShare || packing} onClick={studentFile} data-testid="export-student" title="不含讲稿、误区提示和检查标记，可以发到班级群 · No notes or misconception labels">
+        {packing ? "打包中… Packing" : "下载学生版离线文件 Student offline file"}
+      </button>
       {error && <div className="alert error">{error}</div>}
     </>
   );

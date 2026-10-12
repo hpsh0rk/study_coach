@@ -172,6 +172,10 @@ describe("outline gate", () => {
     const deck = await teacher.req("GET", `/api/lessons/${lessonId}/deck`);
     expect(deck.json.slides).toHaveLength(1);
     expect(deck.json.slides[0].notes.length).toBeGreaterThan(0);
+    const student = await teacher.req("GET", `/api/lessons/${lessonId}/deck?audience=student`);
+    expect(student.json.slides).toHaveLength(1);
+    expect(student.json.slides[0].notes).toBe("");
+    expect(JSON.stringify(student.json)).not.toContain(deck.json.slides[0].notes);
     const other = await loggedIn("teacher2", "Teach12345");
     expect((await other.req("GET", `/api/lessons/${lessonId}`)).status).toBe(404);
     expect((await other.req("POST", `/api/lessons/${lessonId}/outline-versions/${v.id}/slides/${spec.id}/generate`)).status).toBe(404);

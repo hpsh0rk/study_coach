@@ -56,6 +56,21 @@ describe("presenterSync", () => {
     audience.close();
   });
 
+  it("forwards pen strokes in logical coordinates and drops malformed ones", () => {
+    g.BroadcastChannel = FakeChannel;
+    const got: [number, unknown][] = [];
+    presenterSync("L1", { onPosition: () => undefined, onInk: (i, s) => got.push([i, s]) });
+    const presenter = presenterSync("L1", { onPosition: () => undefined });
+    presenter.ink(2, [{ color: "#e11d48", points: [[100, 200], [300, 400]] }]);
+    presenter.ink(2, [{ color: "red;background:url(x)", points: [[1, 1]] }, { color: "#000", points: [[Number.NaN, 1]] }] as never);
+    presenter.ink(2, []);
+    expect(got).toEqual([
+      [2, [{ color: "#e11d48", points: [[100, 200], [300, 400]] }]],
+      [2, []],
+      [2, []],
+    ]);
+  });
+
   it("is a no-op without BroadcastChannel", () => {
     g.BroadcastChannel = undefined;
     expect(() => presenterSync("L1", { onPosition: () => undefined }).position({ index: 1, step: 0 })).not.toThrow();

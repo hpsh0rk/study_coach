@@ -1,7 +1,7 @@
 import type { Slide, ThemeId } from "@kj/schema";
 import { CANVAS, stepsOf } from "@kj/templates";
 import { applyStep, fitSlide, renderSlide, type RenderedSlide } from "@kj/templates/render";
-import { INK_COLORS, InkLayer } from "./ink.ts";
+import { INK_COLORS, InkLayer, type Stroke } from "./ink.ts";
 import { clampPosition, fitStage, keyAction, nextPosition, prevPosition, type Position } from "./navigation.ts";
 
 export * from "./ink.ts";
@@ -24,7 +24,14 @@ export interface PlayerOptions {
   pageLabels?: Record<number, string>;
   /** The teacher typed a class tally (votes per option) for slide `index`. */
   onTally?(index: number, counts: number[]): void;
+  /** Pen strokes of slide `index` changed here (mirror them with `setStrokes` in the other window). */
+  onInk?(index: number, strokes: Stroke[]): void;
+  /** Escape pressed while the pen is off: leave the presentation. */
+  onEscape?(): void;
 }
+
+const TALLY_KEYS = ["PageDown", "PageUp", "Enter", "ArrowRight", "ArrowLeft", "ArrowDown", "ArrowUp"];
+const TALLY_IDLE_MS = 1000;
 
 function fontsReady(): Promise<unknown> {
   return (document as Document & { fonts?: FontFaceSet }).fonts?.ready ?? Promise.resolve();
@@ -101,7 +108,7 @@ export class Player {
     this.blank.hidden = true;
     this.notes = el("aside", "kj-notes", this.root);
     this.notes.hidden = true;
-    this.ink = new InkLayer(this.frame, this.stage);
+    this.ink = new InkLayer(this.frame, this.stage, (index, strokes) => opts.onInk?.(index, strokes));
 
     const bar = el("div", "kj-controls", main);
     const btn = (label: string, title: string, fn: () => void) => {
@@ -165,8 +172,8 @@ export class Player {
     btn("⛶", "Fullscreen · 全屏 (F)", () => this.toggleFullscreen());
 
     const onKey = (e: KeyboardEvent) => {
-      // A clicker only sends PageUp/PageDown: after typing votes it must still move on (Enter just leaves the box).
-      if (e.target instanceof HTMLInputElement && e.target.closest(".kj-tally-inputs") && ["PageDown", "PageUp", "Enter"].includes(e.key)) {
+      // Clickers send PageUp/PageDown or arrow keys: after typing votes they must still move on (Enter just leaves the box).
+      if (e.target instanceof HTMLInputElement && e.target.closest(".kj-tally-inputs") && TALLY_KEYS.includes(e.key)) {
         e.target.blur();
         if (e.key === "Enter") return;
       } else if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
@@ -177,12 +184,13 @@ export class Player {
       if (action === "next") this.next();
       else if (action === "prev") this.prev();
       else if (action === "first") this.go({ index: 0, step: 0 });
-      else if (action === "last") this.go({ index: this.steps.length - 1, step: this.steps[this.steps.length - 1] ?? 0 });
+      else if (action === "last") this.go({ index: this.steps.length - 1, step: 0 });
       else if (action === "fullscreen") this.toggleFullscreen();
       else if (action === "blank") this.setBlank(this.blank.hidden);
       else if (action === "notes" && opts.showNotes) this.toggleNotes();
       else if (action === "ink") this.setInk(this.ink.active ? null : "pen");
       else if (action === "escape" && this.ink.active) this.setInk(null);
+      else if (action === "escape" && !doc.fullscreenElement) opts.onEscape?.();
     };
     // On the document, so presentation clickers (PageUp/PageDown) work wherever focus is.
     const doc = container.ownerDocument;
@@ -245,6 +253,11 @@ export class Player {
     return this.ink.active;
   }
 
+  /** Mirrors the pen strokes of slide `index` drawn in the other window. */
+  setStrokes(index: number, strokes: Stroke[]): void {
+    this.ink.setStrokes(index, strokes);
+  }
+
   /** Sets the class tally of slide `index` (from the presenter window or the inputs in the control bar). */
   setTally(index: number, counts: number[]): void {
     this.tallies.set(index, counts);
@@ -302,16 +315,25 @@ export class Player {
       const wrap = el("label", "", this.tallyInputs);
       wrap.append(label);
       const input = el("input", "", wrap);
-      input.type = "number";
-      input.min = "0";
-      input.max = "999";
+      // Text, not number: arrow keys from a clicker must not silently change the count.
+      input.type = "text";
       input.inputMode = "numeric";
+      input.maxLength = 3;
+      input.autocomplete = "off";
       input.value = counts[i] ? String(counts[i]) : "";
       input.setAttribute("aria-label", `Votes for ${label} · ${label} 的人数`);
       input.addEventListener("click", (e) => e.stopPropagation());
       return input;
     });
-    const update = () => {
+    let idle: ReturnType<typeof setTimeout> | undefined;
+    const update = (e: Event) => {
+      const input = e.target as HTMLInputElement;
+      const digits = input.value.replace(/\D+/g, "").slice(0, 3);
+      if (digits !== input.value) input.value = digits;
+      clearTimeout(idle);
+      idle = setTimeout(() => {
+        if (input.ownerDocument.activeElement === input) input.blur();
+      }, TALLY_IDLE_MS);
       const next = inputs.map((x) => Math.max(0, Math.min(999, Math.floor(Number(x.value) || 0))));
       this.tallies.set(index, next);
       this.current?.tally?.set(next);

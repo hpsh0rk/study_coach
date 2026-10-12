@@ -1,6 +1,5 @@
 import type { Slide, ThemeId } from "@kj/schema";
 import { resolveEmbed } from "@kj/widgets";
-import { badgeOf } from "../components/SlideView.tsx";
 import { lessonApi } from "../lessonApi.ts";
 import type { OfflineDeck } from "./runtime.ts";
 
@@ -102,9 +101,14 @@ interface OfflineFile {
   fontFiles: number;
 }
 
-/** One self-contained HTML file: deck + player runtime + catalog sims + the font chunks it needs. No network at all when opened. */
-async function buildOfflineHtml(lessonId: string): Promise<OfflineFile> {
-  const deck = (await lessonApi.deck(lessonId)) as unknown as { lesson: { title: string; theme: ThemeId; pageLabels: Record<number, string> }; slides: Slide[] };
+export type OfflineAudience = "teacher" | "student";
+
+/**
+ * One self-contained HTML file: deck + player runtime + catalog sims + the font chunks it needs. No network at all when opened.
+ * `student`: the server strips notes and misconception labels (as for the share link). `teacher`: notes open only in a separate presenter window.
+ */
+async function buildOfflineHtml(lessonId: string, audience: OfflineAudience): Promise<OfflineFile> {
+  const deck = (await lessonApi.deck(lessonId, audience)) as unknown as { lesson: { title: string; theme: ThemeId; pageLabels: Record<number, string> }; slides: Slide[] };
   const [js, css] = await Promise.all([text("/offline/runtime.js"), text("/offline/runtime.css")]);
   const sims: Record<string, string> = {};
   for (const id of simIds(deck.slides)) {
@@ -113,9 +117,10 @@ async function buildOfflineHtml(lessonId: string): Promise<OfflineFile> {
   }
   const data: OfflineDeck = {
     title: deck.lesson.title,
+    audience,
     theme: deck.lesson.theme,
     pageLabels: deck.lesson.pageLabels,
-    slides: deck.slides.map((s) => ({ content: s.content, sources: s.sources, notes: s.notes, pageType: s.pageType, badge: badgeOf(s.pageType) })),
+    slides: deck.slides.map((s) => ({ content: s.content, sources: s.sources, notes: audience === "student" ? "" : s.notes, pageType: s.pageType })),
     sims,
   };
   const json = JSON.stringify(data);
@@ -136,11 +141,13 @@ async function buildOfflineHtml(lessonId: string): Promise<OfflineFile> {
     `<script>${js.replace(/<\/script/gi, "<\\/script")}</script>`,
     "</body></html>",
   ].join("\n");
-  return { html, filename: `${deck.lesson.title.replace(/[\\/:*?"<>|]+/g, " ").trim().slice(0, 60) || "lesson"}.html`, fontFiles: fonts.files };
+  // Dots go too: "… · 4.1 Force" would otherwise end in a fake ".1 Force" extension.
+  const base = deck.lesson.title.replace(/[\\/:*?"<>|.]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 60) || "lesson";
+  return { html, filename: `${base}${audience === "student" ? "（学生版）" : ""}.html`, fontFiles: fonts.files };
 }
 
-export async function downloadOfflineHtml(lessonId: string): Promise<OfflineFile> {
-  const file = await buildOfflineHtml(lessonId);
+export async function downloadOfflineHtml(lessonId: string, audience: OfflineAudience = "teacher"): Promise<OfflineFile> {
+  const file = await buildOfflineHtml(lessonId, audience);
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([file.html], { type: "text/html;charset=utf-8" }));
   a.download = file.filename;

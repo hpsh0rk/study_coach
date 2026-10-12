@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router";
+import { Link, useNavigate, useParams } from "react-router";
 import { Player, presenterSync, type PlayerSlide, type Position, type PresenterSync } from "@kj/player";
 import type { ThemeId } from "@kj/schema";
 import { api } from "../api.ts";
-import { badgeOf } from "../components/SlideView.tsx";
 import { documentApi, lessonApi } from "../lessonApi.ts";
 
 /**
  * The slide player. With `syncId` it joins the lesson's presenter channel: the audience window
- * and the presenter window follow each other (either can be driven by a clicker).
+ * and the presenter window follow each other (either can be driven by a clicker), pen strokes included.
+ * No page-type badge: students see it on the projector and share links, it is an editing aid.
  */
 export function PlayerHost({
   slides,
@@ -17,6 +17,7 @@ export function PlayerHost({
   pageLabels,
   syncId,
   onPosition,
+  onEscape,
 }: {
   slides: PlayerSlide[];
   theme: ThemeId;
@@ -24,12 +25,15 @@ export function PlayerHost({
   pageLabels?: Record<number, string>;
   syncId?: string;
   onPosition?: (pos: Position) => void;
+  onEscape?: () => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const report = useRef(onPosition);
+  const escape = useRef(onEscape);
   useEffect(() => {
     report.current = onPosition;
-  }, [onPosition]);
+    escape.current = onEscape;
+  }, [onPosition, onEscape]);
   useEffect(() => {
     if (!host.current || !slides.length) return;
     let sync: PresenterSync | null = null;
@@ -37,7 +41,6 @@ export function PlayerHost({
       slides,
       theme,
       showNotes: false,
-      badge: (s) => badgeOf(s.pageType),
       onSourceClick: onSource,
       pageLabels,
       onChange: (pos) => {
@@ -46,12 +49,15 @@ export function PlayerHost({
       },
       onBlank: (on) => sync?.blank(on),
       onTally: (index, counts) => sync?.tally(index, counts),
+      onInk: (index, strokes) => sync?.ink(index, strokes),
+      onEscape: () => escape.current?.(),
     });
     if (syncId)
       sync = presenterSync(syncId, {
         onPosition: (pos) => p.go(pos),
         onBlank: (on) => p.setBlank(on),
         onTally: (index, counts) => p.setTally(index, counts),
+        onInk: (index, strokes) => p.setStrokes(index, strokes),
         onHello: () => sync?.position(p.position, true),
       });
     return () => {
@@ -69,6 +75,8 @@ export function openPresenter(lessonId: string) {
 /** Audience view for the projector: slides only, never speaker notes or the answer key. */
 export function PlayPage() {
   const { id = "" } = useParams();
+  const navigate = useNavigate();
+  const [exit] = useState(() => () => navigate(`/lessons/${id}/slides`));
   const [data, setData] = useState<{ slides: PlayerSlide[]; theme: ThemeId; documentId: string; pageLabels: Record<number, string> } | null>(null);
   const [error, setError] = useState("");
   const [source, setSource] = useState<{ no: number; text: string; label: string | null } | null>(null);
@@ -105,7 +113,7 @@ export function PlayPage() {
           演讲者视图 Presenter view ↗
         </button>
       </div>
-      <PlayerHost slides={data.slides} theme={data.theme} onSource={stableSource} pageLabels={data.pageLabels} syncId={id} />
+      <PlayerHost slides={data.slides} theme={data.theme} onSource={stableSource} pageLabels={data.pageLabels} syncId={id} onEscape={source ? undefined : exit} />
       {source && (
         <div className="modal" onClick={() => setSource(null)}>
           <div className="modal-card card" onClick={(e) => e.stopPropagation()}>

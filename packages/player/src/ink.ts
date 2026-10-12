@@ -47,6 +47,8 @@ export class InkLayer {
   constructor(
     private frame: HTMLElement,
     private stage: HTMLElement,
+    /** A finished stroke, an erase or a clear changed slide `index` (for mirroring to the other window). */
+    private onChange?: (index: number, strokes: Stroke[]) => void,
   ) {
     this.canvas = document.createElement("canvas");
     this.canvas.className = "kj-ink";
@@ -84,6 +86,13 @@ export class InkLayer {
   clear(): void {
     this.strokes.delete(this.index);
     this.redraw();
+    this.onChange?.(this.index, []);
+  }
+
+  /** Replaces the strokes of slide `index` with a copy received from the other window; does not echo. */
+  setStrokes(index: number, strokes: Stroke[]): void {
+    this.strokes.set(index, strokes);
+    if (index === this.index) this.redraw();
   }
 
   dispose(): void {
@@ -123,6 +132,7 @@ export class InkLayer {
   }
 
   private up(): void {
+    if (this.drawing?.points.length) this.onChange?.(this.index, this.current);
     this.drawing = null;
   }
 
@@ -131,6 +141,7 @@ export class InkLayer {
     if (kept.length !== this.current.length) {
       this.strokes.set(this.index, kept);
       this.redraw();
+      this.onChange?.(this.index, kept);
     }
   }
 

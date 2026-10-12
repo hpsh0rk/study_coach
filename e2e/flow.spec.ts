@@ -328,6 +328,19 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
     const html = fs.readFileSync(file, "utf8");
     expect(html).not.toMatch(/<(script|link|img|iframe)[^>]+(src|href)=["']?https?:/i);
     expect(html).toContain("Noto Sans SC");
+    expect(download.suggestedFilename()).not.toMatch(/\.\d.*\.html$/);
+
+    // R3-M1: the student copy carries no speaker notes; the teacher copy keeps them out of the projected slide.
+    const deck = await (await page.request.get(`/api/lessons/${lessonId}/deck`)).json();
+    const notes: string[] = deck.slides.map((s: { notes: string }) => s.notes).filter((n: string) => n.length > 20);
+    expect(notes.length).toBeGreaterThan(0);
+    const [studentDl] = await Promise.all([page.waitForEvent("download"), page.getByTestId("export-student").click()]);
+    expect(studentDl.suggestedFilename()).toContain("学生版");
+    const studentFile = path.join(os.tmpdir(), `kj-student-${Date.now()}.html`);
+    await studentDl.saveAs(studentFile);
+    const studentHtml = fs.readFileSync(studentFile, "utf8");
+    for (const n of notes) expect(studentHtml).not.toContain(JSON.stringify(n).slice(1, 40));
+    expect(studentHtml).not.toContain("offline-presenter");
 
     const ctx = await browser.newContext({ offline: true, viewport: { width: 1280, height: 720 } });
     const network: string[] = [];

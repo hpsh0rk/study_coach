@@ -415,7 +415,9 @@ export const lessonRoutes = new Hono<AppBindings>()
     const lesson = await ownedLesson(c.env, c.get("user"), c.req.param("id"));
     const v = await latestConfirmed(c.env, lesson.id);
     if (!v) throw new HttpError(409, "OUTLINE_NOT_CONFIRMED", "No confirmed outline yet");
-    return c.json(deckExport(lesson, v, await slidesOf(c.env, v), { includeNotes: true, pageLabels: await pageLabels(c.env, lesson.documentId) }));
+    // `audience=student`: the same stripping as the share link (no notes, checks or misconception labels).
+    const includeNotes = c.req.query("audience") !== "student";
+    return c.json(deckExport(lesson, v, await slidesOf(c.env, v), { includeNotes, pageLabels: await pageLabels(c.env, lesson.documentId) }));
   })
   /**
    * Shares a frozen version. With a link already active this keeps the same URL (on the same

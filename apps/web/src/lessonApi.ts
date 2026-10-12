@@ -97,7 +97,7 @@ export const lessonApi = {
   duplicate: (id: string, title?: string) => api<LessonView>(`/api/lessons/${id}/duplicate`, { body: title ? { title } : {} }),
   planUnit: (body: { documentId: string; chapterIds: string[]; ranges: PageRange[]; count?: number; lessonId?: string; params?: LessonParams; title?: string }) =>
     api<{ unit: { id: string; title: string; count: number }; lessons: { id: string; title: string; ranges: PageRange[]; estimatedMinutes: number }[] }>("/api/lessons/unit", { body }),
-  deck: (id: string) => api<Record<string, unknown>>(`/api/lessons/${id}/deck`),
+  deck: (id: string, audience: "teacher" | "student" = "teacher") => api<Record<string, unknown>>(`/api/lessons/${id}/deck${audience === "student" ? "?audience=student" : ""}`),
   share: (id: string, body: { versionId?: string; ack?: boolean } = {}) => api<ShareView>(`/api/lessons/${id}/share`, { body }),
   unshare: (id: string) => api(`/api/lessons/${id}/share`, { method: "DELETE" }),
 };
