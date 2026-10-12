@@ -1,0 +1,32 @@
+{
+  "name": "@kj/app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --filter @kj/web build && wrangler dev",
+    "dev:api": "wrangler dev",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@kj/ai": "workspace:*",
+    "@kj/experiments": "workspace:*",
+    "@kj/layout": "workspace:*",
+    "@kj/parsers": "workspace:*",
+    "@kj/schema": "workspace:*",
+    "@noble/hashes": "^2.0.1",
+    "drizzle-orm": "^0.45.0",
+    "hono": "^4.10.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.23.0",
+    "@cloudflare/workers-types": "^5.20261006.1",
+    "drizzle-kit": "^0.31.5",
+    "vitest": "~4.1.11",
+    "wrangler": "^4.124.0"
+  }
+}
