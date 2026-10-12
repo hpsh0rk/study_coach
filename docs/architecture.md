@@ -1,6 +1,6 @@
-# AI 课件工坊 · 架构（v7，迭代 6：审查 #3 修复——离线讲稿隔离、画笔同步、单元预览、删除课、预算守卫）
+# AI 课件工坊 · 架构（v8，迭代 7：学生版不含答案、模型总截止时间与演示横幅、删除教材）
 
-> 状态：2026-10-12 · 与 `main` 上的代码一致（迭代 6 PR 合并后）。来源文档：第一性原理审查 · 夜间决策记录（权威）· HTML 课件调研 · 教学规则（规则编号 L/P/V/I/T/Q 出自此文）· 老师调研 · 项目决策记录 · 对抗审查 1 / 2 / 3 · 消融结果（均在项目资料库 `docs/`，不在本仓库）。代码与本文冲突时以代码为准，并修正本文。
+> 状态：2026-10-12 · 与 `main` 上的代码一致（迭代 7 PR 合并后）。来源文档：第一性原理审查 · 夜间决策记录（权威）· HTML 课件调研 · 教学规则（规则编号 L/P/V/I/T/Q 出自此文）· 老师调研 · 项目决策记录 · 对抗审查 1 / 2 / 3 · 消融结果（均在项目资料库 `docs/`，不在本仓库）。代码与本文冲突时以代码为准，并修正本文。
 
 ---
 
@@ -25,6 +25,8 @@
 - AI 模型在后台配置：**一个启用的提供方 + 一个模型名**服务所有调用（DeepSeek / GLM / OpenAI 兼容），未启用时本地与测试使用确定性 stub。
 - **第 5 步只有一个主按钮**：确认大纲后自动开始生成，生成完是“放映”；演讲者视图从放映页打开。
 - **第 5 步与分享只看已确认版本**：新的未确认草稿不会挡住放映和分享；分享链接冻结一个版本，学生版不含讲稿和误区标签，账号停用即失效。
+- **学生版默认不含答案（课前预习）**：分享链接和学生版离线文件由服务端 `withoutAnswers` 剥掉所有揭示步骤会显示的答案；老师可切到“课后复习（含答案）”，同一个链接。
+- **模型调用有请求级总截止时间（120 秒，含重试）**；没有配置模型、由内置模板（stub）应答时，每个页面顶部都有“演示模式 · 不是 AI 写的”横幅。
 
 ---
 
@@ -179,13 +181,13 @@ PipelineOptions = { budgetsInPrompt, outlineCheckRetry, slideCheckRetry, truncat
 
 | 表 | 列（摘要） | 约束 |
 |---|---|---|
-| `documents` | id, org_id, owner_id, filename, title, size_bytes, page_count, pages_received, has_bookmarks | 扫描页由服务端按 `pages.words` 判断，不存标志 |
+| `documents` | id, org_id, owner_id, filename, title, size_bytes, page_count, pages_received, has_bookmarks, archived_at | 扫描页由服务端按 `pages.words` 判断，不存标志；`archived_at`：软删除（迁移 0005），列表和新建课看不到，已用它做的课仍可读页、改范围、粘贴扫描页文字 |
 | `pages` | document_id, no, text, label, words | PK(document_id, no) |
 | `chapters` | document_id, id, parent_id, ord, level, title, page_start, page_end, words | |
 | `lessons` | id, org_id, owner_id, document_id, title, scope, params, theme, drafting_until, archived_at | `drafting_until`：起草锁（§1）；`archived_at`：软删除（迁移 0004），`ownedLesson` 和列表都看不到 |
 | `outline_versions` | id, lesson_id, version, outline, params, scope, spec_count, rev, ack_over_budget, confirmed_at | UNIQUE(lesson_id, version)；触发器 `outline_versions_confirmed_no_update` / `_no_delete`；`rev` 乐观锁 |
 | `slides` | id, lesson_id, outline_version_id, spec_id, spec_hash（= slideKey）, layout, page_type, minutes, content, notes, sources, warnings, unverified, provider_id, prev_content, prev_notes | UNIQUE(outline_version_id, spec_id)；INDEX(lesson_id, spec_hash)；触发器 `slides_require_confirmed_insert` |
-| `share_links` | id, token_hash, lesson_id, version_id, reviewed_at, created_by, revoked_at | 每课最多一条有效链接；token = HMAC(密钥, 链接 id)，库里只存其 sha256 |
+| `share_links` | id, token_hash, lesson_id, version_id, reviewed_at, answers, created_by, revoked_at | 每课最多一条有效链接；token = HMAC(密钥, 链接 id)，库里只存其 sha256；`answers` = `hidden`（课前预习，默认，迁移 0005 之前的链接也按它处理）/ `shown`（课后复习） |
 | `ai_providers` | id, org_id, kind, name, base_url, api_key_sealed, api_key_hint, model, enabled | 每个组织最多一个 enabled（启用一个会停用其他） |
 
 ---
@@ -264,7 +266,7 @@ PipelineOptions = { budgetsInPrompt, outlineCheckRetry, slideCheckRetry, truncat
 - `POST /share`：已有有效链接时返回同一个 URL；`versionId` 把链接移到另一个已确认版本；默认选“页面齐全的最新已确认版本”。
 - 每次分享都是一次检查：学生可见文字里有网址、邮箱、可下载文件或像指令的文字 → 409 `SHARE_REVIEW_REQUIRED`（列出页码），老师带 `ack` 重试。分享之后才生成或改过、并且被标记的页，学生端暂不显示（`reviewed_at`），老师再分享一次即放出。
 - 学生 JSON 去掉讲稿、检查提示和测验误区标签；链接所属账号停用后 404；取消分享或删除这节课立即失效，再分享得到新 URL。
-- 链接和学生版离线文件里仍有选择题答案、问答题答案和排序题的正确顺序（打乱在客户端做），学生自学时要能逐步揭示；“课前预习、不含答案”的链接是推迟项。
+- 答案模式（老师在分享面板里选，链接和学生版离线文件共用）：**课前预习（无答案）** 是默认，`@kj/templates` 的 `withoutAnswers` 在服务端去掉选择题的 `answer`（变 -1）和解析、实验的 `outcome` 和解释、问答题的答案、渐隐例题被隐去的步骤；排序 / 配对卡片按随机循环置换重新发牌（列表顺序本身就是答案，带种子的打乱可以被反推）。渲染器 `hideAnswers` 在这些位置显示“答案课后公布”，不标正确项。**课后复习（含答案）** 保留答案，学生可逐步揭示。`PATCH /share {answers}` 切换模式，不移动版本、不算一次检查；老师端 deck 永远含答案。
 
 **复用**
 
@@ -286,7 +288,9 @@ PipelineOptions = { budgetsInPrompt, outlineCheckRetry, slideCheckRetry, truncat
 | GET / POST | `/api/documents` | 列表；`{filename, title, sizeBytes, pageCount, chapters}` 新建 → `{id, pageBatch: 40}` |
 | POST | `/api/documents/:id/pages` | `{pages:[{no, text, label?}]}` |
 | POST | `/api/documents/:id/pages/paste` | `{start, end, text}` → 文字分到范围内没有文字的页（有文字的页不动；一次最多 40 页） |
-| GET | `/api/documents/:id` · `/api/documents/:id/pages/:no` | 章节树、`pageLabels`、`pageWords`、`pageChars`；某页原文与印刷页码 |
+| GET | `/api/documents/:id` · `/api/documents/:id/pages/:no` | 章节树、`pageLabels`、`pageWords`、`pageChars`；某页原文与印刷页码（已删除的教材也可读，供已有的课使用） |
+| DELETE / POST | `/api/documents/:id` · `/api/documents/:id/restore` | 软删除 → `{ok, lessons}`（仍在用它的课数）；恢复。都写审计日志 |
+| GET | `/api/auth/me` | `{user, ai}`：`ai` = `live` / `stub` / `off`，界面据此显示演示模式横幅 |
 | GET / POST | `/api/lessons` | 列表（单条聚合 SQL）；`{documentId, chapterIds, ranges}` 新建 |
 | DELETE / POST | `/api/lessons/:id` · `/api/lessons/:id/restore` | 软删除（撤销分享链接、清起草锁、记审计）；恢复（链接不恢复） |
 | GET / PATCH | `/api/lessons/:id` | `{lesson{…, scopeWords, emptyPages, unreadPages}, draft, confirmed, slides（已确认版本的）, pageLabels, share, drafting}`（版本含快照）；更新 scope / params / theme / title |
@@ -297,10 +301,10 @@ PipelineOptions = { budgetsInPrompt, outlineCheckRetry, slideCheckRetry, truncat
 | POST | `/api/lessons/:id/outline-versions/:vid/slides/:specId/generate` | `{regenerate?}` → `{slide, reused}`；兜底页也过不了槽位 schema → 502 `SLIDE_INVALID` |
 | PATCH | `/api/lessons/:id/slides/:slideId` | `{content?, notes?}`；槽位或图示校验失败 → 422 `INVALID_CONTENT`（`detail: [{path, message}]`，message 为中文）；返回重新核对后的 `unverified` |
 | POST | `/api/lessons/:id/slides/:slideId/undo` | 一步撤销；无可撤销 → 409 `NOTHING_TO_UNDO` |
-| GET | `/api/lessons/:id/deck` | 导出 deck JSON（版本快照的参数与范围，含讲稿与待核实；离线导出也用它）；`?audience=student` 与分享链接同样剥离讲稿和误区标签 |
+| GET | `/api/lessons/:id/deck` | 导出 deck JSON（版本快照的参数与范围，含讲稿与待核实；离线导出也用它）；`?audience=student` 与分享链接同样剥离讲稿和误区标签，并且默认剥离答案（`&answers=shown` 保留）；`lesson.answers` 标明模式 |
 | POST | `/api/lessons/:id/duplicate` | `{title?}` → 201 新课的 lesson 视图（默认标题加“（新学期）”；见 §5“复用”） |
 | POST | `/api/lessons/unit` | `{documentId, chapterIds, ranges, title?, params?, count?, lessonId?}` → 201 `{unit, lessons[{id, title, ranges, estimatedMinutes}]}`；`?dryRun=1` → 200 预览，不建课 |
-| POST / DELETE | `/api/lessons/:id/share` | `{versionId?, ack?}` → `{path, versionId, version, held}`（见 §5“分享”）；DELETE 取消分享。GET `/api/share/:token` 返回冻结版本的学生版课件 |
+| POST / PATCH / DELETE | `/api/lessons/:id/share` | POST `{versionId?, ack?, answers?}` → `{path, versionId, version, held, answers}`（见 §5“分享”）；PATCH `{answers}` 只切换答案模式；DELETE 取消分享。GET `/api/share/:token` 返回冻结版本的学生版课件（按链接的答案模式） |
 
 ---
 
@@ -308,10 +312,10 @@ PipelineOptions = { budgetsInPrompt, outlineCheckRetry, slideCheckRetry, truncat
 
 | 层 | 内容 | 工具 |
 |---|---|---|
-| 单元 | schema 默认值与上限；pdf-structure 建树 / 范围 / 印刷页码；pedagogy 预算 / 时长 / 密度 / 估时；widgets 表达式安全、校验、整词匹配；templates 预算样本合法；generation：stub 预算、开关、实验门槛、notCovered、术语表、无全文回退、12k 上限、渐隐修复、重试 → 截断、源文本转义与可疑内容、编造数字重试、图示兜底、页码标记、检查节奏、slideKey；pedagogy 数字核对；templates 中文槽位报错；ai 层修复、回退、Schema 缓存；player 导航、演讲者同步（含投票人数）、表达式坏掉不抛错、最后一步无隐藏元素、排序卡片打乱 / 交换 / 揭示、配对、投票输入与 PageDown、实验结果、画笔不翻页与橡皮命中、笔画转发与校验、投票框方向键翻页不改数值、End 到第 0 步、Esc 退出、标签按授课语言；pedagogy 单元拆分（每组 ≤ 115%、节号范围课名）；generation 预算守卫（五本评测教材 × 每种页型的 stub 输出都能直接 PATCH，网址不计字数，`clipToBudgets`）；pdf-structure CID 字体中文抽取与隐藏文字；tools/eval 开关解析 | Vitest |
-| 卡点 / API | 未确认生成 → 409；超预算未确认 → 409，带 ack → 成功；触发器拒绝改已确认版本与给草稿插页；跨版本复用与幂等生成；改“本节重点”标点后修订或重新起草，所有页（含手改页）都保留；PATCH 校验（含坏图示、过长列表的逐条错误）与撤销；待核实；页码标记；快照；鉴权与 CSRF；扫描页 / 粘贴 / 不能凭空起草；60k 读不进的页；起草锁；rev 冲突；分享（同一 URL、冻结版本、移动、取消、去误区、停用账号、检查与暂扣）；单一 AI 模型配置；PBKDF2 换代；复制到新学期（他人不可复制、手改保留、`rev` 0、不带分享、修订只调 1 次模型、只有草稿时复制草稿）；单元规划（章节不拆、复用向导里的空课、PATCH 保留单元、400 / 409、dryRun 不建课、课名无“第 N/M 课”）；学生版 deck 无讲稿；删除课（他人不可删、链接立即失效、列表隐藏、恢复后链接仍失效）；审计日志只给管理员 | `@cloudflare/vitest-pool-workers`（本地 D1） |
+| 单元 | schema 默认值与上限；pdf-structure 建树 / 范围 / 印刷页码；pedagogy 预算 / 时长 / 密度 / 估时；widgets 表达式安全、校验、整词匹配；templates 预算样本合法；generation：stub 预算、开关、实验门槛、notCovered、术语表、无全文回退、12k 上限、渐隐修复、重试 → 截断、源文本转义与可疑内容、编造数字重试、图示兜底、页码标记、检查节奏、slideKey；pedagogy 数字核对；templates 中文槽位报错；ai 层修复、回退、Schema 缓存、请求级总截止时间；templates `withoutAnswers` 去掉每种版式的答案、排序 / 配对重新发牌；渲染器“答案课后公布”占位；player 导航、演讲者同步（含投票人数）、表达式坏掉不抛错、最后一步无隐藏元素、排序卡片打乱 / 交换 / 揭示、配对、投票输入与 PageDown、实验结果、画笔不翻页与橡皮命中、笔画转发与校验、投票框方向键翻页不改数值、End 到第 0 步、Esc 退出、标签按授课语言；pedagogy 单元拆分（每组 ≤ 115%、节号范围课名）；generation 预算守卫（五本评测教材 × 每种页型的 stub 输出都能直接 PATCH，网址不计字数，`clipToBudgets`）；pdf-structure CID 字体中文抽取与隐藏文字；tools/eval 开关解析 | Vitest |
+| 卡点 / API | 未确认生成 → 409；超预算未确认 → 409，带 ack → 成功；触发器拒绝改已确认版本与给草稿插页；跨版本复用与幂等生成；改“本节重点”标点后修订或重新起草，所有页（含手改页）都保留；PATCH 校验（含坏图示、过长列表的逐条错误）与撤销；待核实；页码标记；快照；鉴权与 CSRF；扫描页 / 粘贴 / 不能凭空起草；60k 读不进的页；起草锁；rev 冲突；分享（同一 URL、冻结版本、移动、取消、去误区、停用账号、检查与暂扣）；单一 AI 模型配置；PBKDF2 换代；复制到新学期（他人不可复制、手改保留、`rev` 0、不带分享、修订只调 1 次模型、只有草稿时复制草稿）；单元规划（章节不拆、复用向导里的空课、PATCH 保留单元、400 / 409、dryRun 不建课、课名无“第 N/M 课”）；学生版 deck 无讲稿；删除课（他人不可删、链接立即失效、列表隐藏、恢复后链接仍失效）；审计日志只给管理员；学生答案模式（链接和学生版 deck 默认无答案、PATCH 切换不动版本、他人 404）；删除教材（列表隐藏、不能新建课和上传页、已有的课照常、恢复）；`/me` 的 `ai` 模式 | `@cloudflare/vitest-pool-workers`（本地 D1） |
 | 溢出 | 9 个版式 × {示例, 英文满预算, 中文满预算} + 表格 / 流程图 / 图示待补 / 配对 / 先投票变体（38 格）：`measureOverflow` 为空、正文 ≥ 48px、最后一步没有隐藏元素 | Playwright `overflow`（`/dev/gallery`，CI 装 `fonts-noto-cjk`） |
-| E2E | 登录 → 改密 → 上传 `waves-mini.pdf` → 选章节（内容量条）→ 设置 → 大纲（时间条）→ 把一页改成排序配对 → 超预算确认被拒 → “仍然确认” → 自动开始生成 → 编辑标题 → 撤销 → 待核实 → 编辑器（字数、中文报错、重新添加术语、流程图、A/B/C/D）→ 检查页设为先投票 → 排序页 → 表格页 → 放映（End 到最后一页第 0 步、无页型标签）与演讲者窗口双向同步（答案只在演讲者窗口；演讲者窗口录入人数，投影上显示分布再揭示答案；在演讲者窗口画的笔画出现在投影上，清除也同步）→ 排序页点两张卡交换、翻页器揭示 → 画笔画线、清除、Esc 后照常翻页，再按 Esc 回到第 5 步 → 学生版离线文件不含任何讲稿 → 离线文件在断网的上下文里打开（无网络请求、字体加载、实验画布、排序页）→ 复制到新学期 → 单元规划（先 dryRun）成组显示 → 删除一节课、撤销 → 分享（学生无讲稿）→ 新草稿不挡放映 → 取消分享；中文 CID 字体 PDF（`newton-zh-cid.pdf`）抽出中文 → 扫描章节标记 → 粘贴文字 → 起草 → 两个标签页保存冲突 → 未保存离开提示（站内链接、浏览器后退键、关标签页）→ 分钟输入失焦才 clamp | Playwright `e2e` + stub 模型；`SHOTS_DIR` 时每步截图 |
+| E2E | 登录 → 改密 → 演示模式横幅 → 上传 `waves-mini.pdf` → 选章节（内容量条）→ 设置 → 大纲（时间条）→ 把一页改成排序配对 → 超预算确认被拒 → “仍然确认” → 自动开始生成 → 编辑标题 → 撤销 → 待核实 → 编辑器（字数、中文报错、重新添加术语、流程图、A/B/C/D）→ 检查页设为先投票 → 排序页 → 表格页 → 放映（End 到最后一页第 0 步、无页型标签）与演讲者窗口双向同步（答案只在演讲者窗口；演讲者窗口录入人数，投影上显示分布再揭示答案；在演讲者窗口画的笔画出现在投影上，清除也同步；刷新演讲者窗口计时不归零）→ 排序页点两张卡交换、翻页器揭示 → 画笔画线、清除、Esc 后照常翻页，再按 Esc 回到第 5 步 → 学生版离线文件不含任何讲稿、默认不含选择题解析 → 离线文件在断网的上下文里打开（无网络请求、字体加载、实验画布、排序页）→ 复制到新学期 → 单元规划（先 dryRun）成组显示 → 删除一节课、撤销 → 内容过少时“仍然继续” → 删除教材、已有的课照常、撤销 → 分享（默认课前预习：学生无讲稿、无答案、显示“答案课后公布”；切到课后复习同一链接含答案）→ 新草稿不挡放映 → 取消分享；中文 CID 字体 PDF（`newton-zh-cid.pdf`）抽出中文 → 扫描章节标记 → 粘贴文字 → 起草 → 两个标签页保存冲突 → 未保存离开提示（站内链接、浏览器后退键、关标签页）→ 分钟输入失焦才 clamp | Playwright `e2e` + stub 模型；`SHOTS_DIR` 时每步截图 |
 | 依赖边界 | dependency-cruiser + AI 出口检查 | `pnpm lint` |
 
 真模型质量评测（消融计划，见资料库 `docs/design/ablation-plan.md`）用 `tools/eval` 手动运行，不进 CI。
@@ -328,9 +332,6 @@ PipelineOptions = { budgetsInPrompt, outlineCheckRetry, slideCheckRetry, truncat
 | 无书签教材的启发式建树 | 真实教材无书签比例 > 30% |
 | 大纲批注 → AI 修订 → diff | 纵切第 2 片 |
 | 先查库再新建（按教材找已有的课） | M1b |
-| “课前预习、不含答案”的分享链接 | 老师要求在课前发链接 |
-| 删除上传的教材 | 教材数量多到列表难用（课已可删除） |
-| 演讲者计时存 `sessionStorage`、第 5 步的 stub 横幅、模型请求总截止时间、内容过少时确认需二次点击（审查 #3 m3-6 / m3-8 / m3-10） | 下一迭代 |
 | `orgs` 表与 `org_id` 常量化、`PipelineOptions` 里输掉的消融分支（审查 #3 D-4 / D-6） | 有迁移窗口时；消融结论定稿、`tools/eval` 不再需要这些开关 |
 | AI 生成实验 | `EMBED_CATALOG` 的 `src` 可替换，接入点已留 |
 
