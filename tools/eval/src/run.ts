@@ -5,20 +5,23 @@
  *   pnpm eval:run --eval-dir <dir with manifest.json + pdfs/> [--scenarios S01,S03 | --all]
  *                 [--runs 3] [--variant B0] [--flags writerSource=none,...]
  *                 [--reuse-outlines results/B0] [--out results/B0] [--concurrency 4]
+ *                 [--noise realistic|heavy|none[,overBudget=0.3,fixRate=0.7,...]] [--seed kj]
  *
  * Provider: KJ_EVAL_API_KEY (+ KJ_EVAL_PROVIDER deepseek|glm|custom, KJ_EVAL_MODEL, KJ_EVAL_BASE_URL),
  * or DEEPSEEK_API_KEY / GLM_API_KEY. Without a key every call uses the deterministic stubs.
+ * --noise replaces the provider with the fault-injecting stub (noisy.ts), even when a key is set.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createAiLayer, PROVIDER_PRESETS, type AiCallRecord, type AiConfig, type ProviderKind } from "@kj/ai";
-import { draftOutline, OUTLINE_PROMPT_VERSION, OUTLINE_SOURCE_CHARS, SLIDE_PROMPT_VERSION, stubOutline, stubSlide, workedSpecFor, writeSlide, type DraftInput, type PlannerSection } from "@kj/generation";
+import { draftOutline, OUTLINE_PROMPT_VERSION, OUTLINE_SOURCE_CHARS, SLIDE_PROMPT_VERSION, sourcePagesFor, stubOutline, stubSlide, workedSpecFor, writeSlide, type DraftInput, type PlannerSection } from "@kj/generation";
 import { pagesInRanges, sourceForRanges } from "@kj/pdf-structure";
 import { LessonParams, Outline, type PageRange, type PageText, type SlideSpec } from "@kj/schema";
 import { layoutForPageType } from "@kj/templates";
 import { parseArgs, readJson, writeJson } from "./common.ts";
 import { DIRECT_PROMPT_VERSION, writeDeckDirect } from "./direct.ts";
 import { parseFlags, pipelineOptions, type AblationFlags } from "./flags.ts";
+import { createNoisyAi, parseNoise, withSpec, type NoiseConfig } from "./noisy.ts";
 
 interface ManifestSection {
   title: string;
@@ -105,6 +108,9 @@ interface RunOptions {
   reuseDir?: string;
   concurrency: number;
   provider: ReturnType<typeof providerFromEnv>;
+  /** Fault-injecting stub instead of the provider (see noisy.ts). */
+  noise?: NoiseConfig;
+  seed?: string;
 }
 
 export async function runScenario(o: RunOptions) {
@@ -124,11 +130,15 @@ export async function runScenario(o: RunOptions) {
   const ctx = { orgId: "eval", userId: "eval", lessonId: `${scenario.id}-r${o.run}` };
 
   const calls: AiCallRecord[] = [];
-  const ai = createAiLayer({
-    config: { load: async () => o.provider?.config ?? { providers: [], routes: {} } },
-    meter: { record: async (r) => void calls.push(r) },
-    allowStubFallback: true,
-  });
+  const meter = { record: async (r: AiCallRecord) => void calls.push(r) };
+  const noisy = o.noise ? createNoisyAi(o.noise, `${scenario.id}-r${o.run}`, meter, o.seed) : null;
+  const ai =
+    noisy?.ai ??
+    createAiLayer({
+      config: { load: async () => o.provider?.config ?? { providers: [], routes: {} } },
+      meter,
+      allowStubFallback: true,
+    });
 
   const options = pipelineOptions(flags);
   const draftInput: DraftInput = { lessonTitle, params, sections, pages, ctx, options };
@@ -161,7 +171,16 @@ export async function runScenario(o: RunOptions) {
       if (!prev.outline) throw new Error(`${o.reuseDir}: ${scenario.id}-r${o.run}.json has no outline to reuse`);
       outline = Outline.parse(prev.outline);
     } else {
-      const drafted = await draftOutline(ai, draftInput);
+      // An outline call that fails JSON repair is regenerated, as a teacher would click again.
+      let drafted: Awaited<ReturnType<typeof draftOutline>> | undefined;
+      for (let attempt = 0; !drafted; attempt++) {
+        try {
+          drafted = await draftOutline(ai, draftInput);
+        } catch (err) {
+          if (!noisy || attempt >= 2) throw err;
+          warnings.push(`outline regenerated: ${(err as Error).message.slice(0, 120)}`);
+        }
+      }
       outline = drafted.outline;
       warnings.push(...drafted.warnings.map((w) => `${w.code}: ${w.message}`));
     }
@@ -172,9 +191,23 @@ export async function runScenario(o: RunOptions) {
     const write = async (spec: SlideSpec) => {
       const i = specs.indexOf(spec);
       const worked = workedSpecFor(confirmed, spec.id);
-      const w = await writeSlide(ai, confirmed, spec.id, { lessonTitle, params, pages, ctx, options, workedProblem: worked ? problems.get(worked) : undefined });
-      if (w.content.layout === "steps" && spec.pageType === "worked") problems.set(spec.id, w.content.problem);
-      slides[i] = { id: `s${i + 1}`, specId: spec.id, layout: spec.layout, pageType: spec.pageType, minutes: spec.minutes, content: w.content, notes: w.notes, sources: w.sources, warnings: w.warnings };
+      const input = { lessonTitle, params, pages, ctx, options, workedProblem: worked ? problems.get(worked) : undefined };
+      const base = { id: `s${i + 1}`, specId: spec.id, layout: spec.layout, pageType: spec.pageType, minutes: spec.minutes };
+      try {
+        const w = await withSpec(spec.id, () => writeSlide(ai, confirmed, spec.id, input));
+        if (w.content.layout === "steps" && spec.pageType === "worked") problems.set(spec.id, w.content.problem);
+        slides[i] = { ...base, content: w.content, notes: w.notes, sources: w.sources, warnings: w.warnings };
+      } catch (err) {
+        // The web app leaves such a slide in an error state for the teacher to regenerate; keep the
+        // deck scorable with the clean stub and flag it.
+        const stub = stubSlide({ spec, outline: confirmed, lessonTitle, pages: sourcePagesFor(spec, input) });
+        slides[i] = { ...base, content: stub.content, notes: stub.notes, sources: spec.sourcePages, warnings: [], failed: (err as Error).message.slice(0, 200) };
+      }
+      if (noisy) {
+        const first = noisy.log.find((e) => e.spec === spec.id && e.attempt === 0 && e.turn === "first");
+        const marker = noisy.log.filter((e) => e.spec === spec.id && e.marker).pop()?.marker;
+        slides[i]!.noise = { injected: first?.faults ?? [], marker, attempts: new Set(noisy.log.filter((e) => e.spec === spec.id).map((e) => e.attempt)).size };
+      }
     };
     // Worked examples first, so faded/practice pages can mirror them (as in the web app's generate-all).
     await pool(specs.filter((s) => s.pageType === "worked"), o.concurrency, write);
@@ -188,14 +221,28 @@ export async function runScenario(o: RunOptions) {
       variant: o.variant,
       flags,
       run: o.run,
-      model: o.provider?.label ?? "stub",
-      stub: ok.every((c) => c.providerId === "stub"),
+      model: noisy ? `noisy-stub:${o.noise!.profile}` : (o.provider?.label ?? "stub"),
+      stub: !!noisy || ok.every((c) => c.providerId === "stub"),
+      ...(noisy
+        ? {
+            noise: { ...o.noise, seed: o.seed },
+            httpRequests: noisy.requests(),
+            failedSlides: (slides as { failed?: string }[]).filter((s) => s.failed).length,
+            outlineFaults: noisy.log.filter((e) => e.spec === "outline"),
+          }
+        : {}),
       promptVersions: { planner: OUTLINE_PROMPT_VERSION, writer: SLIDE_PROMPT_VERSION, direct: DIRECT_PROMPT_VERSION },
       reusedOutlineFrom: o.reuseDir ?? null,
       tokensIn: calls.reduce((n, c) => n + c.inputTokens, 0),
       tokensOut: calls.reduce((n, c) => n + c.outputTokens, 0),
       calls: calls.length,
       failedCalls: calls.length - ok.length,
+      byCapability: Object.fromEntries(
+        [...new Set(calls.map((c) => c.capability))].map((cap) => {
+          const cs = calls.filter((c) => c.capability === cap);
+          return [cap, { calls: cs.length, tokens: cs.reduce((n, c) => n + c.inputTokens + c.outputTokens, 0) }];
+        }),
+      ),
       latencyMs: Date.now() - started,
       createdAt: new Date().toISOString(),
       warnings,
@@ -219,20 +266,23 @@ async function main(argv: string[]) {
   const variant = opts.variant ?? "B0";
   const flags = parseFlags(opts.flags);
   const out = opts.out ?? path.join("results", variant);
-  const provider = providerFromEnv();
+  const noise = opts.noise ? parseNoise(opts.noise) : undefined;
+  const seed = opts.seed ?? "kj";
+  const provider = noise ? null : providerFromEnv();
   const concurrency = Number(opts.concurrency ?? (provider ? 4 : 1));
+  const label = noise ? `noisy-stub (${noise.profile}, seed ${seed})` : (provider?.label ?? "stub (no KJ_EVAL_API_KEY / DEEPSEEK_API_KEY / GLM_API_KEY)");
 
-  console.log(`eval:run variant=${variant} provider=${provider?.label ?? "stub (no KJ_EVAL_API_KEY / DEEPSEEK_API_KEY / GLM_API_KEY)"} scenarios=${ids.join(",")} runs=${runs} → ${out}`);
+  console.log(`eval:run variant=${variant} provider=${label} scenarios=${ids.join(",")} runs=${runs} → ${out}`);
   console.log(`flags=${JSON.stringify(flags)}`);
   let failed = 0;
   for (const scenario of scenarios) {
     for (let run = 1; run <= runs; run++) {
       const file = path.join(out, `${scenario.id}-r${run}.json`);
       try {
-        const deck = await runScenario({ manifest, evalDir, scenario, run, variant, flags, reuseDir: opts["reuse-outlines"], concurrency, provider });
+        const deck = await runScenario({ manifest, evalDir, scenario, run, variant, flags, reuseDir: opts["reuse-outlines"], concurrency, provider, noise, seed });
         writeJson(file, deck);
         const minutes = (deck.slides as { minutes: number }[]).reduce((n, s) => n + s.minutes, 0);
-        console.log(`  ${scenario.id} r${run}: ${deck.slides.length} slides, ${minutes} min, ${deck.meta.calls} calls, ${deck.meta.tokensIn + deck.meta.tokensOut} tokens, ${deck.meta.latencyMs} ms`);
+        console.log(`  ${scenario.id} r${run}: ${deck.slides.length} slides, ${minutes} min, ${deck.meta.calls} calls, ${deck.meta.tokensIn + deck.meta.tokensOut} tokens, ${deck.meta.latencyMs} ms${noise ? `, ${deck.meta.failedSlides} failed slides` : ""}`);
       } catch (err) {
         failed++;
         console.error(`  ${scenario.id} r${run}: FAILED ${(err as Error).message}`);

@@ -47,6 +47,32 @@ describe("pipeline options", () => {
     expect(res.outline.slides[1]!.sourcePages).toEqual([2]);
   });
 
+  it("rebalances an over-long outline without a retry; only retries what rebalancing cannot fix", async () => {
+    const long = {
+      objectives: ["Describe waves"],
+      slides: [
+        ["cover", 1],
+        ["retrieval", 6],
+        ["concept", 3.5],
+        ["check", 3],
+        ["concept", 3.5],
+        ["worked", 5],
+        ["faded", 4.5],
+        ["practice", 8],
+        ["check", 3],
+        ["practice", 8],
+        ["summary", 3],
+        ["exit", 4],
+      ].map(([pageType, minutes], i) => ({ pageType, minutes, title: `Slide ${i + 1}`, visual: pageType === "concept" ? "formula" : "none", sourcePages: [2] })),
+    };
+    expect(outlineTiming({ slides: long.slides as never }, { minutes: 40 }).needsAck).toBe(true);
+    const a = fakeAi([long]);
+    const res = await draftOutline(a.ai, input({ minutes: 40 }));
+    expect(a.requests).toHaveLength(1);
+    expect(outlineTiming(res.outline, { minutes: 40 }).needsAck).toBe(false);
+    expect(res.warnings.some((w) => w.level === "error")).toBe(false);
+  });
+
   it("phases=false drops learning loops; visualPlanning=writer leaves visuals to the writer", async () => {
     const msgs = buildMessages(input({}, { phases: false, visualPlanning: "writer" }));
     expect(msgs[0]!.content).not.toContain("learning loops");

@@ -14,6 +14,7 @@
     "@kj/pedagogy": "workspace:*",
     "@kj/schema": "workspace:*",
     "@kj/templates": "workspace:*",
+    "@kj/widgets": "workspace:*",
     "@playwright/test": "1.64.0",
     "zod": "^4.4.3"
   },

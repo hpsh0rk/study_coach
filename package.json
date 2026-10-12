@@ -19,6 +19,8 @@
     "deploy": "bash scripts/deploy.sh",
     "eval:run": "tsx tools/eval/src/run.ts",
     "eval:render": "tsx tools/eval/src/render.ts",
+    "eval:faults": "tsx tools/eval/src/faults.ts",
+    "eval:compare": "tsx tools/eval/src/compare.ts",
     "lint:deps": "depcruise apps packages tools --config .dependency-cruiser.cjs"
   },
   "devDependencies": {
