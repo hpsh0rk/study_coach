@@ -9,7 +9,7 @@ import { optionsOf, type PipelineOptions } from "./options.ts";
 import { neutralizeSource, SOURCE_RULE, suspiciousContent } from "./safety.ts";
 import { stubSlide } from "./slide-stub.ts";
 
-export const SLIDE_PROMPT_VERSION = "slide.write@6";
+export const SLIDE_PROMPT_VERSION = "slide.write@7";
 /** Source characters the writer sees for one slide. */
 export const SLIDE_SOURCE_CHARS = 12_000;
 
@@ -155,8 +155,13 @@ export function buildMessages(spec: SlideSpec, input: WriteInput, outline: Outli
       ? `Use the same problem structure as the preceding worked example, with new numbers: "${input.workedProblem}".`
       : "",
     spec.pageType === "retrieval" ? "Recap questions test prior knowledge this lesson builds on, not today's new content." : "",
-    spec.layout === "quiz" ? "Each wrong option names the misconception it diagnoses; `answer` is the 0-based index of the correct option." : "",
-    sim ? `The sim slot must be {"kind":"sim","embedId":"${sim.id}"} (${sim.title.en}); write predict/observe/explain for that simulation.` : "",
+    spec.layout === "quiz"
+      ? "Each wrong option names the misconception it diagnoses; `answer` is the 0-based index of the correct option. Set `poll: true` when the next part of the lesson depends on this idea (a hinge question the class votes on by show of hands before the answer); otherwise omit it."
+      : "",
+    spec.layout === "order"
+      ? 'Ordering activity: for a sequence or process, mode "order" with the cards in the correct order; for term ↔ definition or cause ↔ effect pairs, mode "match" with each card\'s partner in `match`. The player shuffles the cards; put the answer key in the notes.'
+      : "",
+    sim ? `The sim slot must be {"kind":"sim","embedId":"${sim.id}"} (${sim.title.en}); write predict/observe/explain for that simulation. Set \`outcome\` to the 0-based index of the prediction the simulation confirms.` : "",
     WIDGET_RULES,
     SOURCE_RULE,
     `Return JSON only: {"content": <slot object>, "notes": "..."} where content matches this JSON Schema: ${slotSchemaText(spec.layout)}`,

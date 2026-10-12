@@ -9,6 +9,7 @@ import {
   PlaceholderSpec,
   TableSpec,
   ExperimentContent,
+  OrderContent,
   QuestionsContent,
   QuizContent,
   StatementContent,
@@ -41,6 +42,7 @@ export const LAYOUTS: Record<LayoutId, LayoutDef> = {
   experiment: { id: "experiment", label: { zh: "实验（预测-观察-解释）", en: "Experiment (POE)" }, visual: "required" },
   quiz: { id: "quiz", label: { zh: "选择题", en: "Quiz" }, visual: "none" },
   questions: { id: "questions", label: { zh: "问答题组", en: "Questions" }, visual: "none" },
+  order: { id: "order", label: { zh: "排序 / 配对", en: "Order / match" }, visual: "none" },
   summary: { id: "summary", label: { zh: "结构小结", en: "Summary map" }, visual: "none" },
 };
 
@@ -53,6 +55,7 @@ const PAGE_TYPE_LAYOUT: Record<PageType, LayoutId> = {
   worked: "steps",
   faded: "steps",
   practice: "questions",
+  sequence: "order",
   experiment: "experiment",
   check: "quiz",
   summary: "summary",
@@ -73,6 +76,7 @@ export const PAGE_TYPE_VISUALS: Record<PageType, VisualKind[]> = {
   worked: ["formula", "none"],
   faded: ["formula", "none"],
   practice: ["none"],
+  sequence: ["none"],
   experiment: ["sim", "function"],
   check: ["none"],
   summary: ["none"],
@@ -130,7 +134,7 @@ export const SLOT_SCHEMAS = {
     predict: z.object({ question: str("prediction question", B.experiment.question), options: arr(str("option", B.experiment.options.item), B.experiment.options) }),
     observe: arr(str("observation prompt", B.experiment.observe.item), B.experiment.observe),
     explain: str("explanation", B.experiment.explain),
-  }),
+  }).refine((e) => e.outcome === undefined || e.outcome < e.predict.options.length, { message: "outcome must index a prediction option", path: ["outcome"] }),
   quiz: QuizContent.extend({
     question: str("question", B.quiz.question),
     options: arr(z.object({ text: str("option", B.quiz.options.item), misconception: optStr("misconception", B.quiz.misconception) }), B.quiz.options),
@@ -140,6 +144,10 @@ export const SLOT_SCHEMAS = {
     title: str("title", B.questions.title),
     items: arr(z.object({ q: str("question", B.questions.items.item), a: str("answer", B.questions.answer) }), B.questions.items),
   }),
+  order: OrderContent.extend({
+    title: str("title", B.order.title),
+    items: arr(z.object({ text: str("card", B.order.items.item), match: optStr("matching card", B.order.match) }), B.order.items),
+  }).refine((o) => o.mode === "order" || o.items.every((i) => i.match), { message: "match mode needs a matching card for every item", path: ["items"] }),
   summary: SummaryContent.extend({
     title: str("title", B.summary.title),
     nodes: arr(z.object({ head: str("node heading", B.summary.nodes.item), detail: optStr("node detail", B.summary.detail) }), B.summary.nodes),
@@ -164,9 +172,11 @@ export function stepsOf(content: SlideContent): number {
     case "experiment":
       return 2;
     case "quiz":
-      return 1;
+      return content.poll ? 2 : 1;
     case "questions":
       return content.items.length;
+    case "order":
+      return 1;
     case "summary":
       return Math.max(0, content.nodes.length - 1);
   }

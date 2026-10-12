@@ -120,7 +120,7 @@ export function PresenterPage() {
               </ul>
             </div>
           )}
-          <p className="presenter-help muted small">翻页笔 / 键盘：→ PageDown 空格 下一步 · ← PageUp 上一步 · B 黑屏 · 两个窗口都可以翻页</p>
+          <p className="presenter-help muted small">翻页笔 / 键盘：→ PageDown 空格 下一步 · ← PageUp 上一步 · B 黑屏 · D 画笔 · 两个窗口都可以翻页 · 投票题在下方控制栏输入各选项人数，观众窗口同步显示</p>
         </aside>
       </div>
     </div>

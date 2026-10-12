@@ -91,7 +91,12 @@ export function maxBudgetContent(layout: LayoutId, lang: SampleLang): SlideConte
         sim: sliders,
         observe: times(b.observe.max, (i) => f(b.observe.item.max, i + 3)),
         explain: f(b.explain.max, 4),
+        outcome: 1,
       };
+    }
+    case "order": {
+      const b = BUDGETS.order;
+      return { layout, title: f(b.title.max), mode: "order", items: times(b.items.max, (i) => ({ text: f(b.items.item.max, i + 1), match: "" })) };
     }
     case "quiz": {
       const b = BUDGETS.quiz;
@@ -126,6 +131,13 @@ export function sampleContent(layout: LayoutId): SlideContent {
         bullets: ["Frequency: waves passing per second", "Wavelength: crest-to-crest distance", "Double $f$ at fixed $v$: $\\lambda$ halves"],
         visual: { kind: "formula", tex: "v = f\\lambda", caption: "v in m/s, f in Hz, λ in m" },
         terms: [{ term: "wavelength", zh: "波长" }],
+      };
+    case "order":
+      return {
+        layout,
+        title: "How a sound reaches your ear",
+        mode: "order",
+        items: [{ text: "The source vibrates", match: "" }, { text: "Air particles are compressed", match: "" }, { text: "The compression travels outwards", match: "" }, { text: "The eardrum vibrates", match: "" }],
       };
     default:
       return maxBudgetContent(layout, "en");
@@ -168,6 +180,13 @@ export function galleryCells(): GalleryCell[] {
     const base = maxBudgetContent("statement", lang);
     const steps = Array.from({ length: BUDGETS.flow.max }, (_, i) => filler(BUDGETS.flow.item.max, lang, i + 4));
     if (base.layout === "statement") cells.push({ id: `statement-flow-${lang}`, layout: "statement", content: { ...base, bullets: base.bullets.slice(0, 1), visual: { kind: "flow", steps } } });
+  }
+  for (const lang of ["en", "zh"] as const) {
+    const b = BUDGETS.order;
+    const items = Array.from({ length: b.items.max }, (_, i) => ({ text: filler(b.items.item.max, lang, i + 1), match: filler(b.match.max, lang, i + 6) }));
+    cells.push({ id: `order-match-${lang}`, layout: "order", content: { layout: "order", title: filler(b.title.max, lang), mode: "match", items } });
+    const quiz = maxBudgetContent("quiz", lang);
+    if (quiz.layout === "quiz") cells.push({ id: `quiz-poll-${lang}`, layout: "quiz", content: { ...quiz, poll: true } });
   }
   return cells;
 }

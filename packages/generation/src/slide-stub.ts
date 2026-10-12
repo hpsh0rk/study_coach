@@ -220,6 +220,11 @@ export function stubSlide(input: StubInput): { content: SlideContent; notes: str
       content = { layout: "questions", title: clip(spec.title, BUDGETS.questions.title.max), items };
       break;
     }
+    case "order": {
+      const steps = pad(pts.slice(0, 5).map((p) => clip(p, BUDGETS.order.items.item.max)), 3, (i) => clip(sentences[i] ?? `Stage ${i + 1}`, BUDGETS.order.items.item.max));
+      content = { layout: "order", title, mode: "order", items: steps.map((text) => ({ text, match: "" })) };
+      break;
+    }
     case "summary": {
       const heads = pad(pts.slice(0, 4).map((p) => clip(p, 4)), 3, (i) => clip(outline.objectives[i] ?? `Idea ${i + 1}`, 4));
       content = { layout: "summary", title, nodes: heads.map((h, i) => ({ head: h, detail: clip(sentences[i] ?? "", 6) })) };

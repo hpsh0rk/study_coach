@@ -45,8 +45,15 @@ export function PlayerHost({
         report.current?.(pos);
       },
       onBlank: (on) => sync?.blank(on),
+      onTally: (index, counts) => sync?.tally(index, counts),
     });
-    if (syncId) sync = presenterSync(syncId, { onPosition: (pos) => p.go(pos), onBlank: (on) => p.setBlank(on), onHello: () => sync?.position(p.position, true) });
+    if (syncId)
+      sync = presenterSync(syncId, {
+        onPosition: (pos) => p.go(pos),
+        onBlank: (on) => p.setBlank(on),
+        onTally: (index, counts) => p.setTally(index, counts),
+        onHello: () => sync?.position(p.position, true),
+      });
     return () => {
       sync?.close();
       p.dispose();

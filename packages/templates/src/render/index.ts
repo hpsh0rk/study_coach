@@ -19,15 +19,25 @@ export interface RenderOptions {
   onSourceClick?: (page: number) => void;
   /** Printed page labels by page index, for the source chips. */
   pageLabels?: Record<number, string>;
+  /** Class tally (votes per option) typed in by the teacher, for poll quizzes and experiment predictions. */
+  tally?: number[];
+}
+
+export interface Tally {
+  /** Option letters, one per count. */
+  labels: string[];
+  set(counts: number[]): void;
 }
 
 export interface RenderedSlide {
   el: HTMLElement;
   steps: number;
+  /** Present when the slide shows a class tally the teacher fills in. */
+  tally?: Tally;
   dispose(): void;
 }
 
-type Builder = { root: HTMLElement; handles: WidgetHandle[]; opts: RenderOptions };
+type Builder = { root: HTMLElement; handles: WidgetHandle[]; opts: RenderOptions; tally?: Tally };
 
 function node<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, parent?: HTMLElement): HTMLElementTagNameMap[K] {
   const n = document.createElement(tag);
@@ -65,6 +75,105 @@ function title(b: Builder, value: string): void {
 }
 
 const LETTERS = "ABCD";
+
+/** Vote bars inside each option, revealed at step `k`; counts come from the teacher (RenderOptions.tally). */
+function tally(b: Builder, hosts: HTMLElement[], k: number): void {
+  const parts = hosts.map((host) => {
+    host.classList.add("kj-tallied");
+    const box = step(node("span", "kj-tally", host), k);
+    const bar = node("span", "kj-tally-bar", box);
+    const n = node("span", "kj-tally-n", box);
+    return { bar, n };
+  });
+  const set = (counts: number[]) => {
+    const total = counts.reduce((s, x) => s + Math.max(0, x || 0), 0);
+    parts.forEach((p, i) => {
+      const v = Math.max(0, counts[i] || 0);
+      const pct = total ? Math.round((v / total) * 100) : 0;
+      p.bar.style.width = `${pct}%`;
+      p.n.textContent = total ? `${v} · ${pct}%` : "–";
+    });
+  };
+  set(b.opts.tally ?? []);
+  b.tally = { labels: hosts.map((_, i) => LETTERS[i] ?? String(i + 1)), set };
+}
+
+/** Deterministic shuffle that moves every card when it can (the starting order never gives the answer away). */
+export function shuffledOrder(keys: string[]): number[] {
+  const n = keys.length;
+  let seed = [...keys.join("|")].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) >>> 0, 7);
+  const rand = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 2 ** 32);
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const p = Array.from({ length: n }, (_, i) => i);
+    for (let i = n - 1; i > 0; i--) {
+      const j = Math.floor(rand() * (i + 1));
+      [p[i], p[j]] = [p[j]!, p[i]!];
+    }
+    if (p.every((v, i) => v !== i)) return p;
+  }
+  return Array.from({ length: n }, (_, i) => (i + 1) % n);
+}
+
+/**
+ * Cards in `list` can be swapped by dragging one onto another or by tapping two in turn (touch screens and mice);
+ * `.kj-right` marks cards already in their correct place, shown once the answer is revealed.
+ */
+function swappable(list: HTMLElement): void {
+  const cards = () => [...list.querySelectorAll<HTMLElement>(":scope > .kj-card")];
+  const mark = () => cards().forEach((c, i) => c.classList.toggle("kj-right", Number(c.dataset.key) === i));
+  const swap = (a: HTMLElement, b: HTMLElement) => {
+    const mark2 = document.createElement("span");
+    a.replaceWith(mark2);
+    b.replaceWith(a);
+    mark2.replaceWith(b);
+    mark();
+  };
+  let picked: HTMLElement | null = null;
+  let drag: { card: HTMLElement; x: number; y: number; moved: boolean } | null = null;
+  for (const card of cards()) {
+    card.addEventListener("click", (e) => e.stopPropagation());
+    card.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+      drag = { card, x: e.clientX, y: e.clientY, moved: false };
+      card.setPointerCapture?.(e.pointerId);
+    });
+    card.addEventListener("pointermove", (e) => {
+      if (drag?.card !== card) return;
+      const scale = card.getBoundingClientRect().width / (card.offsetWidth || 1) || 1;
+      const dx = (e.clientX - drag.x) / scale;
+      const dy = (e.clientY - drag.y) / scale;
+      if (Math.abs(dx) + Math.abs(dy) > 12) drag.moved = true;
+      if (drag.moved) card.style.transform = `translate(${dx}px, ${dy}px)`;
+    });
+    const end = (e: PointerEvent) => {
+      if (drag?.card !== card) return;
+      const moved = drag.moved;
+      drag = null;
+      card.style.transform = "";
+      if (moved) {
+        card.style.visibility = "hidden";
+        const under = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>(".kj-card");
+        card.style.visibility = "";
+        if (under && under !== card && under.parentElement === list) swap(card, under);
+        picked?.classList.remove("kj-picked");
+        picked = null;
+      } else if (picked && picked !== card) {
+        picked.classList.remove("kj-picked");
+        swap(picked, card);
+        picked = null;
+      } else {
+        card.classList.toggle("kj-picked", picked !== card);
+        picked = picked === card ? null : card;
+      }
+    };
+    card.addEventListener("pointerup", end);
+    card.addEventListener("pointercancel", () => {
+      if (drag?.card === card) card.style.transform = "";
+      drag = null;
+    });
+  }
+  mark();
+}
 
 const RENDERERS: { [L in SlideContent["layout"]]: (b: Builder, c: ContentOf<L>) => void } = {
   title(b, c) {
@@ -137,9 +246,10 @@ const RENDERERS: { [L in SlideContent["layout"]]: (b: Builder, c: ContentOf<L>) 
     node("span", "kj-phase-tag", q).textContent = "① Predict 预测";
     text("span", "kj-phase-text", c.predict.question, q);
     const opts = node("div", "kj-chips", predict);
-    c.predict.options.forEach((o, i) => {
+    const chips = c.predict.options.map((o, i) => {
       const chip = node("button", "kj-chip", opts);
       chip.type = "button";
+      if (c.outcome !== undefined) chip.dataset.outcome = String(i === c.outcome);
       node("b", "", chip).textContent = LETTERS[i] ?? String(i + 1);
       text("span", "", o, chip);
       chip.disabled = !b.opts.interactive;
@@ -147,7 +257,9 @@ const RENDERERS: { [L in SlideContent["layout"]]: (b: Builder, c: ContentOf<L>) 
         e.stopPropagation();
         opts.querySelectorAll(".kj-chip").forEach((x) => x.classList.toggle("selected", x === chip));
       });
+      return chip;
     });
+    tally(b, chips, 1);
     const observe = step(slot("observe", left, "kj-fit kj-grow"), 1);
     const oh = node("div", "kj-phase", observe);
     node("span", "kj-phase-tag", oh).textContent = "② Observe 观察";
@@ -168,13 +280,18 @@ const RENDERERS: { [L in SlideContent["layout"]]: (b: Builder, c: ContentOf<L>) 
     const body = node("div", "kj-body kj-col", b.root);
     const grid = slot("options", body, "kj-fit kj-grow kj-quiz-grid");
     const feedback = node("div", "kj-quiz-feedback", grid);
-    c.options.forEach((o, i) => {
+    if (c.poll) {
+      b.root.classList.add("kj-poll");
+      node("div", "kj-quiz-tag kj-poll-tag", qs).textContent = "Vote first · 先举手投票";
+    }
+    const buttons = c.options.map((o, i) => {
       const btn = node("button", "kj-option", grid);
       btn.type = "button";
       btn.dataset.correct = String(i === c.answer);
       node("b", "kj-option-letter", btn).textContent = LETTERS[i] ?? String(i + 1);
       text("span", "kj-option-text", o.text, btn);
-      btn.disabled = !b.opts.interactive;
+      // A hinge question is teacher-led: one tap must not give the answer away before the vote.
+      btn.disabled = !b.opts.interactive || !!c.poll;
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
         grid.querySelectorAll(".kj-option").forEach((x) => x.classList.remove("picked"));
@@ -183,9 +300,11 @@ const RENDERERS: { [L in SlideContent["layout"]]: (b: Builder, c: ContentOf<L>) 
         feedback.textContent = i === c.answer ? "✓ Correct · 正确" : `✗ ${o.misconception || "Not quite · 再想想"}`;
         feedback.dataset.ok = String(i === c.answer);
       });
+      return btn;
     });
+    if (c.poll) tally(b, buttons, 1);
     grid.prepend(feedback);
-    const ex = step(slot("explain", body, "kj-fit"), 1);
+    const ex = step(slot("explain", body, "kj-fit"), c.poll ? 2 : 1);
     ex.classList.add("kj-answer");
     text("div", "kj-explain", c.explain, ex);
   },
@@ -201,6 +320,35 @@ const RENDERERS: { [L in SlideContent["layout"]]: (b: Builder, c: ContentOf<L>) 
       text("span", "kj-qa-q", it.q, li);
       step(text("span", "kj-qa-a", it.a, li), i + 1);
     });
+  },
+
+  order(b, c) {
+    title(b, c.title);
+    const body = node("div", "kj-body kj-col", b.root);
+    const board = slot("cards", body, `kj-fit kj-grow kj-order kj-order-${c.mode}`);
+    board.style.setProperty("--kj-cards", String(c.items.length));
+    node("div", "kj-order-hint", board).textContent = c.mode === "match" ? "Drag to match · 拖动配对" : "Drag into order · 拖动排序";
+    const cols = node("div", "kj-order-cols", board);
+    if (c.mode === "match") {
+      const left = node("ol", "kj-cards kj-cards-fixed", cols);
+      c.items.forEach((it) => text("li", "kj-card kj-card-fixed", it.text, left));
+    }
+    const list = node("ol", "kj-cards", cols);
+    const perm = shuffledOrder(c.items.map((it) => it.text + it.match));
+    for (const key of perm) {
+      const it = c.items[key]!;
+      const card = node("button", "kj-card", list);
+      card.type = "button";
+      card.dataset.key = String(key);
+      card.style.setProperty("--kj-key", String(key));
+      card.disabled = !b.opts.interactive;
+      if (c.mode === "order") node("b", "kj-card-n", card).textContent = String(key + 1);
+      text("span", "kj-card-text", c.mode === "match" ? it.match : it.text, card);
+    }
+    if (b.opts.interactive) swappable(list);
+    else list.querySelectorAll<HTMLElement>(".kj-card").forEach((card, i) => card.classList.toggle("kj-right", Number(card.dataset.key) === i));
+    // Reveal: cards move to their correct places (CSS order), so the clicker alone can show the answer.
+    step(node("div", "kj-order-reveal", board), 1).textContent = c.mode === "match" ? "✓ Answer · 正确配对" : "✓ Answer · 正确顺序";
   },
 
   summary(b, c) {
@@ -249,6 +397,7 @@ export function renderSlide(slide: Pick<Slide, "content" | "sources">, opts: Ren
   return {
     el: root,
     steps: stepsOf(slide.content),
+    ...(b.tally ? { tally: b.tally } : {}),
     dispose: () => b.handles.forEach((h) => h.dispose()),
   };
 }
@@ -295,7 +444,7 @@ export function measureOverflow(root: HTMLElement): string[] {
 /** Smallest computed font size of body text inside fitted slots (for T-02 checks). */
 export function minBodyFontPx(root: HTMLElement): number {
   let min = Infinity;
-  root.querySelectorAll<HTMLElement>(".kj-slot li, .kj-slot p, .kj-problem, .kj-explain, .kj-option-text, .kj-qa-q, .kj-node-detail, .kj-phase-text, .kj-step-text, .kj-step-why, .kj-chip, .kj-flow-step, .kj-term, .kj-table td, .kj-table th").forEach((n) => {
+  root.querySelectorAll<HTMLElement>(".kj-slot li, .kj-slot p, .kj-problem, .kj-explain, .kj-option-text, .kj-qa-q, .kj-node-detail, .kj-phase-text, .kj-step-text, .kj-step-why, .kj-chip, .kj-flow-step, .kj-term, .kj-table td, .kj-table th, .kj-card-text, .kj-card-fixed").forEach((n) => {
     min = Math.min(min, parseFloat(getComputedStyle(n).fontSize));
   });
   return min;

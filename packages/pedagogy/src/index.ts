@@ -20,6 +20,7 @@ export const PAGE_TYPES: Record<PageType, PageTypeDef> = {
   worked: { id: "worked", label: { zh: "例题示范", en: "Worked example" }, minutes: 4, range: [3, 5], mode: "lecture" },
   faded: { id: "faded", label: { zh: "渐隐练习", en: "Faded example" }, minutes: 3.5, range: [2.5, 4.5], mode: "practice" },
   practice: { id: "practice", label: { zh: "独立练习", en: "Practice" }, minutes: 6, range: [4, 8], mode: "practice" },
+  sequence: { id: "sequence", label: { zh: "排序配对", en: "Order / match" }, minutes: 3, range: [2, 4], mode: "practice" },
   experiment: { id: "experiment", label: { zh: "实验（预测-观察-解释）", en: "Experiment" }, minutes: 8, range: [6, 10], mode: "practice" },
   check: { id: "check", label: { zh: "检查理解", en: "Check" }, minutes: 2, range: [1.5, 3], mode: "practice" },
   summary: { id: "summary", label: { zh: "结构小结", en: "Summary" }, minutes: 2.5, range: [2, 3], mode: "lecture" },
@@ -120,6 +121,7 @@ const LIST_OF: Record<LayoutId, ListBudget> = {
   experiment: BUDGETS.experiment.observe,
   quiz: BUDGETS.quiz.options,
   questions: BUDGETS.questions.items,
+  order: BUDGETS.order.items,
   summary: BUDGETS.summary.nodes,
 };
 
@@ -226,6 +228,8 @@ function screenText(c: SlideContent): string[] {
       return [c.question, ...c.options.map((o) => o.text), c.explain];
     case "questions":
       return [c.title, ...c.items.flatMap((i) => [i.q, i.a])];
+    case "order":
+      return [c.title, ...c.items.flatMap((i) => [i.text, i.match])];
     case "summary":
       return [c.title, ...c.nodes.flatMap((n) => [n.head, n.detail])];
   }

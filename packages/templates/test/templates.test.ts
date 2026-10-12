@@ -4,7 +4,7 @@ import { describeIssue, slotIssues, widgetIssues } from "../src/issues.ts";
 import { BUDGETS, galleryCells, layoutForPageType, maxBudgetContent, maxBudgetTable, PAGE_TYPE_VISUALS, sampleContent, SLOT_SCHEMAS, stepsOf } from "../src/index.ts";
 
 describe("layouts", () => {
-  it("every page type maps to one of the 8 layouts and has at least one visual option", () => {
+  it("every page type maps to one of the layouts and has at least one visual option", () => {
     for (const t of PAGE_TYPE_IDS) {
       expect(LAYOUT_IDS).toContain(layoutForPageType(t));
       expect(PAGE_TYPE_VISUALS[t].length).toBeGreaterThan(0);
@@ -31,7 +31,7 @@ describe("layouts", () => {
 
   it("gallery cells (incl. table and 图示待补 variants) satisfy the strict slot schemas", () => {
     const cells = galleryCells();
-    expect(cells.length).toBe(LAYOUT_IDS.length * 3 + 7);
+    expect(cells.length).toBe(LAYOUT_IDS.length * 3 + 11);
     expect(new Set(cells.map((c) => c.id)).size).toBe(cells.length);
     for (const g of cells) {
       const strict = SLOT_SCHEMAS[g.layout].safeParse(g.content);
@@ -57,6 +57,25 @@ describe("layouts", () => {
   it("counts reveal steps", () => {
     expect(stepsOf(sampleContent("title"))).toBe(0);
     expect(stepsOf(sampleContent("experiment"))).toBeGreaterThan(0);
+    const quiz = maxBudgetContent("quiz", "en");
+    if (quiz.layout !== "quiz") throw new Error("layout");
+    expect(stepsOf(quiz)).toBe(1);
+    expect(stepsOf({ ...quiz, poll: true })).toBe(2);
+    expect(stepsOf(sampleContent("order"))).toBe(1);
+  });
+
+  it("order/match, poll and experiment outcome slots", () => {
+    expect(layoutForPageType("sequence")).toBe("order");
+    const order = maxBudgetContent("order", "en");
+    if (order.layout !== "order") throw new Error("layout");
+    expect(SLOT_SCHEMAS.order.safeParse({ ...order, mode: "match" }).success).toBe(false);
+    expect(SLOT_SCHEMAS.order.safeParse({ ...order, mode: "match", items: order.items.map((i) => ({ ...i, match: "pair" })) }).success).toBe(true);
+    expect(SLOT_SCHEMAS.order.safeParse({ ...order, items: order.items.slice(0, 2) }).success).toBe(false);
+    expect(slotIssues({ ...order, mode: "match" }).map(describeIssue)).toContain("题目：配对活动：每张卡片都要写上配对的另一半");
+    const exp = maxBudgetContent("experiment", "en");
+    if (exp.layout !== "experiment") throw new Error("layout");
+    expect(SLOT_SCHEMAS.experiment.safeParse({ ...exp, outcome: exp.predict.options.length }).success).toBe(false);
+    expect(SLOT_SCHEMAS.experiment.safeParse({ ...exp, outcome: undefined }).success).toBe(true);
   });
 });
 

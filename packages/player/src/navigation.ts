@@ -30,7 +30,7 @@ export function fitStage(viewW: number, viewH: number, stageW = 1920, stageH = 1
   return { scale, offsetX: (viewW - stageW * scale) / 2, offsetY: (viewH - stageH * scale) / 2 };
 }
 
-export type KeyAction = "next" | "prev" | "first" | "last" | "fullscreen" | "blank" | "notes" | null;
+export type KeyAction = "next" | "prev" | "first" | "last" | "fullscreen" | "blank" | "notes" | "ink" | "escape" | null;
 
 /** Keyboard and presentation-clicker mapping (clickers send PageUp/PageDown, arrows, or "b"/"." for blank). */
 export function keyAction(key: string): KeyAction {
@@ -61,6 +61,11 @@ export function keyAction(key: string): KeyAction {
       return "blank";
     case "s":
       return "notes";
+    case "d":
+    case "D":
+      return "ink";
+    case "Escape":
+      return "escape";
     default:
       return null;
   }

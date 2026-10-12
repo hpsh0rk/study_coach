@@ -1,8 +1,10 @@
 import type { Slide, ThemeId } from "@kj/schema";
 import { CANVAS, stepsOf } from "@kj/templates";
 import { applyStep, fitSlide, renderSlide, type RenderedSlide } from "@kj/templates/render";
+import { INK_COLORS, InkLayer } from "./ink.ts";
 import { clampPosition, fitStage, keyAction, nextPosition, prevPosition, type Position } from "./navigation.ts";
 
+export * from "./ink.ts";
 export * from "./navigation.ts";
 export * from "./presenter.ts";
 
@@ -20,6 +22,8 @@ export interface PlayerOptions {
   onBlank?(on: boolean): void;
   onSourceClick?(page: number): void;
   pageLabels?: Record<number, string>;
+  /** The teacher typed a class tally (votes per option) for slide `index`. */
+  onTally?(index: number, counts: number[]): void;
 }
 
 function fontsReady(): Promise<unknown> {
@@ -73,6 +77,11 @@ export class Player {
   private steps: number[];
   private obs: ResizeObserver;
   private disposers: (() => void)[] = [];
+  private ink: InkLayer;
+  private inkButton: HTMLButtonElement;
+  private inkTools: HTMLElement;
+  private tallyInputs: HTMLElement;
+  private tallies = new Map<number, number[]>();
 
   constructor(
     private container: HTMLElement,
@@ -92,6 +101,7 @@ export class Player {
     this.blank.hidden = true;
     this.notes = el("aside", "kj-notes", this.root);
     this.notes.hidden = true;
+    this.ink = new InkLayer(this.frame, this.stage);
 
     const bar = el("div", "kj-controls", main);
     const btn = (label: string, title: string, fn: () => void) => {
@@ -111,6 +121,46 @@ export class Player {
     this.counter = el("span", "kj-counter", bar);
     btn("›", "Next · 下一步 (→ / Space)", () => this.next());
     el("span", "kj-spacer", bar);
+    this.tallyInputs = el("span", "kj-tally-inputs", bar);
+    this.tallyInputs.hidden = true;
+    this.inkButton = btn("✎ 画笔", "Pen · 画笔批注 (D)", () => this.setInk(this.ink.active ? null : "pen"));
+    this.inkTools = el("span", "kj-ink-tools", bar);
+    this.inkTools.hidden = true;
+    const swatches = INK_COLORS.map((color) => {
+      const b = el("button", "kj-ctl kj-swatch", this.inkTools);
+      b.type = "button";
+      b.style.background = color;
+      b.title = `Pen colour ${color}`;
+      b.setAttribute("aria-label", b.title);
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.ink.color = color;
+        this.setInk("pen");
+      });
+      return b;
+    });
+    const eraser = el("button", "kj-ctl", this.inkTools);
+    eraser.type = "button";
+    eraser.textContent = "橡皮 Erase";
+    eraser.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.setInk("eraser");
+    });
+    const clear = el("button", "kj-ctl", this.inkTools);
+    clear.type = "button";
+    clear.textContent = "清除 Clear";
+    clear.title = "Clear this slide's drawing · 清除本页笔迹";
+    clear.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.ink.clear();
+    });
+    this.syncInkButtons = () => {
+      const tool = this.ink.active;
+      this.inkButton.setAttribute("aria-pressed", String(!!tool));
+      this.inkTools.hidden = !tool;
+      swatches.forEach((b, i) => b.setAttribute("aria-pressed", String(tool === "pen" && this.ink.color === INK_COLORS[i])));
+      eraser.setAttribute("aria-pressed", String(tool === "eraser"));
+    };
     if (opts.showNotes) btn("Notes 讲稿", "Speaker notes · 讲稿 (S)", () => this.toggleNotes());
     btn("⛶", "Fullscreen · 全屏 (F)", () => this.toggleFullscreen());
 
@@ -126,6 +176,8 @@ export class Player {
       else if (action === "fullscreen") this.toggleFullscreen();
       else if (action === "blank") this.setBlank(this.blank.hidden);
       else if (action === "notes" && opts.showNotes) this.toggleNotes();
+      else if (action === "ink") this.setInk(this.ink.active ? null : "pen");
+      else if (action === "escape" && this.ink.active) this.setInk(null);
     };
     // On the document, so presentation clickers (PageUp/PageDown) work wherever focus is.
     const doc = container.ownerDocument;
@@ -140,7 +192,7 @@ export class Player {
       else this.next();
     });
     this.obs = scaleInto(this.frame, this.stage);
-    this.disposers.push(() => doc.removeEventListener("keydown", onDocKey));
+    this.disposers.push(() => doc.removeEventListener("keydown", onDocKey), () => this.ink.dispose());
     this.show();
     this.root.focus();
   }
@@ -176,6 +228,28 @@ export class Player {
     this.opts.onBlank?.(on);
   }
 
+  private syncInkButtons: () => void = () => undefined;
+
+  /** Pen annotation mode: while on, touches draw instead of advancing; clicker keys still navigate. */
+  setInk(tool: "pen" | "eraser" | null): void {
+    this.ink.setTool(tool);
+    this.syncInkButtons();
+  }
+
+  get inkTool(): "pen" | "eraser" | null {
+    return this.ink.active;
+  }
+
+  /** Sets the class tally of slide `index` (from the presenter window or the inputs in the control bar). */
+  setTally(index: number, counts: number[]): void {
+    this.tallies.set(index, counts);
+    if (index !== this.pos.index || !this.current?.tally) return;
+    this.current.tally.set(counts);
+    this.tallyInputs.querySelectorAll("input").forEach((input, i) => {
+      if (input.ownerDocument.activeElement !== input) input.value = counts[i] ? String(counts[i]) : "";
+    });
+  }
+
   toggleNotes(): void {
     this.notes.hidden = !this.notes.hidden;
     this.root.classList.toggle("kj-with-notes", !this.notes.hidden);
@@ -199,13 +273,46 @@ export class Player {
       total: this.opts.slides.length,
       onSourceClick: this.opts.onSourceClick,
       pageLabels: this.opts.pageLabels,
+      tally: this.tallies.get(this.pos.index),
     });
+    this.buildTallyInputs();
+    this.ink.setSlide(this.pos.index);
     this.stage.append(this.current.el);
     const root = this.current.el;
     fitSlide(root);
     void fontsReady().then(() => fitSlide(root));
     this.notes.textContent = slide.notes || "—";
     this.reveal();
+  }
+
+  private buildTallyInputs(): void {
+    const tally = this.current?.tally;
+    const index = this.pos.index;
+    this.tallyInputs.replaceChildren();
+    this.tallyInputs.hidden = !tally;
+    if (!tally) return;
+    const counts = this.tallies.get(index) ?? [];
+    el("span", "kj-tally-label", this.tallyInputs).textContent = "人数 Votes";
+    const inputs = tally.labels.map((label, i) => {
+      const wrap = el("label", "", this.tallyInputs);
+      wrap.append(label);
+      const input = el("input", "", wrap);
+      input.type = "number";
+      input.min = "0";
+      input.max = "999";
+      input.inputMode = "numeric";
+      input.value = counts[i] ? String(counts[i]) : "";
+      input.setAttribute("aria-label", `Votes for ${label} · ${label} 的人数`);
+      input.addEventListener("click", (e) => e.stopPropagation());
+      return input;
+    });
+    const update = () => {
+      const next = inputs.map((x) => Math.max(0, Math.min(999, Math.floor(Number(x.value) || 0))));
+      this.tallies.set(index, next);
+      this.current?.tally?.set(next);
+      this.opts.onTally?.(index, next);
+    };
+    inputs.forEach((x) => x.addEventListener("input", update));
   }
 
   private reveal(): void {

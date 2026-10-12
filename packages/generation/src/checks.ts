@@ -61,6 +61,8 @@ export function truncateLists(c: SlideContent, pageType?: PageType): SlideConten
     }
     case "questions":
       return { ...c, items: c.items.slice(0, B.questions.items.max) };
+    case "order":
+      return { ...c, items: c.items.slice(0, B.order.items.max) };
     case "summary":
       return { ...c, nodes: c.nodes.slice(0, B.summary.nodes.max) };
   }

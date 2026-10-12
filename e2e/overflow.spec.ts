@@ -11,7 +11,7 @@ test("all layouts fit at max budget with body text >= 48px", async ({ page }) =>
     figs.map((f) => ({ id: f.getAttribute("data-testid"), overflow: f.getAttribute("data-overflow") ?? "?", minFont: Number(f.getAttribute("data-min-font")), hidden: f.querySelectorAll(".kj-step-hidden").length })),
   );
   expect(errors).toEqual([]);
-  expect(cells.length).toBe(31);
+  expect(cells.length).toBe(38);
   for (const c of cells) {
     expect.soft(c.overflow, `${c.id} overflowing slots`).toBe("");
     expect.soft(c.minFont, `${c.id} smallest body font`).toBeGreaterThanOrEqual(48 - 0.01);

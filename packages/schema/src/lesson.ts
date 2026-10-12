@@ -21,9 +21,19 @@ export type LessonParams = z.infer<typeof LessonParams>;
 
 export const DEFAULT_PARAMS: LessonParams = { minutes: 40, level: "intermediate", lessonType: "new", language: "en+zh", focus: "" };
 
+/** A lesson planned as part of a unit ("整单元规划"): lesson `index` (1-based) of `count`. */
+export const UnitRef = z.object({
+  id: z.string().max(40),
+  title: z.string().max(200),
+  index: z.number().int().min(1).max(20),
+  count: z.number().int().min(1).max(20),
+});
+export type UnitRef = z.infer<typeof UnitRef>;
+
 export const LessonScope = z.object({
   chapterIds: z.array(z.string()).max(200),
   ranges: z.array(PageRange).min(1).max(50),
+  unit: UnitRef.optional(),
 });
 export type LessonScope = z.infer<typeof LessonScope>;
 
