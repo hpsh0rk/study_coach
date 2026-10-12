@@ -1,0 +1,24 @@
+{
+  "name": "@kj/planner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@kj/ai": "workspace:*",
+    "@kj/pedagogy": "workspace:*",
+    "@kj/schema": "workspace:*",
+    "@kj/templates": "workspace:*",
+    "@kj/widgets": "workspace:*",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "vitest": "~4.1.11"
+  }
+}
