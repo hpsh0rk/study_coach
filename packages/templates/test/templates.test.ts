@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { LAYOUT_IDS, PAGE_TYPE_IDS, SlideContent } from "@kj/schema";
 import { describeIssue, slotIssues, widgetIssues } from "../src/issues.ts";
-import { BUDGETS, layoutForPageType, PAGE_TYPE_VISUALS, SLOT_SCHEMAS, stepsOf } from "../src/index.ts";
+import { BUDGETS, layoutForPageType, PAGE_TYPE_VISUALS, SLOT_SCHEMAS, stepsOf, withoutAnswers } from "../src/index.ts";
 import { galleryCells, maxBudgetContent, maxBudgetTable, sampleContent } from "../src/samples.ts";
 
 describe("layouts", () => {
@@ -103,5 +103,62 @@ describe("slot issues for teachers", () => {
     expect(issues[0]!.path).toEqual(["visual"]);
     expect(describeIssue(issues[0]!)).toMatch(/^图示：表达式算不出来/);
     expect(widgetIssues(st)).toEqual([]);
+  });
+});
+
+describe("withoutAnswers (课前预习 student copies)", () => {
+  const answerText = (c: SlideContent): string[] => {
+    switch (c.layout) {
+      case "quiz":
+        return [c.explain, ...c.options.map((o) => o.misconception).filter(Boolean)];
+      case "experiment":
+        return [c.explain];
+      case "questions":
+        return c.items.map((it) => it.a);
+      case "steps":
+        return c.steps.slice(c.fadeFrom ?? c.steps.length).flatMap((s) => [s.text, s.why]);
+      default:
+        return [];
+    }
+  };
+
+  it("removes every revealed answer from every layout", () => {
+    for (const layout of LAYOUT_IDS) {
+      const base = sampleContent(layout);
+      const content: SlideContent = base.layout === "steps" ? { ...base, fadeFrom: 1 } : base;
+      const stripped = withoutAnswers(content);
+      expect(answerText(stripped).filter(Boolean), layout).toEqual([]);
+      if (stripped.layout === "quiz") expect(stripped.answer).toBe(-1);
+      if (stripped.layout === "experiment") expect(stripped.outcome).toBeUndefined();
+      expect(stripped.layout).toBe(layout);
+    }
+  });
+
+  it("re-deals ordered and matched items so no item keeps its place", () => {
+    const order = sampleContent("order");
+    if (order.layout !== "order") throw new Error("layout");
+    for (const mode of ["order", "match"] as const) {
+      const c = { ...order, mode, items: order.items.map((it, i) => ({ text: it.text, match: it.match || `m${i}` })) };
+      for (let run = 0; run < 20; run++) {
+        const s = withoutAnswers(c);
+        if (s.layout !== "order") throw new Error("layout");
+        if (mode === "order") {
+          expect([...s.items].map((it) => it.text).sort()).toEqual(c.items.map((it) => it.text).sort());
+          s.items.forEach((it, i) => expect(it.text).not.toBe(c.items[i]!.text));
+        } else {
+          s.items.forEach((it, i) => {
+            expect(it.text).toBe(c.items[i]!.text);
+            expect(it.match).not.toBe(c.items[i]!.match);
+          });
+        }
+      }
+    }
+  });
+
+  it("leaves worked examples without a faded part and non-answer layouts alone", () => {
+    const steps = sampleContent("steps");
+    const plain = steps.layout === "steps" ? { ...steps, fadeFrom: undefined } : steps;
+    expect(withoutAnswers(plain)).toEqual(plain);
+    expect(withoutAnswers(sampleContent("summary"))).toEqual(sampleContent("summary"));
   });
 });

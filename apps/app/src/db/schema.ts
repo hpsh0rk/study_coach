@@ -58,6 +58,8 @@ export const documents = sqliteTable(
     pagesReceived: integer("pages_received").notNull().default(0),
     hasBookmarks: integer("has_bookmarks", { mode: "boolean" }).notNull(),
     createdAt: integer("created_at").notNull().$defaultFn(now),
+    /** Soft delete, like lessons.archived_at: hidden from lists and new lessons; lessons made from it keep working. */
+    archivedAt: integer("archived_at"),
   },
   (t) => [index("documents_owner_idx").on(t.orgId, t.ownerId)],
 );
@@ -172,6 +174,8 @@ export const shareLinks = sqliteTable(
     versionId: text("version_id").references(() => outlineVersions.id),
     /** Last time the teacher shared (and so reviewed) the deck: flagged slides changed after this are held back. */
     reviewedAt: integer("reviewed_at").notNull().default(0),
+    /** `hidden`: 课前预习, answers stripped server-side (the default, also for links made before this column). `shown`: 课后复习. */
+    answers: text("answers", { enum: ["hidden", "shown"] }).notNull().default("hidden"),
     createdBy: text("created_by").notNull().references(() => users.id),
     createdAt: integer("created_at").notNull().$defaultFn(now),
     revokedAt: integer("revoked_at"),

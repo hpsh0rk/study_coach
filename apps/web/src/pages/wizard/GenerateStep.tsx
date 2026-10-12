@@ -6,16 +6,20 @@ import { ApiError } from "../../api.ts";
 import { SlotEditor } from "../../components/SlotEditor.tsx";
 import { SlidePreview, SlideThumb } from "../../components/SlideView.tsx";
 import { UnverifiedBadge, UnverifiedBox } from "../../components/Unverified.tsx";
-import { documentApi, lessonApi, type FlaggedSlide, type LessonView, type ShareView } from "../../lessonApi.ts";
+import { documentApi, lessonApi, type AnswerMode, type FlaggedSlide, type LessonView, type ShareView } from "../../lessonApi.ts";
 import { downloadOfflineHtml } from "../../offline/exportDeck.ts";
 import { downloadPptx } from "../../offline/exportPptx.ts";
 import { Stepper, StepIntro, type StepKey } from "./Stepper.tsx";
 
 const CONCURRENCY = 2;
 
-/** Share link status: copy, unshare, move to the current version, and the pre-share review of flagged pages. */
+/**
+ * Share link status: copy, unshare, move to the current version, and the pre-share review of flagged pages.
+ * The answer mode (课前预习 without answers by default, or 课后复习) applies to the link and the student file.
+ */
 function SharePanel({ lessonId, initial, current, canShare }: { lessonId: string; initial: ShareView | null; current: { id: string; version: number }; canShare: boolean }) {
   const [share, setShare] = useState(initial);
+  const [answers, setAnswers] = useState<AnswerMode>(initial?.answers ?? "hidden");
   const [review, setReview] = useState<{ body: { versionId?: string }; pages: FlaggedSlide[] } | null>(null);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
@@ -24,7 +28,7 @@ function SharePanel({ lessonId, initial, current, canShare }: { lessonId: string
   async function doShare(body: { versionId?: string }, ack = false) {
     setError("");
     try {
-      const next = await lessonApi.share(lessonId, { ...body, ack });
+      const next = await lessonApi.share(lessonId, { ...body, ack, answers });
       setShare(next);
       setReview(null);
       await navigator.clipboard?.writeText(`${location.origin}${next.path}`).then(
@@ -42,11 +46,23 @@ function SharePanel({ lessonId, initial, current, canShare }: { lessonId: string
     setPacking(true);
     setError("");
     try {
-      await downloadOfflineHtml(lessonId, "student");
+      await downloadOfflineHtml(lessonId, "student", answers);
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setPacking(false);
+    }
+  }
+
+  async function pickAnswers(next: AnswerMode) {
+    setAnswers(next);
+    if (!share) return;
+    setError("");
+    try {
+      setShare(await lessonApi.shareAnswers(lessonId, next));
+    } catch (e) {
+      setAnswers(share.answers);
+      setError((e as Error).message);
     }
   }
 
@@ -64,13 +80,22 @@ function SharePanel({ lessonId, initial, current, canShare }: { lessonId: string
 
   return (
     <>
+      <div className="answer-mode" role="radiogroup" aria-label="学生看到的内容 · What students see" data-testid="answer-mode">
+        <span className="muted">学生版 Student copy:</span>
+        <label>
+          <input type="radio" name="answer-mode" checked={answers === "hidden"} onChange={() => void pickAnswers("hidden")} data-testid="answers-hidden" /> 课前预习（无答案）
+        </label>
+        <label>
+          <input type="radio" name="answer-mode" checked={answers === "shown"} onChange={() => void pickAnswers("shown")} data-testid="answers-shown" /> 课后复习（含答案）
+        </label>
+      </div>
       {!share ? (
         <button className="btn ghost" disabled={!canShare} onClick={() => doShare({})} data-testid="share">
           分享链接 Share
         </button>
       ) : (
         <div className="alert success share-box" data-testid="share-box">
-          已分享第 {share.version} 版 · 学生可以用这个链接查看（不含讲稿和误区提示）：
+          已分享第 {share.version} 版 · 学生可以用这个链接查看（不含讲稿和误区提示{share.answers === "hidden" ? "，答案课后公布" : "，含答案"}）：
           <a href={url} target="_blank" rel="noreferrer" data-testid="share-url">
             {url}
           </a>
@@ -116,7 +141,7 @@ function SharePanel({ lessonId, initial, current, canShare }: { lessonId: string
           </button>
         </div>
       )}
-      <button className="btn ghost small" disabled={!canShare || packing} onClick={studentFile} data-testid="export-student" title="不含讲稿、误区提示和检查标记，可以发到班级群 · No notes or misconception labels">
+      <button className="btn ghost small" disabled={!canShare || packing} onClick={studentFile} data-testid="export-student" title="不含讲稿、误区提示和检查标记，可以发到班级群；答案按上面的选择 · No notes or misconception labels; answers as chosen above">
         {packing ? "打包中… Packing" : "下载学生版离线文件 Student offline file"}
       </button>
       {error && <div className="alert error">{error}</div>}

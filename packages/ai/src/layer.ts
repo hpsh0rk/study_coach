@@ -42,7 +42,15 @@ export interface AiLayerOptions {
   fetch?: FetchLike;
   /** With no provider configured, answer from the caller's deterministic stub (local dev, CI, evals). */
   allowStubFallback: boolean;
+  /**
+   * Total model time for every call made through this layer (one layer per HTTP request): each call,
+   * retries included, gets at most what is left, so a request ends well inside the Worker and draft-lock limits.
+   */
+  deadlineMs?: number;
 }
+
+/** A call is not started with less than this left of the request deadline. */
+const MIN_CALL_MS = 5_000;
 
 export interface StructuredRequest<T> {
   capability: CapabilityName;
@@ -92,6 +100,13 @@ export function jsonSchemaOf(schema: z.ZodType): unknown {
 
 /** The single entry point for every model call in the system. */
 export function createAiLayer(opts: AiLayerOptions) {
+  const deadline = opts.deadlineMs === undefined ? Infinity : Date.now() + opts.deadlineMs;
+  const timeoutFor = (wanted: number): number => {
+    const left = deadline - Date.now();
+    if (left < MIN_CALL_MS) throw new ProviderError("模型调用超出本次请求的时间上限，请稍后重试 · The model took too long for this request; try again", 504);
+    return Math.min(wanted, left);
+  };
+
   async function callStructured<T>(req: StructuredRequest<T>): Promise<StructuredResult<T>> {
     const callId = newId("ai");
     const started = Date.now();
@@ -111,7 +126,7 @@ export function createAiLayer(opts: AiLayerOptions) {
     try {
       const messages: ChatMessage[] = [...req.messages];
       for (let attempt = 0; attempt < 2; attempt++) {
-        const res = await chatCompletion(provider, { model, messages, temperature: req.temperature ?? 0.4, json: true, timeoutMs: req.timeoutMs ?? 90_000 }, opts.fetch);
+        const res = await chatCompletion(provider, { model, messages, temperature: req.temperature ?? 0.4, json: true, timeoutMs: timeoutFor(req.timeoutMs ?? 90_000) }, opts.fetch);
         inputTokens += res.usage.inputTokens;
         outputTokens += res.usage.outputTokens;
         let problem: string;

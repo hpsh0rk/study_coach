@@ -182,3 +182,37 @@ export function stepsOf(content: SlideContent): number {
   }
 }
 
+/**
+ * Student "preview" copies (share link / offline file before the lesson): everything a reveal step
+ * would show is removed here, on the server, so it is not merely hidden in the page. Quiz `answer`
+ * becomes -1; ordered items are re-dealt in a random cyclic order (their listed order is the answer,
+ * and a seeded shuffle could be inverted by the class).
+ */
+export function withoutAnswers(content: SlideContent, random: () => number = Math.random): SlideContent {
+  switch (content.layout) {
+    case "quiz":
+      return { ...content, answer: -1, explain: "", options: content.options.map((o) => ({ ...o, misconception: "" })) };
+    case "experiment": {
+      const { outcome: _o, ...rest } = content;
+      return { ...rest, explain: "" };
+    }
+    case "steps":
+      if (content.fadeFrom === undefined) return content;
+      return { ...content, steps: content.steps.map((s, i) => (i < content.fadeFrom! ? s : { text: "", why: "" })) };
+    case "questions":
+      return { ...content, items: content.items.map((it) => ({ ...it, a: "" })) };
+    case "order": {
+      const n = content.items.length;
+      const p = Array.from({ length: n }, (_, i) => i);
+      for (let i = n - 1; i > 0; i--) {
+        const j = Math.floor(random() * i);
+        [p[i], p[j]] = [p[j]!, p[i]!];
+      }
+      if (content.mode === "match") return { ...content, items: content.items.map((it, i) => ({ text: it.text, match: content.items[p[i]!]!.match })) };
+      return { ...content, items: p.map((k) => content.items[k]!) };
+    }
+    default:
+      return content;
+  }
+}
+

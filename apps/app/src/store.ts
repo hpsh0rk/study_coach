@@ -3,6 +3,7 @@ import { checkSourceText, slideKey, sourceUnverified, suspiciousContent } from "
 import { isEmptyPage, MIN_PAGE_WORDS, normalizeRanges, pagesInRanges, rangesForChapters, sourceCut } from "@kj/pdf-structure";
 import { checkOutline, OUTLINE_SOURCE_CHARS, outlineTiming, verifyNumbers } from "@kj/pedagogy";
 import { LessonParams, LessonScope, newId, Outline, SlideContent, type ChapterNode, type PageRange, type PageText, type PageType, type Slide, type Unverified } from "@kj/schema";
+import { withoutAnswers } from "@kj/templates";
 import { db } from "./db/index.ts";
 import { chapters, documents, lessons, outlineVersions, pages, shareLinks, slides } from "./db/schema.ts";
 import { secret, type Env, type SessionUser } from "./env.ts";
@@ -12,9 +13,13 @@ export type LessonRow = typeof lessons.$inferSelect;
 export type VersionRow = typeof outlineVersions.$inferSelect;
 export type SlideRow = typeof slides.$inferSelect;
 
-export async function ownedDocument(env: Env, user: SessionUser, id: string) {
+/**
+ * Deleted (archived) documents are not found unless `archived` is set: reads of its pages for
+ * lessons already made from it, editing those lessons' scope, and restore.
+ */
+export async function ownedDocument(env: Env, user: SessionUser, id: string, opts: { archived?: boolean } = {}) {
   const row = (await db(env).select().from(documents).where(and(eq(documents.id, id), eq(documents.orgId, user.orgId), eq(documents.ownerId, user.id))).limit(1))[0];
-  if (!row) throw new HttpError(404, "NOT_FOUND", "Document not found · 找不到该文档");
+  if (!row || (row.archivedAt !== null && !opts.archived)) throw new HttpError(404, "NOT_FOUND", "Document not found · 找不到该文档");
   return row;
 }
 
@@ -152,7 +157,7 @@ export async function slidesOf(env: Env, version: VersionRow): Promise<Slide[]> 
 export function flaggedSlides(list: Slide[], outline: Outline) {
   const order = new Map(outline.slides.map((s, i) => [s.id, i]));
   return list.flatMap((s) => {
-    const issues = suspiciousContent(studentSlide(s).content);
+    const issues = suspiciousContent(studentSlide(s, "shown").content);
     return issues.length ? [{ page: (order.get(s.specId) ?? 0) + 1, title: "title" in s.content ? s.content.title : s.content.question, issues }] : [];
   });
 }
@@ -247,13 +252,20 @@ export async function lessonList(env: Env, user: SessionUser) {
 }
 
 /** What students may see of a slide: no speaker notes, checks, 待核实 flags or misconception labels on quiz options. */
-export function studentSlide({ canUndo: _u, ...s }: Slide) {
-  const content = s.content.layout === "quiz" ? { ...s.content, options: s.content.options.map((o) => ({ ...o, misconception: "" })) } : s.content;
+export type AnswerMode = "hidden" | "shown";
+
+export function studentSlide({ canUndo: _u, ...s }: Slide, answers: AnswerMode) {
+  const content =
+    answers === "hidden" ? withoutAnswers(s.content) : s.content.layout === "quiz" ? { ...s.content, options: s.content.options.map((o) => ({ ...o, misconception: "" })) } : s.content;
   return { ...s, content, notes: "", warnings: [], unverified: [] };
 }
 
-/** Export shape shared with the eval tooling (internal/eval/score.ts reads it). */
-export function deckExport(lesson: LessonRow, version: VersionRow, list: Slide[], extra: { includeNotes: boolean; pageLabels: Record<number, string> }) {
+/**
+ * Export shape shared with the eval tooling (internal/eval/score.ts reads it). Student copies
+ * (`includeNotes: false`) drop notes and checks, and with `answers: "hidden"` every revealed answer.
+ */
+export function deckExport(lesson: LessonRow, version: VersionRow, list: Slide[], extra: { includeNotes: boolean; answers?: AnswerMode; pageLabels: Record<number, string> }) {
+  const answers: AnswerMode = extra.includeNotes ? "shown" : (extra.answers ?? "hidden");
   const params = versionParams(version);
   const scope = versionScope(version);
   return {
@@ -267,10 +279,11 @@ export function deckExport(lesson: LessonRow, version: VersionRow, list: Slide[]
       language: params.language,
       pageRanges: scope.ranges.map((r) => [r.start, r.end]),
       pageLabels: extra.pageLabels,
+      answers,
     },
     meta: { outlineVersion: version.version, confirmedAt: version.confirmedAt },
     outline: outlineOf(version),
-    slides: list.map((s) => (extra.includeNotes ? (({ canUndo: _u, ...rest }) => rest)(s) : studentSlide(s))),
+    slides: list.map((s) => (extra.includeNotes ? (({ canUndo: _u, ...rest }) => rest)(s) : studentSlide(s, answers))),
   };
 }
 
@@ -279,8 +292,9 @@ export async function treeOf(env: Env, documentId: string): Promise<ChapterNode[
   return rows.map(({ documentId: _d, ...ch }) => ch);
 }
 
-export async function scopeFor(env: Env, user: SessionUser, documentId: string, chapterIds: string[], ranges: PageRange[]): Promise<{ scope: LessonScope; title: string }> {
-  const doc = await ownedDocument(env, user, documentId);
+/** `existing`: re-scoping a lesson that already uses the document, which works after the document is deleted. */
+export async function scopeFor(env: Env, user: SessionUser, documentId: string, chapterIds: string[], ranges: PageRange[], existing = false): Promise<{ scope: LessonScope; title: string }> {
+  const doc = await ownedDocument(env, user, documentId, { archived: existing });
   if (doc.pagesReceived < doc.pageCount) throw new HttpError(409, "DOCUMENT_INCOMPLETE", "The PDF is still uploading · PDF 还在上传");
   const tree = await treeOf(env, doc.id);
   const known = new Set(tree.map((c) => c.id));
@@ -323,7 +337,7 @@ export async function shareView(env: Env, lessonId: string) {
   if (!link?.versionId) return null;
   const v = await versionOf(env, lessonId, link.versionId);
   const { held } = await sharedSlides(env, v, link.reviewedAt);
-  return { path: `/s/${await shareToken(env, link.id)}`, versionId: v.id, version: v.version, held };
+  return { path: `/s/${await shareToken(env, link.id)}`, versionId: v.id, version: v.version, held, answers: link.answers };
 }
 
 /**

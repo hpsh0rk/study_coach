@@ -10,7 +10,7 @@ import { deckExport, pageLabels, sharedSlides, versionOf } from "../store.ts";
 
 /**
  * Public, read-only decks frozen at the version the teacher shared. No speaker notes or misconception
- * labels, and no flagged slides the teacher has not reviewed.
+ * labels, no flagged slides the teacher has not reviewed, and no answers unless the link is 课后复习.
  */
 export const shareRoutes = new Hono<AppBindings>().get("/:token", async (c) => {
   const hash = await sha256Hex(c.req.param("token"));
@@ -26,6 +26,6 @@ export const shareRoutes = new Hono<AppBindings>().get("/:token", async (c) => {
   if (!row?.link.versionId) throw new HttpError(404, "NOT_FOUND", "This link is invalid or was revoked · 链接无效或已撤销");
   const version = await versionOf(c.env, row.lesson.id, row.link.versionId);
   const { slides } = await sharedSlides(c.env, version, row.link.reviewedAt);
-  const deck = deckExport(row.lesson, version, slides, { includeNotes: false, pageLabels: await pageLabels(c.env, row.lesson.documentId) });
+  const deck = deckExport(row.lesson, version, slides, { includeNotes: false, answers: row.link.answers, pageLabels: await pageLabels(c.env, row.lesson.documentId) });
   return c.json({ lesson: deck.lesson, slides: deck.slides });
 });

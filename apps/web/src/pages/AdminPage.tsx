@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api, ApiError } from "../api.ts";
+import { useAuth } from "../auth.tsx";
 
 interface UserRow {
   id: string;
@@ -179,6 +180,7 @@ function AuditLog() {
 }
 
 function AiPanel() {
+  const { refresh } = useAuth();
   const [view, setView] = useState<AiView | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -193,7 +195,7 @@ function AiPanel() {
     setNotice("");
     try {
       await fn();
-      await load();
+      await Promise.all([load(), refresh()]);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
     }

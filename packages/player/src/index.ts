@@ -23,6 +23,8 @@ export interface PlayerOptions {
   onSourceClick?(page: number): void;
   pageLabels?: Record<number, string>;
   language?: TeachingLanguage;
+  /** A student preview deck (answers stripped on the server): show "answer after class" placeholders. */
+  hideAnswers?: boolean;
   /** The teacher typed a class tally (votes per option) for slide `index`. */
   onTally?(index: number, counts: number[]): void;
   /** Pen strokes of slide `index` changed here (mirror them with `setStrokes` in the other window). */
@@ -293,6 +295,7 @@ export class Player {
       onSourceClick: this.opts.onSourceClick,
       pageLabels: this.opts.pageLabels,
       language: this.opts.language,
+      hideAnswers: this.opts.hideAnswers,
       tally: this.tallies.get(this.pos.index),
     });
     this.buildTallyInputs();

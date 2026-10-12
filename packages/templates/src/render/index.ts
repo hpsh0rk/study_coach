@@ -23,6 +23,8 @@ export interface RenderOptions {
   tally?: number[];
   /** Built-in labels (objectives, POE phases, sources…) follow the teaching language; default bilingual. */
   language?: TeachingLanguage;
+  /** The content went through withoutAnswers(): reveal steps show a placeholder, nothing is marked correct. */
+  hideAnswers?: boolean;
 }
 
 /** A built-in label in the lesson's teaching language. */
@@ -82,6 +84,12 @@ function title(b: Builder, value: string): void {
 }
 
 const LETTERS = "ABCD";
+
+function afterClass(b: Builder, parent: HTMLElement): HTMLElement {
+  const n = node("span", "kj-after-class", parent);
+  n.textContent = label(b.opts, "Answer shared after class", "答案课后公布");
+  return n;
+}
 
 /** Vote bars inside each option, revealed at step `k`; counts come from the teacher (RenderOptions.tally). `compact` shows counts only. */
 function tally(b: Builder, hosts: HTMLElement[], k: number, compact = false): void {
@@ -277,7 +285,8 @@ const RENDERERS: { [L in SlideContent["layout"]]: (b: Builder, c: ContentOf<L>) 
     const explain = step(slot("explain", right, "kj-fit"), 2);
     const eh = node("div", "kj-phase", explain);
     node("span", "kj-phase-tag", eh).textContent = `③ ${label(b.opts, "Explain", "解释")}`;
-    text("div", "kj-explain", c.explain, explain);
+    if (b.opts.hideAnswers) afterClass(b, explain);
+    else text("div", "kj-explain", c.explain, explain);
   },
 
   quiz(b, c) {
@@ -291,7 +300,7 @@ const RENDERERS: { [L in SlideContent["layout"]]: (b: Builder, c: ContentOf<L>) 
     const buttons = c.options.map((o, i) => {
       const btn = node("button", "kj-option", grid);
       btn.type = "button";
-      btn.dataset.correct = String(i === c.answer);
+      if (!b.opts.hideAnswers) btn.dataset.correct = String(i === c.answer);
       node("b", "kj-option-letter", btn).textContent = LETTERS[i] ?? String(i + 1);
       text("span", "kj-option-text", o.text, btn);
       // A hinge question is teacher-led: one tap must not give the answer away before the vote.
@@ -300,6 +309,10 @@ const RENDERERS: { [L in SlideContent["layout"]]: (b: Builder, c: ContentOf<L>) 
         e.stopPropagation();
         grid.querySelectorAll(".kj-option").forEach((x) => x.classList.remove("picked"));
         btn.classList.add("picked");
+        if (b.opts.hideAnswers) {
+          feedback.textContent = label(b.opts, "Answer shared after class", "答案课后公布");
+          return;
+        }
         b.root.classList.add("kj-answered");
         feedback.textContent = i === c.answer ? "✓ Correct · 正确" : `✗ ${o.misconception || "Not quite · 再想想"}`;
         feedback.dataset.ok = String(i === c.answer);
@@ -310,7 +323,8 @@ const RENDERERS: { [L in SlideContent["layout"]]: (b: Builder, c: ContentOf<L>) 
     grid.prepend(feedback);
     const ex = step(slot("explain", body, "kj-fit"), c.poll ? 2 : 1);
     ex.classList.add("kj-answer");
-    text("div", "kj-explain", c.explain, ex);
+    if (b.opts.hideAnswers) afterClass(b, ex);
+    else text("div", "kj-explain", c.explain, ex);
   },
 
   questions(b, c) {
@@ -322,7 +336,8 @@ const RENDERERS: { [L in SlideContent["layout"]]: (b: Builder, c: ContentOf<L>) 
       const li = node("li", "kj-qa-item", ol);
       node("span", "kj-qa-n", li).textContent = String(i + 1);
       text("span", "kj-qa-q", it.q, li);
-      step(text("span", "kj-qa-a", it.a, li), i + 1);
+      if (b.opts.hideAnswers) step(afterClass(b, li), i + 1);
+      else step(text("span", "kj-qa-a", it.a, li), i + 1);
     });
   },
 
@@ -346,11 +361,15 @@ const RENDERERS: { [L in SlideContent["layout"]]: (b: Builder, c: ContentOf<L>) 
       card.dataset.key = String(key);
       card.style.setProperty("--kj-key", String(key));
       card.disabled = !b.opts.interactive;
-      if (c.mode === "order") node("b", "kj-card-n", card).textContent = String(key + 1);
+      if (c.mode === "order" && !b.opts.hideAnswers) node("b", "kj-card-n", card).textContent = String(key + 1);
       text("span", "kj-card-text", c.mode === "match" ? it.match : it.text, card);
     }
     if (b.opts.interactive) swappable(list);
-    else list.querySelectorAll<HTMLElement>(".kj-card").forEach((card, i) => card.classList.toggle("kj-right", Number(card.dataset.key) === i));
+    else if (!b.opts.hideAnswers) list.querySelectorAll<HTMLElement>(".kj-card").forEach((card, i) => card.classList.toggle("kj-right", Number(card.dataset.key) === i));
+    if (b.opts.hideAnswers) {
+      step(afterClass(b, board), 1);
+      return;
+    }
     // Reveal: cards move to their correct places (CSS order), so the clicker alone can show the answer.
     step(node("div", "kj-order-reveal", board), 1).textContent = `✓ ${c.mode === "match" ? label(b.opts, "Answer", "正确配对") : label(b.opts, "Answer", "正确顺序")}`;
   },

@@ -46,6 +46,8 @@ import {
   type VersionRow,
 } from "../store.ts";
 
+const AnswerMode = z.enum(["hidden", "shown"]);
+
 /** Deepest selected chapters in reading order become the planner's sections. */
 function sectionsOf(tree: ChapterNode[], scope: LessonScope): PlannerSection[] {
   const ids = new Set(scope.chapterIds);
@@ -136,7 +138,7 @@ export const lessonRoutes = new Hono<AppBindings>()
     if (body.params) patch.params = JSON.stringify(body.params);
     if (body.theme) patch.theme = body.theme;
     if (body.chapterIds || body.ranges) {
-      const { scope, title } = await scopeFor(c.env, u, lesson.documentId, body.chapterIds ?? [], body.ranges ?? []);
+      const { scope, title } = await scopeFor(c.env, u, lesson.documentId, body.chapterIds ?? [], body.ranges ?? [], true);
       const unit = lessonScope(lesson).unit;
       patch.scope = JSON.stringify(unit ? { ...scope, unit } : scope);
       if (!body.title) patch.title = title;
@@ -330,9 +332,11 @@ export const lessonRoutes = new Hono<AppBindings>()
     const lesson = await ownedLesson(c.env, c.get("user"), c.req.param("id"));
     const v = await latestConfirmed(c.env, lesson.id);
     if (!v) throw new HttpError(409, "OUTLINE_NOT_CONFIRMED", "No confirmed outline yet");
-    // `audience=student`: the same stripping as the share link (no notes, checks or misconception labels).
+    // `audience=student`: the same stripping as the share link (no notes, checks or misconception labels);
+    // answers too unless `answers=shown` (课后复习).
     const includeNotes = c.req.query("audience") !== "student";
-    return c.json(deckExport(lesson, v, await slidesOf(c.env, v), { includeNotes, pageLabels: await pageLabels(c.env, lesson.documentId) }));
+    const answers = c.req.query("answers") === "shown" ? "shown" : "hidden";
+    return c.json(deckExport(lesson, v, await slidesOf(c.env, v), { includeNotes, answers, pageLabels: await pageLabels(c.env, lesson.documentId) }));
   })
   /**
    * Shares a frozen version. With a link already active this keeps the same URL (on the same
@@ -342,7 +346,7 @@ export const lessonRoutes = new Hono<AppBindings>()
   .post("/:id/share", async (c) => {
     const u = c.get("user");
     const lesson = await ownedLesson(c.env, u, c.req.param("id"));
-    const body = await parseJson(c, z.object({ versionId: z.string().optional(), ack: z.boolean().default(false) }).default({ ack: false }));
+    const body = await parseJson(c, z.object({ versionId: z.string().optional(), ack: z.boolean().default(false), answers: AnswerMode.optional() }).default({ ack: false }));
     const link = await activeShare(c.env, lesson.id);
     const targetId = body.versionId ?? link?.versionId;
     const target = targetId ? await versionOf(c.env, lesson.id, targetId) : await shareableVersion(c.env, lesson.id);
@@ -353,14 +357,23 @@ export const lessonRoutes = new Hono<AppBindings>()
       throw new HttpError(409, "SHARE_REVIEW_REQUIRED", `第 ${flagged.map((f) => f.page).join("、")} 页含有网址、邮箱或像指令的文字，学生会看到。请检查后再分享 · Check these pages before sharing`, flagged);
     }
     if (link) {
-      await db(c.env).update(shareLinks).set({ versionId: target.id, reviewedAt: Date.now() }).where(eq(shareLinks.id, link.id));
+      await db(c.env).update(shareLinks).set({ versionId: target.id, reviewedAt: Date.now(), ...(body.answers ? { answers: body.answers } : {}) }).where(eq(shareLinks.id, link.id));
       return c.json(await shareView(c.env, lesson.id));
     }
     const id = newId("shr");
     await db(c.env)
       .insert(shareLinks)
-      .values({ id, tokenHash: await sha256Hex(await shareToken(c.env, id)), lessonId: lesson.id, versionId: target.id, reviewedAt: Date.now(), createdBy: u.id });
+      .values({ id, tokenHash: await sha256Hex(await shareToken(c.env, id)), lessonId: lesson.id, versionId: target.id, reviewedAt: Date.now(), answers: body.answers ?? "hidden", createdBy: u.id });
     return c.json(await shareView(c.env, lesson.id), 201);
+  })
+  /** Switches the live link between 课前预习 (answers stripped) and 课后复习 without moving its version or review. */
+  .patch("/:id/share", async (c) => {
+    const lesson = await ownedLesson(c.env, c.get("user"), c.req.param("id"));
+    const body = await parseJson(c, z.object({ answers: AnswerMode }));
+    const link = await activeShare(c.env, lesson.id);
+    if (!link) throw new HttpError(404, "NOT_FOUND", "Not shared");
+    await db(c.env).update(shareLinks).set({ answers: body.answers }).where(eq(shareLinks.id, link.id));
+    return c.json(await shareView(c.env, lesson.id));
   })
   .delete("/:id/share", async (c) => {
     const lesson = await ownedLesson(c.env, c.get("user"), c.req.param("id"));

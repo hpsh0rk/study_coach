@@ -27,10 +27,14 @@ export interface VersionView {
   warnings: Violation[];
 }
 
+/** `hidden`: 课前预习 (answers stripped on the server). `shown`: 课后复习. */
+export type AnswerMode = "hidden" | "shown";
+
 export interface ShareView {
   path: string;
   versionId: string;
   version: number;
+  answers: AnswerMode;
   /** Pages students do not see until the teacher shares again (flagged after the last review). */
   held: number[];
 }
@@ -115,8 +119,10 @@ export const lessonApi = {
   planUnit: (body: UnitRequest) =>
     api<{ unit: { id: string; title: string; count: number }; lessons: { id: string; title: string; ranges: PageRange[]; estimatedMinutes: number }[] }>("/api/lessons/unit", { body }),
   previewUnit: (body: UnitRequest) => api<UnitPreview>("/api/lessons/unit?dryRun=1", { body }),
-  deck: (id: string, audience: "teacher" | "student" = "teacher") => api<Record<string, unknown>>(`/api/lessons/${id}/deck${audience === "student" ? "?audience=student" : ""}`),
-  share: (id: string, body: { versionId?: string; ack?: boolean } = {}) => api<ShareView>(`/api/lessons/${id}/share`, { body }),
+  deck: (id: string, audience: "teacher" | "student" = "teacher", answers: AnswerMode = "hidden") =>
+    api<Record<string, unknown>>(`/api/lessons/${id}/deck${audience === "student" ? `?audience=student&answers=${answers}` : ""}`),
+  share: (id: string, body: { versionId?: string; ack?: boolean; answers?: AnswerMode } = {}) => api<ShareView>(`/api/lessons/${id}/share`, { body }),
+  shareAnswers: (id: string, answers: AnswerMode) => api<ShareView>(`/api/lessons/${id}/share`, { method: "PATCH", body: { answers } }),
   unshare: (id: string) => api(`/api/lessons/${id}/share`, { method: "DELETE" }),
   archive: (id: string) => api(`/api/lessons/${id}`, { method: "DELETE" }),
   restore: (id: string) => api(`/api/lessons/${id}/restore`, { body: {} }),
@@ -129,4 +135,6 @@ export const documentApi = {
   page: (id: string, no: number) => api<{ no: number; text: string; label: string | null }>(`/api/documents/${id}/pages/${no}`),
   paste: (id: string, start: number, end: number, text: string) =>
     api<{ pages: { no: number; words: number; chars: number }[] }>(`/api/documents/${id}/pages/paste`, { body: { start, end, text } }),
+  archive: (id: string) => api<{ ok: true; lessons: number }>(`/api/documents/${id}`, { method: "DELETE" }),
+  restore: (id: string) => api(`/api/documents/${id}/restore`, { body: {} }),
 };

@@ -65,6 +65,29 @@ describe("documents", () => {
     expect((await teacher.req("GET", `/api/documents/${docId}/pages/2`)).json.text).toContain("v = f λ");
   });
 
+  it("deleting a document hides it and blocks new lessons, keeps lessons made from it working, and can be undone", async () => {
+    const id = await uploadDoc(teacher);
+    const lessonId = await newLesson(teacher, id);
+    const other = await loggedIn("teacher2", "Teach12345");
+    expect((await other.req("DELETE", `/api/documents/${id}`)).status).toBe(404);
+
+    const del = await teacher.req("DELETE", `/api/documents/${id}`);
+    expect(del.json).toEqual({ ok: true, lessons: 1 });
+    expect((await teacher.req("GET", "/api/documents")).json.documents.map((d: any) => d.id)).not.toContain(id);
+    expect((await teacher.req("POST", "/api/lessons", { documentId: id, chapterIds: ["c1"] })).status).toBe(404);
+    expect((await teacher.req("POST", `/api/documents/${id}/pages`, { pages: [{ no: 1, text: "x" }] })).status).toBe(404);
+    expect((await teacher.req("DELETE", `/api/documents/${id}`)).status).toBe(404);
+    // The lesson still reads its source pages and can change its scope.
+    expect((await teacher.req("GET", `/api/lessons/${lessonId}`)).status).toBe(200);
+    expect((await teacher.req("GET", `/api/documents/${id}/pages/2`)).status).toBe(200);
+    expect((await teacher.req("PATCH", `/api/lessons/${lessonId}`, { chapterIds: ["c1"] })).status).toBe(200);
+    expect(await e.DB.prepare("SELECT action FROM audit_log WHERE target = ? ORDER BY id").bind(id).all().then((r) => r.results.map((x: any) => x.action))).toContain("document.deleted");
+
+    expect((await teacher.req("POST", `/api/documents/${id}/restore`)).status).toBe(200);
+    expect((await teacher.req("GET", "/api/documents")).json.documents.map((d: any) => d.id)).toContain(id);
+    expect((await teacher.req("POST", "/api/lessons", { documentId: id, chapterIds: ["c1"] })).status).toBe(201);
+  });
+
   it("accepts scanned pages, never drafts from them and fills them from pasted text", async () => {
     // Pages 5–8 are scans: no text layer.
     const scanned = await uploadDoc(teacher, (i) => (i < 4 ? PAGE_TEXT[i]! : ""));
@@ -440,6 +463,50 @@ describe("sharing", () => {
     const fresh = await teacher.req("POST", `/api/lessons/${lessonId}/share`);
     expect(fresh.status).toBe(201);
     expect(fresh.json.path).not.toBe(shared.json.path);
+  });
+
+  it("student links and files carry no answers (课前预习) unless the teacher picks 课后复习", async () => {
+    const { lessonId, v } = await confirmedLesson();
+    const quiz = v.outline.slides.find((s: any) => s.layout === "quiz");
+    await generate(lessonId, v.id, quiz.id);
+    const teacherQuiz = (await teacher.req("GET", `/api/lessons/${lessonId}/deck`)).json.slides[0].content;
+    expect(teacherQuiz.answer).toBeGreaterThanOrEqual(0);
+    expect(teacherQuiz.explain.length).toBeGreaterThan(0);
+
+    const shared = await teacher.req("POST", `/api/lessons/${lessonId}/share`);
+    expect(shared.json.answers).toBe("hidden");
+    const pub = (await publicDeck(shared.json.path)).json;
+    expect(pub.lesson.answers).toBe("hidden");
+    expect(pub.slides[0].content.answer).toBe(-1);
+    expect(pub.slides[0].content.explain).toBe("");
+    expect(JSON.stringify(pub)).not.toContain(teacherQuiz.explain);
+
+    // Switching the mode keeps the link, its version and its review state.
+    const review = await teacher.req("PATCH", `/api/lessons/${lessonId}/share`, { answers: "shown" });
+    expect(review.status).toBe(200);
+    expect(review.json).toMatchObject({ path: shared.json.path, versionId: v.id, answers: "shown" });
+    const after = (await publicDeck(shared.json.path)).json;
+    expect(after.lesson.answers).toBe("shown");
+    expect(after.slides[0].content.answer).toBe(teacherQuiz.answer);
+    expect(after.slides[0].content.explain).toBe(teacherQuiz.explain);
+    expect(after.slides[0].content.options.every((o: any) => o.misconception === "")).toBe(true);
+    expect((await teacher.req("PATCH", `/api/lessons/${lessonId}/share`, { answers: "maybe" })).status).toBe(400);
+    const other = await loggedIn("teacher2", "Teach12345");
+    expect((await other.req("PATCH", `/api/lessons/${lessonId}/share`, { answers: "hidden" })).status).toBe(404);
+    // Re-sharing without a mode keeps the chosen one.
+    expect((await teacher.req("POST", `/api/lessons/${lessonId}/share`)).json.answers).toBe("shown");
+
+    const file = (await teacher.req("GET", `/api/lessons/${lessonId}/deck?audience=student`)).json;
+    expect(file.lesson.answers).toBe("hidden");
+    expect(file.slides[0].content.answer).toBe(-1);
+    expect(JSON.stringify(file.slides)).not.toContain(teacherQuiz.explain);
+    const reviewFile = (await teacher.req("GET", `/api/lessons/${lessonId}/deck?audience=student&answers=shown`)).json;
+    expect(reviewFile.slides[0].content.answer).toBe(teacherQuiz.answer);
+    expect(reviewFile.slides[0].notes).toBe("");
+
+    await teacher.req("DELETE", `/api/lessons/${lessonId}/share`);
+    expect((await teacher.req("PATCH", `/api/lessons/${lessonId}/share`, { answers: "hidden" })).status).toBe(404);
+    expect((await teacher.req("POST", `/api/lessons/${lessonId}/share`, { answers: "shown" })).json.answers).toBe("shown");
   });
 
   it("deleting a lesson archives it, kills its link at once, and a restore does not revive the link", async () => {
