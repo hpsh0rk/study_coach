@@ -65,19 +65,22 @@ export const slideGenerate = defineCapability({
     ];
   },
   stub(input) {
+    const title = input.outlineItem.title.replace(/^\d+(\.\d+)*\s+/, "").trim() || input.outlineItem.title;
     const fromPoints = input.outlineItem.points.filter(Boolean);
-    const fromSource = sentences(input.sourceText);
+    const heading = input.outlineItem.title.replace(/\s+/g, " ").trim();
+    const body = input.sourceText.replace(/\s+/g, " ").split(heading).join(" ").replace(/\(continued\)/gi, " ");
+    const fromSource = sentences(body);
     const bullets = (fromPoints.length >= 2 ? fromPoints : fromSource).slice(0, 5);
-    if (bullets.length === 0) bullets.push(`Key ideas of ${input.outlineItem.title}`);
-    const terms = findGlossaryTerms(`${input.outlineItem.title} ${bullets.join(" ")} ${input.sourceText}`, 5);
+    if (bullets.length === 0) bullets.push(`Key ideas of ${title}`);
+    const terms = findGlossaryTerms(`${title} ${bullets.join(" ")}`, 5);
     return {
-      layout: terms.length ? "title-bullets-terms" : "title-bullets",
-      title: input.outlineItem.title.slice(0, 120),
+      layout: terms.length ? ("title-bullets-terms" as const) : ("title-bullets" as const),
+      title: title.slice(0, 120),
       bullets,
       terms,
       notes: {
         en: [
-          `Introduce "${input.outlineItem.title}" and link it to the previous lesson.`,
+          `Introduce "${title}" and link it to the previous lesson.`,
           bullets[0] ? `Emphasise: ${bullets[0]}` : "Ask students what they already know.",
           "Check understanding with a quick cold-call question before moving on.",
         ],

@@ -1,7 +1,6 @@
 /** Seed physics glossary used by the stub provider and as a hint for real models. */
 export const PHYSICS_GLOSSARY: Record<string, string> = {
   wave: "波",
-  waves: "波",
   amplitude: "振幅",
   wavelength: "波长",
   frequency: "频率",
@@ -46,18 +45,16 @@ export const PHYSICS_GLOSSARY: Record<string, string> = {
 };
 
 export function findGlossaryTerms(text: string, limit = 5): { term: string; zh: string }[] {
-  const lower = ` ${text.toLowerCase().replace(/[^a-z\s]/g, " ")} `;
+  const lower = ` ${text.toLowerCase().replace(/[^a-z\s]/g, " ").replace(/\s+/g, " ")} `;
   const hits: { term: string; zh: string; at: number }[] = [];
   const keys = Object.keys(PHYSICS_GLOSSARY).sort((a, b) => b.length - a.length);
   const taken: string[] = [];
   for (const key of keys) {
-    const at = lower.indexOf(` ${key} `);
-    if (at < 0) continue;
+    const m = new RegExp(` ${key}(?:s|es)? `).exec(lower);
+    if (!m) continue;
     if (taken.some((t) => t.includes(key))) continue;
-    const singular = key.endsWith("s") ? key.slice(0, -1) : key;
-    if (taken.includes(singular) || taken.includes(`${key}s`)) continue;
     taken.push(key);
-    hits.push({ term: key, zh: PHYSICS_GLOSSARY[key]!, at });
+    hits.push({ term: key, zh: PHYSICS_GLOSSARY[key]!, at: m.index });
   }
   return hits
     .sort((a, b) => a.at - b.at)
