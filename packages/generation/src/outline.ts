@@ -120,7 +120,7 @@ export function buildMessages(input: DraftInput, problems?: Violation[]) {
 
 const roundHalf = (n: number) => Math.max(0.5, Math.round(n * 2) / 2);
 
-export interface NormalizeContext {
+interface NormalizeContext {
   validPages: number[];
   /** Experiment pages become practice pages when no catalog simulation fits. */
   simAvailable: boolean;

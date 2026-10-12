@@ -59,7 +59,7 @@ export async function scopePages(env: Env, documentId: string, scope: LessonScop
   return pagesByNo(env, documentId, pagesInRanges(scope.ranges));
 }
 
-export async function pagesByNo(env: Env, documentId: string, wanted: number[]): Promise<PageText[]> {
+async function pagesByNo(env: Env, documentId: string, wanted: number[]): Promise<PageText[]> {
   const out: PageText[] = [];
   for (let i = 0; i < wanted.length; i += 90) {
     const chunk = wanted.slice(i, i + 90);
@@ -73,7 +73,7 @@ export async function pagesByNo(env: Env, documentId: string, wanted: number[]):
   return out;
 }
 
-export interface ScopeStats {
+interface ScopeStats {
   /** Word count (for the "this needs about N minutes" estimate). */
   words: number;
   /** Pages without usable text (scanned images): never sent to the model. */

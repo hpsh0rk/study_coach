@@ -99,7 +99,7 @@ function visualFor(spec: SlideSpec, source: string, bullets: string[], outline: 
   return { kind: "flow", steps };
 }
 
-export interface StubInput {
+interface StubInput {
   spec: SlideSpec;
   outline: Outline;
   lessonTitle: string;

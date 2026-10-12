@@ -8,7 +8,7 @@ import { SettingsStep } from "./wizard/SettingsStep.tsx";
 import type { StepKey } from "./wizard/Stepper.tsx";
 
 /** Furthest step a lesson has reached, so the stepper can link back to earlier steps. */
-export function reachedStep(v: LessonView): StepKey {
+function reachedStep(v: LessonView): StepKey {
   if (v.confirmed) return "slides";
   if (v.draft || v.drafting) return "outline";
   return "settings";

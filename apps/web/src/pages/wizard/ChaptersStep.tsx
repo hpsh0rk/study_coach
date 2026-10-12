@@ -11,7 +11,7 @@ import { Stepper, StepIntro, type StepKey } from "./Stepper.tsx";
  * "112-118, 120" → ranges of page indexes. Numbers are the book's printed page labels when the
  * PDF has them (what teachers read in the table of contents). Returns null when invalid.
  */
-export function parseRanges(text: string, pageCount: number, labels: Map<number, string> = new Map()): PageRange[] | null {
+function parseRanges(text: string, pageCount: number, labels: Map<number, string> = new Map()): PageRange[] | null {
   const parts = text.split(/[,，;；\s]+/).filter(Boolean);
   const out: PageRange[] = [];
   for (const p of parts) {
@@ -50,11 +50,11 @@ function VolumeMeter({ estimated, lessonMinutes, dropped }: { estimated: number;
   );
 }
 
-export const runsOf = (pages: number[]): PageRange[] => normalizeRanges(pages.map((p) => ({ start: p, end: p })), Math.max(1, ...pages));
+const runsOf = (pages: number[]): PageRange[] => normalizeRanges(pages.map((p) => ({ start: p, end: p })), Math.max(1, ...pages));
 export const fmtPages = (pages: number[], labels: Map<number, string>) => fmtRanges(runsOf(pages), labels);
 
 /** What the outline will and will not read from the selected pages. */
-export function selectionStats(selected: number[], pageWords: number[], pageChars: number[]) {
+function selectionStats(selected: number[], pageWords: number[], pageChars: number[]) {
   const empty = selected.filter((p) => isEmptyPage(pageWords[p - 1] ?? 0));
   const withText = selected.filter((p) => !isEmptyPage(pageWords[p - 1] ?? 0));
   return {

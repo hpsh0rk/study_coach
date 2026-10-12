@@ -16,7 +16,7 @@ const MINUTE_CHOICES = [30, 35, 40, 45, 60, 80, 90];
  * Selection size vs lesson length (words-based estimate); drives the hint before any model call.
  * `unread`: pages the outline cannot read (formatted), which rules out "good fit".
  */
-export function pacing(minutes: number, words: number, unreadPages = 0, unread = ""): ScopeAdvice & { level: "dense" | "ok" | "light"; text: string } {
+function pacing(minutes: number, words: number, unreadPages = 0, unread = ""): ScopeAdvice & { level: "dense" | "ok" | "light"; text: string } {
   const a = scopeAdvice(words, minutes, unreadPages);
   if (a.unreadPages > 0) {
     return { ...a, level: "dense", text: `第 ${unread} 页读不进大纲（所选内容超过一份大纲能读的量），这些页不会被覆盖。建议拆成 ${a.lessons} 课时 · Some pages will not be read: split the lesson` };
