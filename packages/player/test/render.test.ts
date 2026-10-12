@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SlideContent } from "@kj/schema";
-import { galleryCells } from "@kj/templates";
+import { galleryCells } from "@kj/templates/testing";
 import { applyStep, renderSlide } from "@kj/templates/render";
 
 describe("render safety", () => {

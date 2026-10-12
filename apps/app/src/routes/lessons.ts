@@ -7,7 +7,7 @@ import { DEFAULT_PARAMS, LessonParams, newId, Outline, PageRange, sha256Hex, Sli
 import { layoutForPageType, SLOT_SCHEMAS } from "@kj/templates";
 import { describeIssue, slotIssues, widgetIssues } from "@kj/templates/issues";
 import { makeAi } from "../ai.ts";
-import { lessons, outlineVersions, shareLinks, slides } from "../db/schema.ts";
+import { auditLog, lessons, outlineVersions, shareLinks, slides } from "../db/schema.ts";
 import type { AppBindings, Env } from "../env.ts";
 import { HttpError, parseJson } from "../http.ts";
 import { requireUser } from "../auth/session.ts";
@@ -374,11 +374,15 @@ export const lessonRoutes = new Hono<AppBindings>()
     await db(c.env).batch([
       db(c.env).update(shareLinks).set({ revokedAt: at }).where(and(eq(shareLinks.lessonId, lesson.id), isNull(shareLinks.revokedAt))),
       db(c.env).update(lessons).set({ archivedAt: at, draftingUntil: null }).where(eq(lessons.id, lesson.id)),
+      db(c.env).insert(auditLog).values({ orgId: lesson.orgId, actorId: c.get("user").id, action: "lesson.deleted", target: lesson.id }),
     ]);
     return c.json({ ok: true });
   })
   .post("/:id/restore", async (c) => {
     const lesson = await ownedLesson(c.env, c.get("user"), c.req.param("id"), { archived: true });
-    await db(c.env).update(lessons).set({ archivedAt: null }).where(eq(lessons.id, lesson.id));
+    await db(c.env).batch([
+      db(c.env).update(lessons).set({ archivedAt: null }).where(eq(lessons.id, lesson.id)),
+      db(c.env).insert(auditLog).values({ orgId: lesson.orgId, actorId: c.get("user").id, action: "lesson.restored", target: lesson.id }),
+    ]);
     return c.json({ ok: true });
   });

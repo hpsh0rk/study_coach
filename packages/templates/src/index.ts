@@ -182,4 +182,3 @@ export function stepsOf(content: SlideContent): number {
   }
 }
 
-export * from "./samples.ts";

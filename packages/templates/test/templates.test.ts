@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { LAYOUT_IDS, PAGE_TYPE_IDS, SlideContent } from "@kj/schema";
 import { describeIssue, slotIssues, widgetIssues } from "../src/issues.ts";
-import { BUDGETS, galleryCells, layoutForPageType, maxBudgetContent, maxBudgetTable, PAGE_TYPE_VISUALS, sampleContent, SLOT_SCHEMAS, stepsOf } from "../src/index.ts";
+import { BUDGETS, layoutForPageType, PAGE_TYPE_VISUALS, SLOT_SCHEMAS, stepsOf } from "../src/index.ts";
+import { galleryCells, maxBudgetContent, maxBudgetTable, sampleContent } from "../src/samples.ts";
 
 describe("layouts", () => {
   it("every page type maps to one of the layouts and has at least one visual option", () => {

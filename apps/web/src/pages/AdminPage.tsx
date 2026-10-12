@@ -143,7 +143,38 @@ function UsersPanel() {
           </tbody>
         </table>
       </div>
+      <AuditLog />
     </>
+  );
+}
+
+function AuditLog() {
+  const [entries, setEntries] = useState<{ id: number; action: string; target: string | null; createdAt: number; actor: string | null }[]>([]);
+  useEffect(() => {
+    void api<{ entries: typeof entries }>("/api/admin/audit").then((r) => setEntries(r.entries));
+  }, []);
+  return (
+    <div className="card" data-testid="audit-log">
+      <h2>最近操作 Recent activity</h2>
+      {entries.length === 0 ? (
+        <p className="muted">还没有记录 · Nothing yet</p>
+      ) : (
+        <table className="table">
+          <tbody>
+            {entries.map((e) => (
+              <tr key={e.id}>
+                <td className="muted small">{new Date(e.createdAt).toLocaleString()}</td>
+                <td>{e.actor ?? "—"}</td>
+                <td>
+                  <code>{e.action}</code>
+                </td>
+                <td className="muted small">{e.target ?? ""}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
   );
 }
 

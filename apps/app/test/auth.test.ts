@@ -58,6 +58,11 @@ describe("whitelist auth", () => {
     const teacher = new Client();
     expect((await teacher.req("POST", "/api/auth/login", { username: "wang", password: "Teach12345" })).status).toBe(200);
     expect((await teacher.req("GET", "/api/admin/users")).status).toBe(403);
+    expect((await teacher.req("GET", "/api/admin/audit")).status).toBe(403);
+    const audit = (await admin.req("GET", "/api/admin/audit")).json.entries;
+    expect(audit.length).toBeLessThanOrEqual(20);
+    expect(audit[0]).toMatchObject({ action: "auth.login", actor: "wang" });
+    expect(audit.map((x: any) => x.action)).toContain("admin.user_created");
   });
 
   it("admin AI config keeps exactly one enabled provider and model", async () => {

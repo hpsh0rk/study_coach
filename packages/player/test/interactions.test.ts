@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SlideContent } from "@kj/schema";
-import { sampleContent } from "@kj/templates";
+import { sampleContent } from "@kj/templates/testing";
 import { applyStep, renderSlide, shuffledOrder } from "@kj/templates/render";
 import { answerKey, keyAction, Player, strokeHits, type PlayerSlide } from "../src/index.ts";
 
