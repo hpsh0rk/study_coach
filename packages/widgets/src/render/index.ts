@@ -3,7 +3,7 @@ import { BarChart, LineChart, ScatterChart } from "echarts/charts";
 import { GridComponent, LegendComponent } from "echarts/components";
 import * as echarts from "echarts/core";
 import { SVGRenderer } from "echarts/renderers";
-import type { FlowSpec, FormulaSpec, FunctionSpec, SimSpec, WidgetSpec } from "@kj/schema";
+import type { FlowSpec, FormulaSpec, FunctionSpec, PlaceholderSpec, SimSpec, TableSpec, WidgetSpec } from "@kj/schema";
 import { chartOption, functionOption, initialValues, resolveEmbed, type Palette } from "../index.ts";
 
 echarts.use([BarChart, LineChart, ScatterChart, GridComponent, LegendComponent, SVGRenderer]);
@@ -15,6 +15,13 @@ export interface WidgetHandle {
 export interface WidgetContext {
   /** Thumbnails and measurement render static (no iframes, no slider handlers). */
   interactive: boolean;
+}
+
+let embedHtml: Record<string, string> | null = null;
+
+/** Self-contained decks (offline export) ship each simulation's HTML and load it via srcdoc. */
+export function inlineEmbeds(html: Record<string, string>): void {
+  embedHtml = html;
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?: string): HTMLElementTagNameMap[K] {
@@ -149,11 +156,37 @@ function renderSim(spec: SimSpec, host: HTMLElement, ctx: WidgetContext): Widget
     const iframe = document.createElement("iframe");
     iframe.setAttribute("sandbox", "allow-scripts");
     iframe.title = entry.title.en;
-    iframe.src = entry.src;
+    const inline = embedHtml?.[entry.id];
+    if (inline !== undefined) iframe.srcdoc = inline;
+    else iframe.src = entry.src;
     frame.append(iframe);
   }
   if (entry) frame.append(el("div", "kj-sim-credit", spec.caption || entry.attribution));
   host.append(frame);
+  return { dispose() {} };
+}
+
+function renderTable(spec: TableSpec, host: HTMLElement): WidgetHandle {
+  const table = el("table", "kj-table");
+  const head = el("tr", "");
+  for (const c of spec.columns) head.append(renderRichText(el("th", ""), c));
+  table.append(el("thead", ""), el("tbody", ""));
+  table.tHead!.append(head);
+  for (const r of spec.rows) {
+    const tr = el("tr", "");
+    for (const c of r) tr.append(renderRichText(el("td", ""), c));
+    table.tBodies[0]!.append(tr);
+  }
+  host.append(table);
+  if (spec.caption) host.append(renderRichText(el("div", "kj-table-caption"), spec.caption));
+  return { dispose() {} };
+}
+
+function renderPlaceholder(spec: PlaceholderSpec, host: HTMLElement): WidgetHandle {
+  const box = el("div", "kj-visual-todo");
+  box.append(el("b", "", "图示待补 · Visual to add"));
+  if (spec.hint) box.append(renderRichText(el("span", ""), spec.hint));
+  host.append(box);
   return { dispose() {} };
 }
 
@@ -176,5 +209,9 @@ export function renderWidget(spec: WidgetSpec, host: HTMLElement, ctx: WidgetCon
       return renderFormula(spec, host);
     case "sim":
       return renderSim(spec, host, ctx);
+    case "table":
+      return renderTable(spec, host);
+    case "placeholder":
+      return renderPlaceholder(spec, host);
   }
 }

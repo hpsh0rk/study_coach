@@ -10,7 +10,7 @@ import { stubOutline } from "./outline-stub.ts";
 import { simFor } from "./sims.ts";
 import type { DraftInput } from "./types.ts";
 
-export const OUTLINE_PROMPT_VERSION = "outline.draft@3";
+export const OUTLINE_PROMPT_VERSION = "outline.draft@4";
 /** Source characters sent to the planner; pages beyond it are listed in notCovered. */
 export const OUTLINE_SOURCE_CHARS = 24_000;
 
@@ -89,7 +89,7 @@ export function buildMessages(input: DraftInput, problems?: Violation[]) {
     o.budgetsInPrompt
       ? "- One teaching point per slide. Title = a full-sentence assertion (≤ 12 words). 2–3 key points per slide, each ≤ 9 words."
       : "- One teaching point per slide. Title = a full-sentence assertion.",
-    o.visualPlanning === "outline" ? "- Concept, process and data pages need a meaningful visual (formula, function plot, chart or flow)." : "",
+    o.visualPlanning === "outline" ? "- Concept, process and data pages need a meaningful visual (formula, function plot, chart, flow or a small table). Choose \"none\" only when the point needs a picture none of these can draw; the slide then shows a \"图示待补\" placeholder for the teacher." : "",
     "- sourcePages: the textbook pages ([p.N] markers) that support the slide. Stay faithful to the source; do not invent facts.",
     o.phases ? "- loop: learning loop number (1, 2, 3); use 0 for cover, retrieval, summary and exit." : "",
     input.params.language === "en+zh"

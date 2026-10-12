@@ -92,6 +92,12 @@ export function validateWidget(spec: WidgetSpec): WidgetIssue[] {
     case "formula":
       if (/\\(input|include|href|url)\b/.test(spec.tex)) issues.push({ level: "error", code: "tex", message: "forbidden TeX command" });
       break;
+    case "table":
+      if (spec.rows.some((r) => r.length !== spec.columns.length)) issues.push({ level: "error", code: "table", message: "every table row needs one cell per column" });
+      break;
+    case "placeholder":
+      issues.push({ level: "warning", code: "placeholder", message: "图示待补 · visual still to be added" });
+      break;
     case "flow":
       break;
   }

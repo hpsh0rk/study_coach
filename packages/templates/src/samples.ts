@@ -1,4 +1,4 @@
-import type { FunctionSpec, LayoutId, SlideContent } from "@kj/schema";
+import { LAYOUT_IDS, type FunctionSpec, type LayoutId, type SlideContent, type TableSpec } from "@kj/schema";
 import { BUDGETS } from "./budgets.ts";
 
 export type SampleLang = "en" | "zh";
@@ -130,4 +130,39 @@ export function sampleContent(layout: LayoutId): SlideContent {
     default:
       return maxBudgetContent(layout, "en");
   }
+}
+
+/** A table filled to its hard budget (`narrow` = statement visual column). */
+export function maxBudgetTable(lang: SampleLang, narrow = false): TableSpec {
+  const b = narrow ? BUDGETS.tableNarrow : BUDGETS.table;
+  return {
+    kind: "table",
+    columns: Array.from({ length: b.columns.max }, (_, i) => filler(b.columns.item.max, lang, i)),
+    rows: Array.from({ length: b.rows.max }, (_, r) => Array.from({ length: b.columns.max }, (_, c) => (c === 0 ? filler(b.rows.item.max, lang, r + c + 2) : String(Math.round((r + 1) * (c + 1) * 12.5 * 10) / 10)))),
+    caption: filler(b.caption.max, lang, 7),
+  };
+}
+
+export interface GalleryCell {
+  id: string;
+  layout: LayoutId;
+  content: SlideContent;
+}
+
+/** Every layout as sample / max EN / max ZH, plus the table and "图示待补" visual variants. */
+export function galleryCells(): GalleryCell[] {
+  const cells: GalleryCell[] = [];
+  for (const layout of LAYOUT_IDS) {
+    cells.push({ id: `${layout}-sample`, layout, content: sampleContent(layout) });
+    for (const lang of ["en", "zh"] as const) cells.push({ id: `${layout}-max-${lang}`, layout, content: maxBudgetContent(layout, lang) });
+  }
+  for (const lang of ["en", "zh"] as const) {
+    const st = maxBudgetContent("statement", lang);
+    const ch = maxBudgetContent("chart", lang);
+    if (st.layout === "statement") cells.push({ id: `statement-table-${lang}`, layout: "statement", content: { ...st, visual: maxBudgetTable(lang, true) } });
+    if (ch.layout === "chart") cells.push({ id: `chart-table-${lang}`, layout: "chart", content: { ...ch, chart: maxBudgetTable(lang) } });
+  }
+  const st = maxBudgetContent("statement", "zh");
+  if (st.layout === "statement") cells.push({ id: "statement-placeholder", layout: "statement", content: { ...st, visual: { kind: "placeholder", hint: filler(BUDGETS.placeholder.hint.max, "zh", 3) } } });
+  return cells;
 }

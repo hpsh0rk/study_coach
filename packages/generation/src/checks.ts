@@ -1,5 +1,5 @@
 import { checkSlide, type Violation } from "@kj/pedagogy";
-import type { GlossaryEntry, PageType, SlideContent } from "@kj/schema";
+import type { GlossaryEntry, PageType, SlideContent, TableSpec } from "@kj/schema";
 import { BUDGETS, SLOT_SCHEMAS } from "@kj/templates";
 import { validateWidget, type WidgetIssue } from "@kj/widgets";
 
@@ -24,6 +24,13 @@ export function problemsOf(c: SlideContent, pageType?: PageType): { errors: stri
   return { errors, warnings };
 }
 
+function trimTable<T extends { kind: string }>(w: T, b: (typeof BUDGETS)["table"] | (typeof BUDGETS)["tableNarrow"]): T {
+  if (w.kind !== "table") return w;
+  const t = w as unknown as TableSpec;
+  const n = Math.min(t.columns.length, b.columns.max);
+  return { ...t, columns: t.columns.slice(0, n), rows: t.rows.slice(0, b.rows.max).map((r) => r.slice(0, n)) } as unknown as T;
+}
+
 /** Last-resort, deterministic: trims list lengths to the hard maximum (never cuts sentences). */
 export function truncateLists(c: SlideContent, pageType?: PageType): SlideContent {
   const B = BUDGETS;
@@ -36,9 +43,9 @@ export function truncateLists(c: SlideContent, pageType?: PageType): SlideConten
     case "title":
       return { ...c, objectives: c.objectives.slice(0, B.title.objectives.max) };
     case "statement":
-      return { ...c, bullets: c.bullets.slice(0, B.statement.bullets.max), terms: c.terms.slice(0, B.statement.terms.max) };
+      return { ...c, bullets: c.bullets.slice(0, B.statement.bullets.max), terms: c.terms.slice(0, B.statement.terms.max), visual: trimTable(c.visual, B.tableNarrow) };
     case "chart":
-      return { ...c, takeaways: c.takeaways.slice(0, B.chart.takeaways.max) };
+      return { ...c, takeaways: c.takeaways.slice(0, B.chart.takeaways.max), chart: trimTable(c.chart, B.table) };
     case "steps":
       return { ...c, steps: c.steps.slice(0, B.steps.steps.max), ...(c.fadeFrom !== undefined ? { fadeFrom: Math.min(c.fadeFrom, Math.min(c.steps.length, B.steps.steps.max) - 1) } : {}) };
     case "experiment":

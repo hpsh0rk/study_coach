@@ -8,7 +8,7 @@ export const LAYOUT_IDS = ["title", "statement", "chart", "steps", "experiment",
 export const LayoutId = z.enum(LAYOUT_IDS);
 export type LayoutId = z.infer<typeof LayoutId>;
 
-export const VisualKind = z.enum(["none", "chart", "function", "flow", "formula", "sim"]);
+export const VisualKind = z.enum(["none", "chart", "function", "flow", "formula", "sim", "table"]);
 export type VisualKind = z.infer<typeof VisualKind>;
 
 export const SlideSpec = z.object({

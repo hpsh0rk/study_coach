@@ -28,4 +28,10 @@ export const BUDGETS = {
   quiz: { question: words(14, 20), options: list(3, 4, 4, words(5, 7)), misconception: words(8, 10), explain: words(14, 18) },
   questions: { title: words(8, 12), items: list(2, 3, 4, words(8, 10)), answer: words(4, 6) },
   summary: { title: words(12, 15), nodes: list(3, 3, 4, words(3, 4)), detail: words(6, 8) },
+  /** Table in the wide chart slot: column headings, rows of cells, caption. */
+  table: { columns: list(2, 3, 3, words(1, 2)), rows: list(1, 3, 4, words(1, 2)), caption: words(6, 8) },
+  /** Table in the narrower statement visual column: term | value pairs. */
+  tableNarrow: { columns: list(2, 2, 2, words(1, 2)), rows: list(1, 3, 4, words(1, 2)), caption: words(4, 6) },
+  /** "图示待补" placeholder: what visual would help. */
+  placeholder: { hint: words(8, 12) },
 } as const;

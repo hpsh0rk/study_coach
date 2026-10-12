@@ -68,11 +68,27 @@ export const SimSpec = z.object({
 });
 export type SimSpec = z.infer<typeof SimSpec>;
 
-export const VisualSpec = z.discriminatedUnion("kind", [ChartSpec, FunctionSpec, FlowSpec, FormulaSpec]);
+/** A small comparison table: every row has one cell per column (budgets in @kj/templates). */
+export const TableSpec = z.object({
+  kind: z.literal("table"),
+  columns: z.array(z.string().trim().min(1).max(40)).min(2).max(4),
+  rows: z.array(z.array(z.string().trim().max(40)).min(2).max(4)).min(1).max(6),
+  caption: z.string().max(80).optional(),
+});
+export type TableSpec = z.infer<typeof TableSpec>;
+
+/** "图示待补": the page needs a visual nobody has supplied yet; `hint` says what would help. */
+export const PlaceholderSpec = z.object({
+  kind: z.literal("placeholder"),
+  hint: z.string().trim().max(80).default(""),
+});
+export type PlaceholderSpec = z.infer<typeof PlaceholderSpec>;
+
+export const VisualSpec = z.discriminatedUnion("kind", [ChartSpec, FunctionSpec, FlowSpec, FormulaSpec, TableSpec, PlaceholderSpec]);
 export type VisualSpec = z.infer<typeof VisualSpec>;
 
 export const ExperimentSim = z.discriminatedUnion("kind", [FunctionSpec, SimSpec]);
 export type ExperimentSim = z.infer<typeof ExperimentSim>;
 
-export const WidgetSpec = z.discriminatedUnion("kind", [ChartSpec, FunctionSpec, FlowSpec, FormulaSpec, SimSpec]);
+export const WidgetSpec = z.discriminatedUnion("kind", [ChartSpec, FunctionSpec, FlowSpec, FormulaSpec, SimSpec, TableSpec, PlaceholderSpec]);
 export type WidgetSpec = z.infer<typeof WidgetSpec>;

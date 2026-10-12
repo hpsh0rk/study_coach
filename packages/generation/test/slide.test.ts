@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_PARAMS, type Outline, type SlideSpec } from "@kj/schema";
 import { BUDGETS } from "@kj/templates";
 import { fakeAi } from "../../ai/test/fake.ts";
-import { buildSlideMessages as buildMessages, sourcePagesFor, writeSlide, type WriteInput } from "../src/index.ts";
+import { buildSlideMessages as buildMessages, problemsOf, sourcePagesFor, stubSlide, truncateLists, visualRuleFor, writeSlide, type WriteInput } from "../src/index.ts";
 
 const spec: SlideSpec = { id: "sp2", pageType: "concept", layout: "statement", title: "Waves carry energy, not matter", purpose: "", keyPoints: ["Energy moves"], visual: "formula", minutes: 3, sourcePages: [2], loop: 1 };
 const outline: Outline = { objectives: ["Describe waves"], slides: [spec], glossary: [{ term: "wavelength", zh: "波长" }], notCovered: [] };
@@ -76,5 +76,39 @@ describe("slide writer context", () => {
     const res = await writeSlide(a.ai, { ...outline, slides: [faded] }, "sp3", input());
     expect(a.requests).toHaveLength(2);
     expect(res.content.layout === "steps" && res.content.fadeFrom).toBe(2);
+  });
+});
+
+describe("table and 图示待补 visuals", () => {
+  const text = "The amplitude is the maximum displacement. The wavelength is the distance between crests. The frequency is measured in hertz. The period is the time for one oscillation.";
+  const stubPages = [{ no: 2, text }];
+
+  it("visual rules: table sizes per layout, placeholder for none", () => {
+    expect(visualRuleFor({ ...spec, visual: "table" }, "outline")).toContain("Exactly 2 columns");
+    expect(visualRuleFor({ ...spec, layout: "chart", pageType: "data", visual: "table" }, "outline")).toContain("2–3 columns");
+    expect(visualRuleFor({ ...spec, visual: "none" }, "outline")).toContain('"kind":"placeholder"');
+    expect(visualRuleFor({ ...spec, layout: "quiz", visual: "none" }, "outline")).toBe("");
+  });
+
+  it("stub builds a budget-valid quantity table (narrow and wide) and a placeholder for none", () => {
+    const st = stubSlide({ spec: { ...spec, visual: "table" }, outline, lessonTitle: "Waves", pages: stubPages }).content;
+    expect(st.layout === "statement" && st.visual).toMatchObject({ kind: "table", columns: ["Quantity", "Unit"] });
+    expect(problemsOf(st).errors).toEqual([]);
+    const ch = stubSlide({ spec: { ...spec, layout: "chart", pageType: "data", visual: "table" }, outline, lessonTitle: "Waves", pages: stubPages }).content;
+    expect(ch.layout === "chart" && ch.chart).toMatchObject({ kind: "table", columns: ["Quantity", "Symbol", "Unit"] });
+    expect(ch.layout === "chart" && ch.chart.kind === "table" && ch.chart.rows.length).toBe(4);
+    expect(problemsOf(ch).errors).toEqual([]);
+    const none = stubSlide({ spec: { ...spec, visual: "none" }, outline, lessonTitle: "Waves", pages: stubPages }).content;
+    expect(none.layout === "statement" && none.visual.kind).toBe("placeholder");
+    expect(problemsOf(none).warnings.some((w) => w.includes("图示待补"))).toBe(true);
+  });
+
+  it("truncateLists trims oversized tables to the slot budget", () => {
+    const big = { kind: "table" as const, columns: ["a", "b", "c", "d"], rows: Array.from({ length: 6 }, () => ["1", "2", "3", "4"]) };
+    const st = stubSlide({ spec, outline, lessonTitle: "Waves", pages: stubPages }).content;
+    if (st.layout !== "statement") throw new Error("layout");
+    const fixed = truncateLists({ ...st, visual: big });
+    expect(fixed.layout === "statement" && fixed.visual).toMatchObject({ columns: ["a", "b"] });
+    expect(problemsOf(fixed).errors).toEqual([]);
   });
 });

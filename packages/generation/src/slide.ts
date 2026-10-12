@@ -8,7 +8,7 @@ import { applyGlossary, problemsOf, truncateLists } from "./checks.ts";
 import { optionsOf, type PipelineOptions } from "./options.ts";
 import { stubSlide } from "./slide-stub.ts";
 
-export const SLIDE_PROMPT_VERSION = "slide.write@3";
+export const SLIDE_PROMPT_VERSION = "slide.write@4";
 /** Source characters the writer sees for one slide. */
 export const SLIDE_SOURCE_CHARS = 12_000;
 
@@ -81,7 +81,20 @@ const WIDGET_RULES = [
   '- function: {"kind":"function","expr":"A*sin(2*pi*x/L)","x":[0,4],"y":[-3,3],"xLabel":"distance / m","yLabel":"displacement / cm","params":[{"name":"A","label":"Amplitude / cm","min":0,"max":3,"step":0.1,"value":2}]} — expr uses only x, param names, numbers, + - * / ^, parentheses, pi, e and sin cos tan sqrt abs exp ln log min max.',
   '- chart: {"kind":"chart","type":"bar|line|scatter","xLabel":"...","yLabel":"... / unit","categories":[...],"series":[{"name":"...","data":[...]}],"focus":0} — ≤ 4 series, ≤ 7 categories, real values from the source only.',
   '- flow: {"kind":"flow","steps":["...", "..."]} — 2–6 short steps.',
+  '- table: {"kind":"table","columns":["Quantity","Unit"],"rows":[["wavelength","λ / m"]],"caption":"..."} — every row has one cell per column; cells are 1–2 words or a number with unit, taken from the source.',
+  '- placeholder: {"kind":"placeholder","hint":"Photo of a ripple tank"} — "图示待补": only when the point needs a picture no widget above can draw.',
 ].join("\n");
+
+/** Which visual the writer must produce: the outline's choice, a "图示待补" placeholder for "none", or the writer's own pick. */
+export function visualRuleFor(spec: SlideSpec, planning: PipelineOptions["visualPlanning"]): string {
+  const slotName = spec.layout === "statement" ? "visual" : spec.layout === "chart" ? "chart" : "";
+  if (!slotName) return "";
+  const allowed = spec.layout === "statement" ? "formula, function, chart, flow or table" : "chart, function or table";
+  if (planning === "writer") return `Choose the ${slotName} kind (${allowed}) that best explains this point; use placeholder only if none of them can show it honestly.`;
+  if (spec.visual === "none") return `The ${slotName} slot must be {"kind":"placeholder","hint":"..."}: in the hint, name the diagram or photo the teacher should add (at most ${BUDGETS.placeholder.hint.max} words).`;
+  const kind = spec.layout === "chart" && !["chart", "function", "table"].includes(spec.visual) ? "chart" : spec.visual === "sim" ? "formula" : spec.visual;
+  return `The ${slotName} must be of kind "${kind}".${kind === "table" ? ` ${spec.layout === "statement" ? "Exactly 2 columns" : "2–3 columns"}, at most 4 rows, 1–2 words per cell.` : ""}`;
+}
 
 function neighbours(spec: SlideSpec, outline: Outline): string {
   const i = outline.slides.findIndex((s) => s.id === spec.id);
@@ -99,12 +112,7 @@ export function buildMessages(spec: SlideSpec, input: WriteInput, outline: Outli
   const o = optionsOf(input.options);
   const pages = sourcePagesFor(spec, input);
   const sim = spec.layout === "experiment" ? findEmbed(`${spec.title} ${spec.keyPoints.join(" ")} ${pages.map((p) => p.text).join(" ")}`) : undefined;
-  const visualRule =
-    spec.layout !== "statement"
-      ? ""
-      : o.visualPlanning === "writer"
-        ? "Choose the visual kind (formula, function, chart or flow) that best explains this point."
-        : `The visual must be of kind "${spec.visual === "none" || spec.visual === "sim" ? "formula" : spec.visual}".`;
+  const visualRule = visualRuleFor(spec, o.visualPlanning);
   const lang = input.params.language === "zh" ? "Simplified Chinese" : "English";
   const def = PAGE_TYPES[spec.pageType];
   const system = [

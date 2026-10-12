@@ -1,7 +1,7 @@
 import type { GlossaryEntry, PageText, PageType, VisualKind } from "@kj/schema";
 import { simFor } from "./sims.ts";
 import type { DraftInput, PlannerSection } from "./types.ts";
-import { clip as shorten, glossaryFrom, sentencesOf } from "./text.ts";
+import { clip as shorten, glossaryFrom, quantitiesIn, sentencesOf } from "./text.ts";
 
 interface DraftSlide {
   pageType: PageType;
@@ -99,7 +99,8 @@ export function stubOutline(input: DraftInput): { objectives: string[]; slides: 
       slides.push({ pageType: "worked", title: `Worked example: ${head}`, purpose: "Model the calculation step by step", keyPoints: points.slice(0, 3), visual: "formula", minutes: 4, sourcePages: pages, loop });
       slides.push({ pageType: "faded", title: `Your turn: finish the last step`, purpose: "Faded example", keyPoints: points.slice(0, 3), visual: "formula", minutes: 3, sourcePages: pages, loop });
     } else if (sentences.length > 4) {
-      slides.push({ pageType: "data", title: shorten(sentences[4] ?? head, 12), purpose: `Show ${head} as a graph`, keyPoints: sentences.slice(4, 6).map((x) => shorten(x, 9)), visual: "function", minutes: 2.5, sourcePages: pages, loop });
+      const table = quantitiesIn(text).length >= 2;
+      slides.push({ pageType: "data", title: shorten(sentences[4] ?? head, 12), purpose: `Show ${head} as a ${table ? "table" : "graph"}`, keyPoints: sentences.slice(4, 6).map((x) => shorten(x, 9)), visual: table ? "table" : "function", minutes: 2.5, sourcePages: pages, loop });
     }
     if (sim && !experimentUsed) {
       experimentUsed = true;

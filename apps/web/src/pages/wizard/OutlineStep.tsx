@@ -8,7 +8,9 @@ import { ApiError } from "../../api.ts";
 import { lessonApi, type LessonView, type VersionView } from "../../lessonApi.ts";
 import { Stepper, StepIntro, type StepKey } from "./Stepper.tsx";
 
-const VISUAL_LABEL: Record<VisualKind, string> = { none: "无 None", chart: "图表 Chart", function: "函数图 Plot", flow: "流程 Flow", formula: "公式 Formula", sim: "模拟实验 Sim" };
+const VISUAL_LABEL: Record<VisualKind, string> = { none: "无 None", chart: "图表 Chart", function: "函数图 Plot", flow: "流程 Flow", formula: "公式 Formula", sim: "模拟实验 Sim", table: "表格 Table" };
+/** On layouts that always show a visual, "none" renders the 图示待补 placeholder. */
+const visualLabel = (v: VisualKind, spec: SlideSpec) => (v === "none" && LAYOUTS[spec.layout].visual === "required" ? "图示待补 Visual to add" : VISUAL_LABEL[v]);
 
 function TimeBudget({ outline, minutes }: { outline: Outline; minutes: number }) {
   const t = outlineTiming(outline, { minutes });
@@ -109,7 +111,7 @@ function Row({
               <select value={spec.visual} disabled={readOnly} onChange={(e) => onChange({ ...spec, visual: e.target.value as VisualKind })}>
                 {visuals.map((v) => (
                   <option key={v} value={v}>
-                    {VISUAL_LABEL[v]}
+                    {visualLabel(v, spec)}
                   </option>
                 ))}
               </select>

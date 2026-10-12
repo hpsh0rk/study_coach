@@ -295,7 +295,7 @@ export function measureOverflow(root: HTMLElement): string[] {
 /** Smallest computed font size of body text inside fitted slots (for T-02 checks). */
 export function minBodyFontPx(root: HTMLElement): number {
   let min = Infinity;
-  root.querySelectorAll<HTMLElement>(".kj-slot li, .kj-slot p, .kj-problem, .kj-explain, .kj-option-text, .kj-qa-q, .kj-node-detail, .kj-phase-text, .kj-step-text, .kj-step-why, .kj-chip, .kj-flow-step, .kj-term").forEach((n) => {
+  root.querySelectorAll<HTMLElement>(".kj-slot li, .kj-slot p, .kj-problem, .kj-explain, .kj-option-text, .kj-qa-q, .kj-node-detail, .kj-phase-text, .kj-step-text, .kj-step-why, .kj-chip, .kj-flow-step, .kj-term, .kj-table td, .kj-table th").forEach((n) => {
     min = Math.min(min, parseFloat(getComputedStyle(n).fontSize));
   });
   return min;
