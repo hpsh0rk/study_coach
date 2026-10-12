@@ -2,11 +2,10 @@
 // Bootstraps (or resets) an admin account directly in D1. The admin must change the password on first login.
 //   pnpm admin:create --username admin [--password 'Secret123'] [--remote] [--persist-to .wrangler/state]
 import { execFileSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { pbkdf2Sync, randomBytes } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { argon2id } from "@noble/hashes/argon2.js";
 
 const { values } = parseArgs({
   options: {
@@ -23,11 +22,12 @@ if (!/^[a-z0-9][a-z0-9._-]{2,31}$/.test(username)) throw new Error("username: 3-
 const password = values.password ?? `${randomBytes(9).toString("base64url")}7a`;
 if (password.length < 8 || !/[A-Za-z]/.test(password) || !/\d/.test(password)) throw new Error("password needs 8+ chars with letters and digits");
 
-// Must match apps/app/src/auth/password.ts (PHC string, argon2id m=19456 t=2 p=1).
+// Must match apps/app/src/auth/password.ts.
+const ITERATIONS = 100_000;
 const b64 = (u8) => Buffer.from(u8).toString("base64").replace(/=+$/, "");
 const salt = randomBytes(16);
-const hash = argon2id(password, salt, { m: 19456, t: 2, p: 1, dkLen: 32 });
-const encoded = `$argon2id$v=19$m=19456,t=2,p=1$${b64(salt)}$${b64(hash)}`;
+const hash = pbkdf2Sync(password, salt, ITERATIONS, 32, "sha256");
+const encoded = `pbkdf2-sha256$${ITERATIONS}$${b64(salt)}$${b64(hash)}`;
 
 const id = `usr_${randomBytes(9).toString("base64url").replace(/[-_]/g, "x")}`;
 const q = (s) => `'${String(s).replace(/'/g, "''")}'`;

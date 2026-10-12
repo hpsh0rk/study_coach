@@ -44,58 +44,104 @@ export const loginAttempts = sqliteTable("login_attempts", {
   failures: integer("failures").notNull(),
 });
 
-export const projects = sqliteTable(
-  "projects",
-  {
-    id: text("id").primaryKey(),
-    orgId: text("org_id").notNull().references(() => orgs.id),
-    ownerId: text("owner_id").notNull().references(() => users.id),
-    title: text("title").notNull(),
-    slideCount: integer("slide_count").notNull().default(0),
-    deckVersion: integer("deck_version").notNull().default(0),
-    createdAt: integer("created_at").notNull().$defaultFn(now),
-    updatedAt: integer("updated_at").notNull().$defaultFn(now),
-  },
-  (t) => [index("projects_owner_idx").on(t.orgId, t.ownerId)],
-);
-
 export const documents = sqliteTable(
   "documents",
   {
     id: text("id").primaryKey(),
     orgId: text("org_id").notNull().references(() => orgs.id),
-    projectId: text("project_id").references(() => projects.id),
-    uploadedBy: text("uploaded_by").notNull().references(() => users.id),
+    ownerId: text("owner_id").notNull().references(() => users.id),
     filename: text("filename").notNull(),
-    r2Key: text("r2_key").notNull(),
+    title: text("title").notNull(),
     sizeBytes: integer("size_bytes").notNull(),
-    status: text("status", { enum: ["uploaded", "parsing", "ready", "failed"] }).notNull(),
-    parserId: text("parser_id"),
-    pageCount: integer("page_count"),
-    parsedKey: text("parsed_key"),
-    workflowInstanceId: text("workflow_instance_id"),
-    error: text("error"),
+    pageCount: integer("page_count").notNull(),
+    /** Pages received so far; the document is usable once it equals page_count. */
+    pagesReceived: integer("pages_received").notNull().default(0),
+    hasTextLayer: integer("has_text_layer", { mode: "boolean" }).notNull(),
+    hasBookmarks: integer("has_bookmarks", { mode: "boolean" }).notNull(),
     createdAt: integer("created_at").notNull().$defaultFn(now),
-    updatedAt: integer("updated_at").notNull().$defaultFn(now),
   },
-  (t) => [index("documents_project_idx").on(t.projectId)],
+  (t) => [index("documents_owner_idx").on(t.orgId, t.ownerId)],
+);
+
+export const pages = sqliteTable(
+  "pages",
+  {
+    documentId: text("document_id").notNull().references(() => documents.id, { onDelete: "cascade" }),
+    no: integer("no").notNull(),
+    text: text("text").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.documentId, t.no] })],
 );
 
 export const chapters = sqliteTable(
   "chapters",
   {
-    id: text("id").primaryKey(),
-    documentId: text("document_id").notNull().references(() => documents.id),
+    documentId: text("document_id").notNull().references(() => documents.id, { onDelete: "cascade" }),
+    id: text("id").notNull(),
     parentId: text("parent_id"),
     ord: integer("ord").notNull(),
     level: integer("level").notNull(),
     title: text("title").notNull(),
     pageStart: integer("page_start").notNull(),
     pageEnd: integer("page_end").notNull(),
-    wordCount: integer("word_count").notNull(),
-    estSlides: integer("est_slides").notNull(),
+    words: integer("words").notNull(),
   },
-  (t) => [index("chapters_doc_idx").on(t.documentId)],
+  (t) => [primaryKey({ columns: [t.documentId, t.id] })],
+);
+
+export const lessons = sqliteTable(
+  "lessons",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id").notNull().references(() => orgs.id),
+    ownerId: text("owner_id").notNull().references(() => users.id),
+    documentId: text("document_id").notNull().references(() => documents.id),
+    title: text("title").notNull(),
+    /** LessonScope JSON: chapterIds + normalized page ranges. */
+    scope: text("scope").notNull(),
+    /** LessonParams JSON. */
+    params: text("params").notNull(),
+    theme: text("theme").notNull().default("classic"),
+    createdAt: integer("created_at").notNull().$defaultFn(now),
+    updatedAt: integer("updated_at").notNull().$defaultFn(now),
+  },
+  (t) => [index("lessons_owner_idx").on(t.orgId, t.ownerId)],
+);
+
+/** Immutable once confirmed_at is set (enforced by SQLite triggers in the migration). */
+export const outlineVersions = sqliteTable(
+  "outline_versions",
+  {
+    id: text("id").primaryKey(),
+    lessonId: text("lesson_id").notNull().references(() => lessons.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    outline: text("outline").notNull(),
+    totalMinutes: real("total_minutes").notNull(),
+    ackOverBudget: integer("ack_over_budget", { mode: "boolean" }).notNull().default(false),
+    confirmedAt: integer("confirmed_at"),
+    createdAt: integer("created_at").notNull().$defaultFn(now),
+  },
+  (t) => [uniqueIndex("outline_versions_lesson_version_uq").on(t.lessonId, t.version)],
+);
+
+export const slides = sqliteTable(
+  "slides",
+  {
+    id: text("id").primaryKey(),
+    lessonId: text("lesson_id").notNull().references(() => lessons.id, { onDelete: "cascade" }),
+    outlineVersionId: text("outline_version_id").notNull().references(() => outlineVersions.id),
+    specId: text("spec_id").notNull(),
+    layout: text("layout").notNull(),
+    pageType: text("page_type").notNull(),
+    minutes: real("minutes").notNull(),
+    content: text("content").notNull(),
+    notes: text("notes").notNull(),
+    sources: text("sources").notNull(),
+    warnings: text("warnings").notNull(),
+    providerId: text("provider_id").notNull(),
+    updatedAt: integer("updated_at").notNull().$defaultFn(now),
+  },
+  (t) => [uniqueIndex("slides_version_spec_uq").on(t.outlineVersionId, t.specId)],
 );
 
 export const shareLinks = sqliteTable(
@@ -103,13 +149,12 @@ export const shareLinks = sqliteTable(
   {
     id: text("id").primaryKey(),
     tokenHash: text("token_hash").notNull(),
-    projectId: text("project_id").notNull().references(() => projects.id),
+    lessonId: text("lesson_id").notNull().references(() => lessons.id, { onDelete: "cascade" }),
     createdBy: text("created_by").notNull().references(() => users.id),
     createdAt: integer("created_at").notNull().$defaultFn(now),
-    expiresAt: integer("expires_at"),
     revokedAt: integer("revoked_at"),
   },
-  (t) => [uniqueIndex("share_token_uq").on(t.tokenHash), index("share_project_idx").on(t.projectId)],
+  (t) => [uniqueIndex("share_token_uq").on(t.tokenHash), index("share_lesson_idx").on(t.lessonId)],
 );
 
 export const aiProviders = sqliteTable("ai_providers", {
@@ -147,7 +192,7 @@ export const aiCalls = sqliteTable(
     id: text("id").primaryKey(),
     orgId: text("org_id").notNull(),
     userId: text("user_id").notNull(),
-    projectId: text("project_id"),
+    lessonId: text("lesson_id"),
     capability: text("capability").notNull(),
     promptVersion: text("prompt_version").notNull(),
     providerId: text("provider_id").notNull(),
@@ -159,7 +204,7 @@ export const aiCalls = sqliteTable(
     error: text("error"),
     createdAt: integer("created_at").notNull().$defaultFn(now),
   },
-  (t) => [index("ai_calls_project_idx").on(t.projectId), index("ai_calls_org_time_idx").on(t.orgId, t.createdAt)],
+  (t) => [index("ai_calls_lesson_idx").on(t.lessonId), index("ai_calls_org_time_idx").on(t.orgId, t.createdAt)],
 );
 
 export const auditLog = sqliteTable("audit_log", {

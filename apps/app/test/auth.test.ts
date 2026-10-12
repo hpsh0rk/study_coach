@@ -1,42 +1,25 @@
-import { env, exports } from "cloudflare:workers";
 import { beforeAll, describe, expect, it } from "vitest";
-import { hashPassword } from "../src/auth/password.ts";
-import type { Env } from "../src/env.ts";
-
-const e = env as unknown as Env;
-const worker = (exports as unknown as { default: Fetcher }).default;
-const BASE = "http://kj.test";
-
-class Client {
-  cookie = "";
-  async req(method: string, path: string, body?: unknown, headers: Record<string, string> = {}) {
-    const res = await worker.fetch(`${BASE}${path}`, {
-      method,
-      headers: { "content-type": "application/json", "x-kj-csrf": "1", ...(this.cookie ? { cookie: this.cookie } : {}), ...headers },
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-    });
-    const set = res.headers.get("set-cookie");
-    if (set) this.cookie = set.split(";")[0]!;
-    const text = await res.text();
-    return { status: res.status, json: text ? (JSON.parse(text) as any) : null };
-  }
-}
+import { hashPassword, verifyPassword } from "../src/auth/password.ts";
+import { Client, seedUser } from "./client.ts";
 
 beforeAll(async () => {
-  const now = Date.now();
-  // Cheap argon2 params keep the test fast; verifyPassword reads params from the PHC string.
-  const hash = hashPassword("Admin12345", { m: 64, t: 1, p: 1 });
-  await e.DB.prepare(
-    "INSERT OR REPLACE INTO users (id, org_id, username, display_name, password_hash, role, must_change_password, created_at, updated_at) VALUES ('usr_admin', 'org_default', 'admin', 'Admin', ?, 'admin', 1, ?, ?)",
-  )
-    .bind(hash, now, now)
-    .run();
+  await seedUser("usr_admin", "admin", "Admin12345", { role: "admin" });
+});
+
+describe("PBKDF2 passwords", () => {
+  it("verifies the right password and rejects others and foreign formats", async () => {
+    const h = await hashPassword("Secret123", 1000);
+    expect(h.startsWith("pbkdf2-sha256$1000$")).toBe(true);
+    expect(await verifyPassword("Secret123", h)).toBe(true);
+    expect(await verifyPassword("Secret124", h)).toBe(false);
+    expect(await verifyPassword("Secret123", "$argon2id$v=19$m=1,t=1,p=1$aa$bb")).toBe(false);
+  });
 });
 
 describe("whitelist auth", () => {
   it("rejects bad credentials and unauthenticated access", async () => {
     const c = new Client();
-    expect((await c.req("GET", "/api/projects")).status).toBe(401);
+    expect((await c.req("GET", "/api/lessons")).status).toBe(401);
     expect((await c.req("POST", "/api/auth/login", { username: "admin", password: "wrong-pass1" })).status).toBe(401);
     expect((await c.req("POST", "/api/auth/login", { username: "nobody", password: "wrong-pass1" })).status).toBe(401);
   });

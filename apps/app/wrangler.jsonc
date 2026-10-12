@@ -6,12 +6,12 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
 
-  // React SPA + player shell. API, sims and container callbacks run in the Worker first.
+  // React SPA + player. Only the API runs in the Worker first.
   "assets": {
     "directory": "../web/dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*", "/sim/*", "/internal/*"]
+    "run_worker_first": ["/api/*"]
   },
 
   "d1_databases": [
@@ -24,29 +24,8 @@
     }
   ],
 
-  "r2_buckets": [{ "binding": "FILES", "bucket_name": "study-coach-files" }],
-
-  "durable_objects": {
-    "bindings": [
-      { "name": "PROJECT", "class_name": "ProjectDO" },
-      { "name": "USER_GATE", "class_name": "UserGateDO" }
-    ]
-  },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ProjectDO", "UserGateDO"] }],
-
-  "workflows": [
-    { "name": "study-coach-ingest", "binding": "INGEST_WF", "class_name": "IngestWorkflow" },
-    { "name": "study-coach-generate", "binding": "GENERATE_WF", "class_name": "GenerateWorkflow" }
-  ],
-
   "vars": {
     "ENVIRONMENT": "development",
-    // "pdf-lite" parses inside the Worker; "heavy" sends jobs to containers/heavy (Docker locally).
-    "PARSER": "pdf-lite",
-    "HEAVY_URL": "http://127.0.0.1:8090",
-    "HEAVY_ENGINE": "pypdfium2",
-    // Base URL the heavy container uses to reach this Worker (download PDF, post results).
-    "CALLBACK_BASE_URL": "http://host.docker.internal:8787",
     // Deterministic stub model when no provider is configured in /admin. Set "false" in production.
     "AI_ALLOW_STUB": "true"
   }

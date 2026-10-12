@@ -32,9 +32,6 @@ export async function loadAiConfig(env: Env, orgId: string): Promise<AiConfig> {
 export function makeAi(env: Env, orgId: string) {
   return createAiLayer({
     config: { load: () => loadAiConfig(env, orgId) },
-    gate: {
-      verify: (projectId, token) => env.PROJECT.get(env.PROJECT.idFromName(projectId)).verifyGateToken(token),
-    },
     meter: {
       async record(r) {
         await db(env)
@@ -43,7 +40,7 @@ export function makeAi(env: Env, orgId: string) {
             id: r.id,
             orgId: r.ctx.orgId,
             userId: r.ctx.userId,
-            projectId: r.ctx.projectId ?? null,
+            lessonId: r.ctx.lessonId ?? null,
             capability: r.capability,
             promptVersion: r.promptVersion,
             providerId: r.providerId,

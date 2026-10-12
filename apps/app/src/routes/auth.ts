@@ -11,7 +11,7 @@ const WINDOW_MS = 15 * 60_000;
 const MAX_FAILURES = 8;
 /** Verifying against a dummy hash keeps response time the same for unknown usernames. Lazy: Workers forbid randomness at global scope. */
 let dummyHash: string | undefined;
-const getDummyHash = () => (dummyHash ??= hashPassword("dummy-password-1"));
+const getDummyHash = async () => (dummyHash ??= await hashPassword("dummy-password-1"));
 
 async function tooManyAttempts(env: Env, keys: string[]): Promise<boolean> {
   const now = Date.now();
@@ -42,7 +42,7 @@ export const authRoutes = new Hono<AppBindings>()
     const keys = [`u:${username}`, `ip:${ip}`];
     if (await tooManyAttempts(c.env, keys)) throw new HttpError(429, "RATE_LIMITED", "Too many attempts, try again in 15 minutes · 尝试次数过多，请 15 分钟后再试");
     const user = (await db(c.env).select().from(users).where(eq(users.username, username)).limit(1))[0];
-    const ok = verifyPassword(body.password, user?.passwordHash ?? getDummyHash()) && !!user && !user.disabledAt;
+    const ok = (await verifyPassword(body.password, user?.passwordHash ?? (await getDummyHash()))) && !!user && !user.disabledAt;
     if (!ok || !user) {
       await recordFailure(c.env, keys);
       throw new HttpError(401, "INVALID_CREDENTIALS", "Wrong username or password · 用户名或密码错误");
@@ -64,11 +64,11 @@ export const authRoutes = new Hono<AppBindings>()
     const body = await parseJson(c, z.object({ currentPassword: z.string().min(1), newPassword: z.string().min(1) }));
     const me = c.get("user");
     const row = (await db(c.env).select().from(users).where(eq(users.id, me.id)).limit(1))[0]!;
-    if (!verifyPassword(body.currentPassword, row.passwordHash)) throw new HttpError(400, "INVALID_CREDENTIALS", "Current password is wrong · 当前密码错误");
+    if (!(await verifyPassword(body.currentPassword, row.passwordHash))) throw new HttpError(400, "INVALID_CREDENTIALS", "Current password is wrong · 当前密码错误");
     const problem = passwordProblem(body.newPassword);
     if (problem) throw new HttpError(400, "WEAK_PASSWORD", problem);
     if (body.newPassword === body.currentPassword) throw new HttpError(400, "WEAK_PASSWORD", "Choose a different password · 新密码不能与旧密码相同");
-    await db(c.env).update(users).set({ passwordHash: hashPassword(body.newPassword), mustChangePassword: false, updatedAt: Date.now() }).where(eq(users.id, me.id));
+    await db(c.env).update(users).set({ passwordHash: await hashPassword(body.newPassword), mustChangePassword: false, updatedAt: Date.now() }).where(eq(users.id, me.id));
     await destroyUserSessions(c.env, me.id);
     await createSession(c, me.id);
     await db(c.env).insert(auditLog).values({ orgId: me.orgId, actorId: me.id, action: "auth.password_changed" });

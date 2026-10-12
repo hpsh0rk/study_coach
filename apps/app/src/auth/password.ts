@@ -1,7 +1,8 @@
-import { argon2id } from "@noble/hashes/argon2.js";
-
-/** OWASP minimum for argon2id. Encoded in PHC format so parameters can change without migrations. */
-export const ARGON2_PARAMS = { m: 19456, t: 2, p: 1 } as const;
+/**
+ * PBKDF2-SHA256 via WebCrypto (no WASM, fits the Workers CPU budget).
+ * Stored as "pbkdf2-sha256$<iterations>$<salt b64>$<hash b64>" so the cost can change without a migration.
+ */
+export const PBKDF2_ITERATIONS = 100_000;
 
 function b64(bytes: Uint8Array): string {
   let s = "";
@@ -11,14 +12,18 @@ function b64(bytes: Uint8Array): string {
 
 function unb64(text: string): Uint8Array {
   const pad = text.length % 4 ? "=".repeat(4 - (text.length % 4)) : "";
-  const bin = atob(text + pad);
-  return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  return Uint8Array.from(atob(text + pad), (c) => c.charCodeAt(0));
 }
 
-export function hashPassword(password: string, params: { m: number; t: number; p: number } = ARGON2_PARAMS): string {
+async function derive(password: string, salt: Uint8Array, iterations: number, bytes: number): Promise<Uint8Array> {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: salt as BufferSource, iterations }, key, bytes * 8);
+  return new Uint8Array(bits);
+}
+
+export async function hashPassword(password: string, iterations = PBKDF2_ITERATIONS): Promise<string> {
   const salt = crypto.getRandomValues(new Uint8Array(16));
-  const hash = argon2id(password, salt, { ...params, dkLen: 32 });
-  return `$argon2id$v=19$m=${params.m},t=${params.t},p=${params.p}$${b64(salt)}$${b64(hash)}`;
+  return `pbkdf2-sha256$${iterations}$${b64(salt)}$${b64(await derive(password, salt, iterations, 32))}`;
 }
 
 function timingSafeEqual(a: Uint8Array, b: Uint8Array): boolean {
@@ -28,18 +33,13 @@ function timingSafeEqual(a: Uint8Array, b: Uint8Array): boolean {
   return diff === 0;
 }
 
-export function verifyPassword(password: string, encoded: string): boolean {
+export async function verifyPassword(password: string, encoded: string): Promise<boolean> {
   const parts = encoded.split("$");
-  // ["", "argon2id", "v=19", "m=..,t=..,p=..", salt, hash]
-  if (parts.length !== 6 || parts[1] !== "argon2id") return false;
-  const params = Object.fromEntries(parts[3]!.split(",").map((kv) => kv.split("=") as [string, string]));
-  const m = Number(params.m);
-  const t = Number(params.t);
-  const p = Number(params.p);
-  if (!m || !t || !p) return false;
-  const expected = unb64(parts[5]!);
-  const actual = argon2id(password, unb64(parts[4]!), { m, t, p, dkLen: expected.length });
-  return timingSafeEqual(actual, expected);
+  if (parts.length !== 4 || parts[0] !== "pbkdf2-sha256") return false;
+  const iterations = Number(parts[1]);
+  if (!Number.isInteger(iterations) || iterations < 1 || iterations > 1_000_000) return false;
+  const expected = unb64(parts[3]!);
+  return timingSafeEqual(await derive(password, unb64(parts[2]!), iterations, expected.length), expected);
 }
 
 export function passwordProblem(password: string): string | null {
