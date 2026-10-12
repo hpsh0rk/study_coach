@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { PageType } from "./outline.ts";
-import { ChartSpec, ExperimentSim, FunctionSpec, VisualSpec } from "./widgets.ts";
+import { ChartSpec, ExperimentSim, FunctionSpec, PlaceholderSpec, TableSpec, VisualSpec } from "./widgets.ts";
 
 /**
  * Structural slot shapes per layout. Text may contain inline math as $...$.
@@ -26,7 +26,7 @@ export const StatementContent = z.object({
 export const ChartContent = z.object({
   layout: z.literal("chart"),
   title: text.min(1),
-  chart: z.discriminatedUnion("kind", [ChartSpec, FunctionSpec]),
+  chart: z.discriminatedUnion("kind", [ChartSpec, FunctionSpec, TableSpec, PlaceholderSpec]),
   takeaways: z.array(text.min(1)),
   source: text.default(""),
 });
@@ -82,6 +82,17 @@ export const SlideContent = z.discriminatedUnion("layout", [
 export type SlideContent = z.infer<typeof SlideContent>;
 export type ContentOf<L extends SlideContent["layout"]> = Extract<SlideContent, { layout: L }>;
 
+/**
+ * "待核实": a number, formula or calculation on screen that the deterministic check could not
+ * find in the cited source pages (or that does not compute). Teachers verify; nothing is blocked.
+ */
+export const Unverified = z.object({
+  kind: z.enum(["number", "formula", "calc", "source"]),
+  text: z.string().max(120),
+  detail: z.string().max(200).default(""),
+});
+export type Unverified = z.infer<typeof Unverified>;
+
 export const Slide = z.object({
   id: z.string(),
   specId: z.string(),
@@ -98,5 +109,6 @@ export const Slide = z.object({
   overflow: z.array(z.string()).optional(),
   /** The previous content (before the last edit or regeneration) can be restored. */
   canUndo: z.boolean().optional(),
+  unverified: z.array(Unverified).optional(),
 });
 export type Slide = z.infer<typeof Slide>;

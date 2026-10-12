@@ -1,0 +1,1 @@
+ALTER TABLE `slides` ADD `unverified` text DEFAULT '[]' NOT NULL;

@@ -5,10 +5,13 @@ import { checkOutline, densityOf, outlineTiming, PAGE_TYPES, planBudget, TIME_TO
 import { PAGE_TYPE_IDS, type Outline, type PageType, type SlideSpec, type VisualKind } from "@kj/schema";
 import { layoutForPageType, LAYOUTS, PAGE_TYPE_VISUALS } from "@kj/templates";
 import { ApiError } from "../../api.ts";
+import { UnverifiedBadge } from "../../components/Unverified.tsx";
 import { lessonApi, type LessonView, type VersionView } from "../../lessonApi.ts";
 import { Stepper, StepIntro, type StepKey } from "./Stepper.tsx";
 
-const VISUAL_LABEL: Record<VisualKind, string> = { none: "无 None", chart: "图表 Chart", function: "函数图 Plot", flow: "流程 Flow", formula: "公式 Formula", sim: "模拟实验 Sim" };
+const VISUAL_LABEL: Record<VisualKind, string> = { none: "无 None", chart: "图表 Chart", function: "函数图 Plot", flow: "流程 Flow", formula: "公式 Formula", sim: "模拟实验 Sim", table: "表格 Table" };
+/** On layouts that always show a visual, "none" renders the 图示待补 placeholder. */
+const visualLabel = (v: VisualKind, spec: SlideSpec) => (v === "none" && LAYOUTS[spec.layout].visual === "required" ? "图示待补 Visual to add" : VISUAL_LABEL[v]);
 
 function TimeBudget({ outline, minutes }: { outline: Outline; minutes: number }) {
   const t = outlineTiming(outline, { minutes });
@@ -43,12 +46,14 @@ function Row({
   n,
   readOnly,
   labels,
+  unverified,
   onChange,
   onMove,
   onDelete,
   onAdd,
 }: {
   spec: SlideSpec;
+  unverified: number;
   i: number;
   n: number;
   readOnly: boolean;
@@ -87,6 +92,7 @@ function Row({
             <input type="number" min={0.5} max={15} step={0.5} value={spec.minutes} disabled={readOnly} aria-label="分钟 Minutes" onChange={(e) => onChange({ ...spec, minutes: Math.max(0.5, Math.min(15, Number(e.target.value) || 0.5)) })} />
             分钟
           </label>
+          <UnverifiedBadge count={unverified} />
           <span className={`density ${d.level}`} title={d.reasons.join("\n") || "内容量合适 · OK"} data-testid="density">
             {d.level === "ok" ? "● 合适" : d.level === "dense" ? "● 偏多" : "● 偏少"}
           </span>
@@ -109,7 +115,7 @@ function Row({
               <select value={spec.visual} disabled={readOnly} onChange={(e) => onChange({ ...spec, visual: e.target.value as VisualKind })}>
                 {visuals.map((v) => (
                   <option key={v} value={v}>
-                    {VISUAL_LABEL[v]}
+                    {visualLabel(v, spec)}
                   </option>
                 ))}
               </select>
@@ -158,6 +164,7 @@ export function OutlineStep({ view, reached, onChanged }: { view: LessonView; re
   }, [view.version]);
 
   const warnings = useMemo(() => (outline ? checkOutline(outline, params) : []), [outline, params]);
+  const flagged = useMemo(() => new Map(view.slides.map((s) => [s.specId, s.unverified?.length ?? 0])), [view.slides]);
 
   function update(slides: SlideSpec[]) {
     if (!outline) return;
@@ -269,6 +276,7 @@ export function OutlineStep({ view, reached, onChanged }: { view: LessonView; re
             n={slides.length}
             readOnly={readOnly}
             labels={labels}
+            unverified={flagged.get(s.id) ?? 0}
             onChange={(next) => update(slides.map((x, j) => (j === i ? next : x)))}
             onMove={(dir) => {
               const arr = [...slides];

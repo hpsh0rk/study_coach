@@ -6,11 +6,12 @@ import { checkOutline, outlineTiming, PAGE_TYPES, planBudget, type Violation } f
 import { layoutForPageType, LAYOUTS, PAGE_TYPE_VISUALS } from "@kj/templates";
 import type { EmbedEntry } from "@kj/widgets";
 import { optionsOf, type PipelineOptions } from "./options.ts";
+import { checkSourcePages, enforceCheckCadence } from "./outline-repair.ts";
 import { stubOutline } from "./outline-stub.ts";
 import { simFor } from "./sims.ts";
 import type { DraftInput } from "./types.ts";
 
-export const OUTLINE_PROMPT_VERSION = "outline.draft@3";
+export const OUTLINE_PROMPT_VERSION = "outline.draft@4";
 /** Source characters sent to the planner; pages beyond it are listed in notCovered. */
 export const OUTLINE_SOURCE_CHARS = 24_000;
 
@@ -21,7 +22,7 @@ export interface DraftResult {
 }
 
 /** What the model returns: specs without ids; layout is derived from the page type. */
-const DraftSpec = SlideSpec.omit({ id: true, layout: true });
+const DraftSpec = SlideSpec.omit({ id: true, layout: true, sourceIssue: true });
 type DraftOutline = { objectives: Outline["objectives"]; slides: z.infer<typeof DraftSpec>[]; glossary?: GlossaryEntry[]; notCovered?: string[] };
 
 /** The model-facing schema shrinks with phases=false (no loop) and visualPlanning=writer (no visual). */
@@ -89,7 +90,7 @@ export function buildMessages(input: DraftInput, problems?: Violation[]) {
     o.budgetsInPrompt
       ? "- One teaching point per slide. Title = a full-sentence assertion (≤ 12 words). 2–3 key points per slide, each ≤ 9 words."
       : "- One teaching point per slide. Title = a full-sentence assertion.",
-    o.visualPlanning === "outline" ? "- Concept, process and data pages need a meaningful visual (formula, function plot, chart or flow)." : "",
+    o.visualPlanning === "outline" ? "- Concept, process and data pages need a meaningful visual (formula, function plot, chart, flow or a small table). Choose \"none\" only when the point needs a picture none of these can draw; the slide then shows a \"图示待补\" placeholder for the teacher." : "",
     "- sourcePages: the textbook pages ([p.N] markers) that support the slide. Stay faithful to the source; do not invent facts.",
     o.phases ? "- loop: learning loop number (1, 2, 3); use 0 for cover, retrieval, summary and exit." : "",
     input.params.language === "en+zh"
@@ -122,13 +123,17 @@ export interface NormalizeContext {
   validPages: number[];
   /** Experiment pages become practice pages when no catalog simulation fits. */
   simAvailable: boolean;
+  /** Text of the selection, for the source-page match check. */
+  pages?: PageText[];
   options?: Partial<PipelineOptions>;
 }
 
-/** Assigns ids, derives layouts, clamps minutes/visuals/pages to legal values. */
+/**
+ * Assigns ids, derives layouts, clamps minutes/visuals to legal values, flags (never silently drops)
+ * bad source pages and inserts check pages so no lecture run exceeds 10 minutes.
+ */
 export function normalizeOutline(draft: DraftOutline, ctx: NormalizeContext): Outline {
   const o = optionsOf(ctx.options);
-  const valid = new Set(ctx.validPages);
   const slides = draft.slides.map((s, i) => {
     const pageType: PageType = s.pageType === "experiment" && !ctx.simAvailable ? "practice" : s.pageType;
     const def = PAGE_TYPES[pageType];
@@ -142,16 +147,16 @@ export function normalizeOutline(draft: DraftOutline, ctx: NormalizeContext): Ou
       visual: VisualKind.parse(visual),
       loop: o.phases ? s.loop : 0,
       minutes: Math.min(def.range[1], Math.max(def.range[0], s.minutes)),
-      sourcePages: [...new Set(s.sourcePages.filter((p) => valid.has(p)))].sort((a, b) => a - b),
       keyPoints: s.keyPoints.slice(0, 6),
     });
   });
-  return Outline.parse({ objectives: draft.objectives, slides, glossary: draft.glossary ?? [], notCovered: draft.notCovered ?? [] });
+  const checked = enforceCheckCadence(checkSourcePages(slides, ctx.validPages, ctx.pages));
+  return Outline.parse({ objectives: draft.objectives, slides: checked, glossary: draft.glossary ?? [], notCovered: draft.notCovered ?? [] });
 }
 
-/** Deterministic L-03 repair: scale minutes toward the lesson length within each page type's range. */
+/** Deterministic L-03 repair: scale minutes toward the lesson length within each page type's range (check cadence kept). */
 export function rebalanceMinutes(outline: Outline, params: LessonParams): Outline {
-  let slides = outline.slides;
+  let slides = enforceCheckCadence(outline.slides);
   for (let i = 0; i < 4; i++) {
     const total = slides.reduce((n, s) => n + s.minutes, 0);
     if (Math.abs(total - params.minutes) / params.minutes <= 0.05) break;
@@ -162,12 +167,12 @@ export function rebalanceMinutes(outline: Outline, params: LessonParams): Outlin
       return { ...s, minutes: m };
     });
   }
-  return { ...outline, slides };
+  return { ...outline, slides: enforceCheckCadence(slides) };
 }
 
 export async function draftOutline(ai: AiLayer, input: DraftInput): Promise<DraftResult> {
   const o = optionsOf(input.options);
-  const ctx: NormalizeContext = { validPages: input.pages.map((p) => p.no), simAvailable: !!simFor(input), options: o };
+  const ctx: NormalizeContext = { validPages: input.pages.map((p) => p.no), simAvailable: !!simFor(input), pages: input.pages, options: o };
   const { omitted } = sourceOf(input.pages);
   const labels = new Map(input.pages.flatMap((p) => (p.label ? [[p.no, p.label] as const] : [])));
   const call = async (problems?: Violation[]) => {

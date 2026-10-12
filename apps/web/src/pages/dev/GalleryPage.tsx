@@ -1,15 +1,8 @@
 import { useEffect, useRef } from "react";
 import { useSearchParams } from "react-router";
-import { LAYOUT_IDS, type LayoutId, type ThemeId } from "@kj/schema";
-import { CANVAS, LAYOUTS, maxBudgetContent, sampleContent, type SampleLang } from "@kj/templates";
+import type { LayoutId, ThemeId } from "@kj/schema";
+import { CANVAS, galleryCells, LAYOUTS } from "@kj/templates";
 import { applyStep, fitSlide, measureOverflow, minBodyFontPx, renderSlide } from "@kj/templates/render";
-
-type Kind = "sample" | "max-en" | "max-zh";
-const KINDS: Kind[] = ["sample", "max-en", "max-zh"];
-
-function contentFor(layout: LayoutId, kind: Kind) {
-  return kind === "sample" ? sampleContent(layout) : maxBudgetContent(layout, kind.slice(4) as SampleLang);
-}
 
 /**
  * Every layout with sample and max-budget content. Each slide is laid out at full 1920×1080 and
@@ -28,23 +21,21 @@ export function GalleryPage() {
     document.body.dataset.galleryReady = "0";
     const disposers: (() => void)[] = [];
     const cells: { cell: HTMLElement; slide: HTMLElement }[] = [];
-    for (const layout of only ? [only] : LAYOUT_IDS) {
-      for (const kind of KINDS) {
-        const cell = document.createElement("figure");
-        cell.className = "gallery-cell";
-        cell.dataset.testid = `slide-${layout}-${kind}`;
-        const frame = document.createElement("div");
-        frame.className = "gallery-frame";
-        const r = renderSlide({ content: contentFor(layout, kind), sources: [3, 4] }, { theme, interactive: true, badge: LAYOUTS[layout].label.en, index: 0, total: 1 });
-        applyStep(r.el, r.steps);
-        frame.append(r.el);
-        const cap = document.createElement("figcaption");
-        cap.textContent = `${layout} · ${kind}`;
-        cell.append(frame, cap);
-        root.append(cell);
-        cells.push({ cell, slide: r.el });
-        disposers.push(r.dispose);
-      }
+    for (const g of galleryCells().filter((g) => !only || g.layout === only)) {
+      const cell = document.createElement("figure");
+      cell.className = "gallery-cell";
+      cell.dataset.testid = `slide-${g.id}`;
+      const frame = document.createElement("div");
+      frame.className = "gallery-frame";
+      const r = renderSlide({ content: g.content, sources: [3, 4] }, { theme, interactive: true, badge: LAYOUTS[g.layout].label.en, index: 0, total: 1 });
+      applyStep(r.el, r.steps);
+      frame.append(r.el);
+      const cap = document.createElement("figcaption");
+      cap.textContent = g.id;
+      cell.append(frame, cap);
+      root.append(cell);
+      cells.push({ cell, slide: r.el });
+      disposers.push(r.dispose);
     }
     void (async () => {
       await document.fonts.ready;
@@ -65,7 +56,7 @@ export function GalleryPage() {
     <div className="gallery-page" style={{ ["--canvas-w" as string]: `${CANVAS.width}px` }}>
       <h1>Layout gallery · 版式样张</h1>
       <p className="muted">
-        8 layouts × (sample, max budget EN, max budget ZH) · theme {theme} · <a href="?theme=classic">classic</a> · <a href="?theme=chalk">chalk</a>
+        8 layouts × (sample, max budget EN, max budget ZH) + table and placeholder visuals · theme {theme} · <a href="?theme=classic">classic</a> · <a href="?theme=chalk">chalk</a>
       </p>
       <div ref={host} className="gallery-grid" />
     </div>

@@ -147,6 +147,8 @@ export const slides = sqliteTable(
     notes: text("notes").notNull(),
     sources: text("sources").notNull(),
     warnings: text("warnings").notNull(),
+    /** JSON Unverified[]: numbers/formulas/calculations the source check could not confirm (待核实). */
+    unverified: text("unverified").notNull().default("[]"),
     providerId: text("provider_id").notNull(),
     /** Content and notes before the last edit or regeneration (one level of undo). */
     prevContent: text("prev_content"),

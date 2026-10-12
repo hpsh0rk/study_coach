@@ -55,3 +55,25 @@ export function glossaryFrom(text: string, max: number): { term: string; zh: str
     .slice(0, max)
     .map(([term, zh]) => ({ term, zh }));
 }
+
+const QUANTITIES: [term: string, symbol: string, unit: string][] = [
+  ["wave speed", "v", "m/s"],
+  ["frequency", "f", "Hz"],
+  ["wavelength", "λ", "m"],
+  ["amplitude", "A", "m"],
+  ["period", "T", "s"],
+  ["force", "F", "N"],
+  ["mass", "m", "kg"],
+  ["acceleration", "a", "m/s²"],
+  ["energy", "E", "J"],
+  ["power", "P", "W"],
+  ["current", "I", "A"],
+  ["voltage", "V", "V"],
+  ["resistance", "R", "Ω"],
+];
+
+/** Physical quantities named in the text, with symbol and SI unit, in a fixed order (stub tables). */
+export function quantitiesIn(text: string): { term: string; symbol: string; unit: string }[] {
+  const lower = text.toLowerCase();
+  return QUANTITIES.filter(([term]) => new RegExp(`\\b${term}s?\\b`).test(lower)).map(([term, symbol, unit]) => ({ term, symbol, unit }));
+}

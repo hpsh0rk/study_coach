@@ -1,6 +1,8 @@
 import { and, asc, desc, eq, gte, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
 import { pagesInRanges } from "@kj/pdf-structure";
-import { LessonParams, LessonScope, newId, Outline, sha256Hex, SlideContent, type PageText, type Slide, type SlideSpec } from "@kj/schema";
+import { checkSourceText, slideKey, sourceUnverified } from "@kj/generation";
+import { verifyNumbers } from "@kj/pedagogy";
+import { LessonParams, LessonScope, newId, Outline, SlideContent, type PageText, type PageType, type Slide, type Unverified } from "@kj/schema";
 import { db } from "./auth/session.ts";
 import { documents, lessons, outlineVersions, pages, slides } from "./db/schema.ts";
 import type { Env, SessionUser } from "./env.ts";
@@ -53,7 +55,10 @@ export function confirmedOutline(v: VersionRow): Outline {
 }
 
 export async function scopePages(env: Env, documentId: string, scope: LessonScope): Promise<PageText[]> {
-  const wanted = pagesInRanges(scope.ranges);
+  return pagesByNo(env, documentId, pagesInRanges(scope.ranges));
+}
+
+export async function pagesByNo(env: Env, documentId: string, wanted: number[]): Promise<PageText[]> {
   const out: PageText[] = [];
   for (let i = 0; i < wanted.length; i += 90) {
     const chunk = wanted.slice(i, i + 90);
@@ -86,11 +91,6 @@ export async function pageLabels(env: Env, documentId: string): Promise<Record<n
   return Object.fromEntries(rows.map((r) => [r.no, r.label!]));
 }
 
-export async function specHash(spec: SlideSpec, params: LessonParams): Promise<string> {
-  const { id: _id, ...rest } = spec;
-  return sha256Hex(JSON.stringify({ spec: rest, params }));
-}
-
 export function slideFromRow(r: SlideRow): Slide {
   return {
     id: r.id,
@@ -103,8 +103,21 @@ export function slideFromRow(r: SlideRow): Slide {
     notes: r.notes,
     sources: JSON.parse(r.sources) as number[],
     warnings: JSON.parse(r.warnings) as string[],
+    unverified: JSON.parse(r.unverified) as Unverified[],
     canUndo: r.prevContent !== null,
   };
+}
+
+/**
+ * Re-runs the 待核实 check for edited content against the slide's cited pages (or the version's whole
+ * selection); the outline's source-page flag for the slide stays until the outline itself is fixed.
+ */
+export async function unverifiedFor(env: Env, documentId: string, row: SlideRow, content: SlideContent, notes: string): Promise<Unverified[]> {
+  const sources = JSON.parse(row.sources) as number[];
+  const version = await versionOf(env, row.lessonId, row.outlineVersionId);
+  const spec = outlineOf(version).slides.find((s) => s.id === row.specId);
+  const list = sources.length ? await pagesByNo(env, documentId, sources) : await scopePages(env, documentId, versionScope(version));
+  return [...(spec ? sourceUnverified(spec) : []), ...verifyNumbers(content, checkSourceText(sources, list), { pageType: row.pageType as PageType, notes })].slice(0, 10);
 }
 
 /** Slides of a version in outline order (missing specs are simply not generated yet). */
@@ -118,13 +131,13 @@ export async function slidesOf(env: Env, version: VersionRow): Promise<Slide[]> 
 }
 
 /**
- * Copies slides whose spec (and params) are unchanged from any earlier version of the lesson into
- * `version`, so confirming a revised outline keeps every untouched — or hand-edited — slide.
+ * Copies slides whose writer inputs (`slideKey`: spec plan, level, language) are unchanged from any earlier
+ * version of the lesson into `version`, so confirming a revised outline keeps every untouched — or hand-edited — slide.
  */
 export async function carryOverSlides(env: Env, version: VersionRow): Promise<void> {
   const params = versionParams(version);
   const specs = outlineOf(version).slides;
-  const hashes = await Promise.all(specs.map((s) => specHash(s, params)));
+  const hashes = await Promise.all(specs.map((s) => slideKey(s, params)));
   const d = db(env);
   const existing = new Set((await d.select({ specId: slides.specId }).from(slides).where(eq(slides.outlineVersionId, version.id))).map((r) => r.specId));
   const candidates = await d
@@ -137,7 +150,8 @@ export async function carryOverSlides(env: Env, version: VersionRow): Promise<vo
   const rows = specs.flatMap((spec, i) => {
     const src = byHash.get(hashes[i]!);
     if (!src || existing.has(spec.id)) return [];
-    return [{ ...src, id: newId("sl"), outlineVersionId: version.id, specId: spec.id, prevContent: null, prevNotes: null, updatedAt: Date.now() }];
+    const unverified = [...sourceUnverified(spec), ...(JSON.parse(src.unverified) as Unverified[]).filter((u) => u.kind !== "source")].slice(0, 10);
+    return [{ ...src, id: newId("sl"), outlineVersionId: version.id, specId: spec.id, unverified: JSON.stringify(unverified), prevContent: null, prevNotes: null, updatedAt: Date.now() }];
   });
   for (let i = 0; i < rows.length; i += 5) await d.insert(slides).values(rows.slice(i, i + 5));
 }
@@ -189,6 +203,6 @@ export function deckExport(lesson: LessonRow, version: VersionRow, list: Slide[]
     },
     meta: { outlineVersion: version.version, confirmedAt: version.confirmedAt },
     outline: outlineOf(version),
-    slides: list.map(({ canUndo: _u, ...s }) => (extra.includeNotes ? s : { ...s, notes: "" })),
+    slides: list.map(({ canUndo: _u, ...s }) => (extra.includeNotes ? s : { ...s, notes: "", unverified: [] })),
   };
 }

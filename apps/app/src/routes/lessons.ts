@@ -1,11 +1,12 @@
 import { and, eq, isNull } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
-import { draftOutline, problemsOf, SpecNotFoundError, workedSpecFor, writeSlide, type PlannerSection } from "@kj/generation";
+import { checkSourcePages, draftOutline, problemsOf, slideKey, SpecNotFoundError, workedSpecFor, writeSlide, type PlannerSection } from "@kj/generation";
 import { normalizeRanges, rangesForChapters } from "@kj/pdf-structure";
 import { checkOutline, outlineTiming } from "@kj/pedagogy";
 import { DEFAULT_PARAMS, LessonParams, newId, Outline, PageRange, randomToken, sha256Hex, SlideContent, ThemeId, type ChapterNode, type LessonScope } from "@kj/schema";
 import { layoutForPageType, SLOT_SCHEMAS } from "@kj/templates";
+import { describeIssue, slotIssues, widgetIssues } from "@kj/templates/issues";
 import { makeAi } from "../ai.ts";
 import { chapters, lessons, outlineVersions, shareLinks, slides } from "../db/schema.ts";
 import type { AppBindings, Env, SessionUser } from "../env.ts";
@@ -27,8 +28,8 @@ import {
   scopePages,
   scopeWords,
   slideFromRow,
+  unverifiedFor,
   slidesOf,
-  specHash,
   versionOf,
   versionParams,
   versionScope,
@@ -93,6 +94,26 @@ function normalizeEdited(outline: Outline): Outline {
   });
 }
 
+/**
+ * Source-page flags on a teacher's edit: slides whose pages changed are checked afresh against the version's
+ * selection; on unchanged pages the teacher may clear a flag ("页码没问题") but never set one.
+ */
+async function recheckSources(env: Env, lesson: LessonRow, v: VersionRow, outline: Outline): Promise<Outline> {
+  const before = new Map(outlineOf(v).slides.map((s) => [s.id, s]));
+  const same = (a: number[], b: number[]) => a.length === b.length && a.every((p, i) => p === b[i]);
+  const changed = outline.slides.some((s) => !before.has(s.id) || !same(before.get(s.id)!.sourcePages, s.sourcePages));
+  const pageTexts = changed ? await scopePages(env, lesson.documentId, versionScope(v)) : [];
+  const checked = changed ? checkSourcePages(outline.slides.map((s) => ({ ...s, sourceIssue: undefined })), pageTexts.map((p) => p.no), pageTexts) : outline.slides;
+  return {
+    ...outline,
+    slides: outline.slides.map((s, i) => {
+      const old = before.get(s.id);
+      if (old && same(old.sourcePages, s.sourcePages)) return { ...s, sourceIssue: s.sourceIssue && old.sourceIssue };
+      return checked[i]!;
+    }),
+  };
+}
+
 function immutableGuard(err: unknown): never {
   if (err instanceof Error && /OUTLINE_VERSION_IMMUTABLE/.test(`${err.message} ${(err as { cause?: Error }).cause?.message ?? ""}`)) {
     throw new HttpError(409, "OUTLINE_VERSION_IMMUTABLE", "A confirmed outline cannot be changed; start a new version · 已确认的大纲不能修改，请新建版本");
@@ -100,13 +121,14 @@ function immutableGuard(err: unknown): never {
   throw err;
 }
 
-async function insertVersion(env: Env, lesson: LessonRow, outline: Outline): Promise<VersionRow> {
+/** `snapshot` defaults to the lesson's current settings; a revision copies its source version's snapshot instead. */
+async function insertVersion(env: Env, lesson: LessonRow, outline: Outline, snapshot: { params: string; scope: string } = lesson): Promise<VersionRow> {
   const prev = await latestVersion(env, lesson.id);
   const id = newId("ov");
   const totalMinutes = outline.slides.reduce((n, s) => n + s.minutes, 0);
   await db(env)
     .insert(outlineVersions)
-    .values({ id, lessonId: lesson.id, version: (prev?.version ?? 0) + 1, outline: JSON.stringify(outline), params: lesson.params, scope: lesson.scope, specCount: outline.slides.length, totalMinutes });
+    .values({ id, lessonId: lesson.id, version: (prev?.version ?? 0) + 1, outline: JSON.stringify(outline), params: snapshot.params, scope: snapshot.scope, specCount: outline.slides.length, totalMinutes });
   return versionOf(env, lesson.id, id);
 }
 
@@ -185,8 +207,8 @@ export const lessonRoutes = new Hono<AppBindings>()
     const lesson = await ownedLesson(c.env, c.get("user"), c.req.param("id"));
     const v = await versionOf(c.env, lesson.id, c.req.param("vid"));
     const body = await parseJson(c, z.object({ outline: Outline }));
-    const outline = normalizeEdited(body.outline);
     if (v.confirmedAt !== null) immutableGuard(new Error("OUTLINE_VERSION_IMMUTABLE"));
+    const outline = await recheckSources(c.env, lesson, v, normalizeEdited(body.outline));
     await db(c.env)
       .update(outlineVersions)
       .set({ outline: JSON.stringify(outline), specCount: outline.slides.length, totalMinutes: outline.slides.reduce((n, s) => n + s.minutes, 0) })
@@ -212,7 +234,7 @@ export const lessonRoutes = new Hono<AppBindings>()
   .post("/:id/outline-versions/:vid/revise", async (c) => {
     const lesson = await ownedLesson(c.env, c.get("user"), c.req.param("id"));
     const v = await versionOf(c.env, lesson.id, c.req.param("vid"));
-    const next = await insertVersion(c.env, lesson, outlineOf(v));
+    const next = await insertVersion(c.env, lesson, outlineOf(v), v);
     return c.json({ version: versionView(next) }, 201);
   })
   /**
@@ -254,7 +276,7 @@ export const lessonRoutes = new Hono<AppBindings>()
       lessonId: lesson.id,
       outlineVersionId: v.id,
       specId,
-      specHash: await specHash(spec, params),
+      specHash: await slideKey(spec, params),
       layout: spec.layout,
       pageType: spec.pageType,
       minutes: spec.minutes,
@@ -262,6 +284,7 @@ export const lessonRoutes = new Hono<AppBindings>()
       notes: res.notes,
       sources: JSON.stringify(res.sources),
       warnings: JSON.stringify(res.warnings),
+      unverified: JSON.stringify(res.unverified),
       providerId: res.providerId,
       prevContent: current?.content ?? null,
       prevNotes: current?.notes ?? null,
@@ -281,14 +304,20 @@ export const lessonRoutes = new Hono<AppBindings>()
     if (body.content !== undefined) {
       const parsed = SLOT_SCHEMAS[row.layout as SlideContent["layout"]].safeParse(body.content);
       if (!parsed.success) {
-        throw new HttpError(422, "INVALID_CONTENT", parsed.error.issues.slice(0, 5).map((i) => `${i.path.join(".")}: ${i.message}`).join("; "), parsed.error.issues.slice(0, 20));
+        const issues = slotIssues({ ...(body.content as object), layout: row.layout } as SlideContent);
+        const shown = issues.length ? issues : parsed.error.issues.map((i) => ({ path: i.path, message: i.message }));
+        throw new HttpError(422, "INVALID_CONTENT", shown.slice(0, 5).map(describeIssue).join("；"), shown.slice(0, 20));
       }
       content = parsed.data as SlideContent;
     }
+    const broken = body.content !== undefined ? widgetIssues(content) : [];
+    if (broken.length) throw new HttpError(422, "INVALID_CONTENT", broken.map(describeIssue).join("；"), broken);
     const found = problemsOf(content, row.pageType as Parameters<typeof problemsOf>[1]);
+    const notes = body.notes ?? row.notes;
+    const unverified = await unverifiedFor(c.env, lesson.documentId, row, content, notes);
     await db(c.env)
       .update(slides)
-      .set({ content: JSON.stringify(content), notes: body.notes ?? row.notes, warnings: JSON.stringify([...found.errors, ...found.warnings]), prevContent: row.content, prevNotes: row.notes, updatedAt: Date.now() })
+      .set({ content: JSON.stringify(content), notes, warnings: JSON.stringify([...found.errors, ...found.warnings]), unverified: JSON.stringify(unverified), prevContent: row.content, prevNotes: row.notes, updatedAt: Date.now() })
       .where(eq(slides.id, row.id));
     return c.json({ slide: slideFromRow(await ownedSlide(c.env, lesson.id, row.id)) });
   })
@@ -299,9 +328,11 @@ export const lessonRoutes = new Hono<AppBindings>()
     if (row.prevContent === null) throw new HttpError(409, "NOTHING_TO_UNDO", "Nothing to undo · 没有可撤销的修改");
     const content = SlideContent.parse(JSON.parse(row.prevContent));
     const found = problemsOf(content, row.pageType as Parameters<typeof problemsOf>[1]);
+    const notes = row.prevNotes ?? row.notes;
+    const unverified = await unverifiedFor(c.env, lesson.documentId, row, content, notes);
     await db(c.env)
       .update(slides)
-      .set({ content: row.prevContent, notes: row.prevNotes ?? row.notes, warnings: JSON.stringify([...found.errors, ...found.warnings]), prevContent: row.content, prevNotes: row.notes, updatedAt: Date.now() })
+      .set({ content: row.prevContent, notes, warnings: JSON.stringify([...found.errors, ...found.warnings]), unverified: JSON.stringify(unverified), prevContent: row.content, prevNotes: row.notes, updatedAt: Date.now() })
       .where(eq(slides.id, row.id));
     return c.json({ slide: slideFromRow(await ownedSlide(c.env, lesson.id, row.id)) });
   })

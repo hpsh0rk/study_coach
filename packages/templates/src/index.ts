@@ -1,7 +1,13 @@
 import { z } from "zod";
 import {
   ChartContent,
+  ChartSpec,
   countWords,
+  FlowSpec,
+  FormulaSpec,
+  FunctionSpec,
+  PlaceholderSpec,
+  TableSpec,
   ExperimentContent,
   QuestionsContent,
   QuizContent,
@@ -61,9 +67,9 @@ export function layoutForPageType(pageType: PageType): LayoutId {
 export const PAGE_TYPE_VISUALS: Record<PageType, VisualKind[]> = {
   cover: ["none"],
   retrieval: ["none"],
-  concept: ["formula", "function", "chart", "flow"],
-  process: ["flow", "formula", "function"],
-  data: ["chart", "function"],
+  concept: ["formula", "function", "chart", "flow", "table", "none"],
+  process: ["flow", "formula", "function", "table", "none"],
+  data: ["chart", "table", "function", "none"],
   worked: ["formula", "none"],
   faded: ["formula", "none"],
   practice: ["none"],
@@ -81,6 +87,20 @@ const arr = <T extends z.ZodType>(item: T, b: ListBudget) => z.array(item).min(b
 
 const B = BUDGETS;
 
+type TableBudget = (typeof BUDGETS)["table"] | (typeof BUDGETS)["tableNarrow"];
+const tableSlot = (b: TableBudget) =>
+  TableSpec.extend({
+    columns: arr(str("column heading", b.columns.item), b.columns),
+    rows: arr(z.array(z.string().trim().max(b.rows.item.max * 12).refine(within(b.rows.item), msg("table cell", b.rows.item))), b.rows),
+    caption: z.string().trim().max(b.caption.max * 12).refine(within(b.caption), msg("table caption", b.caption)).optional(),
+  }).refine((t) => t.rows.every((r) => r.length === t.columns.length), { message: "every table row needs one cell per column", path: ["rows"] });
+/** Table in the chart slot (up to 3 columns). */
+export const TABLE_SLOT = tableSlot(B.table);
+/** Table in the statement visual column (exactly 2 columns). */
+export const TABLE_NARROW_SLOT = tableSlot(B.tableNarrow);
+export const PLACEHOLDER_SLOT = PlaceholderSpec.extend({ hint: optStr("placeholder hint", B.placeholder.hint) });
+export const FLOW_SLOT = FlowSpec.extend({ steps: arr(str("flow step", B.flow.item), B.flow) });
+
 /** Budget-refined slot schemas: these go to the model as JSON Schema and validate its output. */
 export const SLOT_SCHEMAS = {
   title: TitleContent.extend({
@@ -90,11 +110,13 @@ export const SLOT_SCHEMAS = {
   }),
   statement: StatementContent.extend({
     title: str("title", B.statement.title),
+    visual: z.discriminatedUnion("kind", [ChartSpec, FunctionSpec, FLOW_SLOT, FormulaSpec, TABLE_NARROW_SLOT, PLACEHOLDER_SLOT]),
     bullets: arr(str("bullet", B.statement.bullets.item), B.statement.bullets).refine((xs) => xs.reduce((n, s) => n + countWords(s), 0) <= B.statement.bodyTotal.max, `bullets: at most ${B.statement.bodyTotal.max} words in total`),
     terms: arr(z.object({ term: str("term", B.statement.terms.item), zh: z.string().trim().max(12).default("") }), B.statement.terms),
   }),
   chart: ChartContent.extend({
     title: str("title", B.chart.title),
+    chart: z.discriminatedUnion("kind", [ChartSpec, FunctionSpec, TABLE_SLOT, PLACEHOLDER_SLOT]),
     takeaways: arr(str("takeaway", B.chart.takeaways.item), B.chart.takeaways),
     source: optStr("source", B.chart.source),
   }),
@@ -134,7 +156,7 @@ export function stepsOf(content: SlideContent): number {
     case "title":
       return 0;
     case "statement":
-      return Math.max(0, content.bullets.length - 1);
+      return Math.max(0, content.bullets.length - 1, content.visual.kind === "flow" ? content.visual.steps.length - 1 : 0);
     case "chart":
       return content.takeaways.length;
     case "steps":

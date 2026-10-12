@@ -4,6 +4,7 @@ import { applyStep, fitSlide, renderSlide, type RenderedSlide } from "@kj/templa
 import { clampPosition, fitStage, keyAction, nextPosition, prevPosition, type Position } from "./navigation.ts";
 
 export * from "./navigation.ts";
+export * from "./presenter.ts";
 
 export type PlayerSlide = Pick<Slide, "content" | "sources" | "notes" | "pageType">;
 
@@ -15,6 +16,8 @@ export interface PlayerOptions {
   start?: Position;
   badge?(slide: PlayerSlide): string;
   onChange?(pos: Position): void;
+  /** The blank screen (B / .) was toggled. */
+  onBlank?(on: boolean): void;
   onSourceClick?(page: number): void;
   pageLabels?: Record<number, string>;
 }
@@ -121,17 +124,23 @@ export class Player {
       else if (action === "first") this.go({ index: 0, step: 0 });
       else if (action === "last") this.go({ index: this.steps.length - 1, step: this.steps[this.steps.length - 1] ?? 0 });
       else if (action === "fullscreen") this.toggleFullscreen();
-      else if (action === "blank") this.blank.hidden = !this.blank.hidden;
+      else if (action === "blank") this.setBlank(this.blank.hidden);
       else if (action === "notes" && opts.showNotes) this.toggleNotes();
     };
-    this.root.addEventListener("keydown", onKey);
+    // On the document, so presentation clickers (PageUp/PageDown) work wherever focus is.
+    const doc = container.ownerDocument;
+    const onDocKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || (e.target instanceof HTMLElement && e.target.closest("select, [contenteditable=true], .modal"))) return;
+      onKey(e);
+    };
+    doc.addEventListener("keydown", onDocKey);
     this.frame.addEventListener("click", (e) => {
       if ((e.target as HTMLElement).closest("button, input, a, select, iframe, .kj-widget")) return;
-      if (!this.blank.hidden) this.blank.hidden = true;
+      if (!this.blank.hidden) this.setBlank(false);
       else this.next();
     });
     this.obs = scaleInto(this.frame, this.stage);
-    this.disposers.push(() => this.root.removeEventListener("keydown", onKey));
+    this.disposers.push(() => doc.removeEventListener("keydown", onDocKey));
     this.show();
     this.root.focus();
   }
@@ -154,6 +163,17 @@ export class Player {
     this.pos = p;
     if (changed || !this.current) this.show();
     else this.reveal();
+  }
+
+  get blanked(): boolean {
+    return !this.blank.hidden;
+  }
+
+  setBlank(on: boolean): void {
+    if (this.blank.hidden === !on) return;
+    this.blank.hidden = !on;
+    this.root.dataset.blank = on ? "1" : "0";
+    this.opts.onBlank?.(on);
   }
 
   toggleNotes(): void {

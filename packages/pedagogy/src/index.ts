@@ -245,3 +245,4 @@ export function checkSlide(c: SlideContent): Violation[] {
 export const LEVEL_LABEL = { basic: "基础 Basic", intermediate: "中等 Intermediate", advanced: "较强 Advanced" } as const;
 export const LESSON_TYPE_LABEL = { new: "新授课 New content", review: "复习课 Review", lab: "实验课 Lab" } as const;
 export const LANGUAGE_LABEL = { en: "英文授课 English", zh: "中文授课 Chinese", "en+zh": "英文授课 + 中文术语 English + 中文术语" } as const;
+export { evalArithmetic, numbersIn, symbolsOf, texToPlain, verifyNumbers, type FoundNumber, type VerifyOptions } from "./numbers.ts";

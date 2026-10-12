@@ -1,14 +1,14 @@
 import { z } from "zod";
 import { jsonSchemaOf, type AiLayer, type CallContext } from "@kj/ai";
-import { PAGE_TYPES } from "@kj/pedagogy";
-import { LAYOUT_IDS, SlideContent, type GlossaryEntry, type LayoutId, type LessonParams, type Outline, type PageText, type SlideSpec } from "@kj/schema";
+import { PAGE_TYPES, verifyNumbers } from "@kj/pedagogy";
+import { LAYOUT_IDS, SlideContent, type GlossaryEntry, type LayoutId, type LessonParams, type Outline, type PageText, type SlideSpec, type Unverified } from "@kj/schema";
 import { BUDGETS, LAYOUTS, SLOT_SCHEMAS } from "@kj/templates";
 import { findEmbed } from "@kj/widgets";
-import { applyGlossary, problemsOf, truncateLists } from "./checks.ts";
+import { applyGlossary, problemsOf, sanitizeWidgets, truncateLists } from "./checks.ts";
 import { optionsOf, type PipelineOptions } from "./options.ts";
 import { stubSlide } from "./slide-stub.ts";
 
-export const SLIDE_PROMPT_VERSION = "slide.write@3";
+export const SLIDE_PROMPT_VERSION = "slide.write@5";
 /** Source characters the writer sees for one slide. */
 export const SLIDE_SOURCE_CHARS = 12_000;
 
@@ -45,7 +45,31 @@ export interface WriteResult {
   notes: string;
   sources: number[];
   warnings: string[];
+  /** 待核实: numbers, formulas and calculations the source check could not confirm. */
+  unverified: Unverified[];
   providerId: string;
+}
+
+/** 待核实 entries for an outline spec whose source pages were out of range or look shifted. */
+export function sourceUnverified(spec: Pick<SlideSpec, "sourceIssue">): Unverified[] {
+  const i = spec.sourceIssue;
+  if (!i) return [];
+  const cited = i.cited.length ? `p.${i.cited.join(", ")}` : "—";
+  const suggested = i.suggested.length ? ` · 可能是 p.${i.suggested.join(", ")}` : "";
+  return [
+    {
+      kind: "source",
+      text: cited,
+      detail: (i.kind === "out-of-range" ? `大纲引用的页不在所选范围内${suggested} · cited page outside the selection` : `引用页和这一页的内容对不上${suggested} · cited page does not match the slide`).slice(0, 200),
+    },
+  ];
+}
+
+/** The text a slide is checked against: its cited pages, or the whole selection when it cites none. */
+export function checkSourceText(sourcePages: number[], pages: PageText[]): string {
+  const cited = new Set(sourcePages);
+  const picked = cited.size ? pages.filter((p) => cited.has(p.no)) : pages;
+  return picked.map((p) => p.text).join("\n");
 }
 
 export class SpecNotFoundError extends Error {
@@ -80,8 +104,21 @@ const WIDGET_RULES = [
   '- formula: {"kind":"formula","tex":"v = f\\\\lambda","caption":"..."} (KaTeX).',
   '- function: {"kind":"function","expr":"A*sin(2*pi*x/L)","x":[0,4],"y":[-3,3],"xLabel":"distance / m","yLabel":"displacement / cm","params":[{"name":"A","label":"Amplitude / cm","min":0,"max":3,"step":0.1,"value":2}]} — expr uses only x, param names, numbers, + - * / ^, parentheses, pi, e and sin cos tan sqrt abs exp ln log min max.',
   '- chart: {"kind":"chart","type":"bar|line|scatter","xLabel":"...","yLabel":"... / unit","categories":[...],"series":[{"name":"...","data":[...]}],"focus":0} — ≤ 4 series, ≤ 7 categories, real values from the source only.',
-  '- flow: {"kind":"flow","steps":["...", "..."]} — 2–6 short steps.',
+  '- flow: {"kind":"flow","steps":["...", "..."]} — 2–5 steps, at most 4 words each.',
+  '- table: {"kind":"table","columns":["Quantity","Unit"],"rows":[["wavelength","λ / m"]],"caption":"..."} — every row has one cell per column; cells are 1–2 words or a number with unit, taken from the source.',
+  '- placeholder: {"kind":"placeholder","hint":"Photo of a ripple tank"} — "图示待补": only when the point needs a picture no widget above can draw.',
 ].join("\n");
+
+/** Which visual the writer must produce: the outline's choice, a "图示待补" placeholder for "none", or the writer's own pick. */
+export function visualRuleFor(spec: SlideSpec, planning: PipelineOptions["visualPlanning"]): string {
+  const slotName = spec.layout === "statement" ? "visual" : spec.layout === "chart" ? "chart" : "";
+  if (!slotName) return "";
+  const allowed = spec.layout === "statement" ? "formula, function, chart, flow or table" : "chart, function or table";
+  if (planning === "writer") return `Choose the ${slotName} kind (${allowed}) that best explains this point; use placeholder only if none of them can show it honestly.`;
+  if (spec.visual === "none") return `The ${slotName} slot must be {"kind":"placeholder","hint":"..."}: in the hint, name the diagram or photo the teacher should add (at most ${BUDGETS.placeholder.hint.max} words).`;
+  const kind = spec.layout === "chart" && !["chart", "function", "table"].includes(spec.visual) ? "chart" : spec.visual === "sim" ? "formula" : spec.visual;
+  return `The ${slotName} must be of kind "${kind}".${kind === "table" ? ` ${spec.layout === "statement" ? "Exactly 2 columns" : "2–3 columns"}, at most 4 rows, 1–2 words per cell.` : ""}`;
+}
 
 function neighbours(spec: SlideSpec, outline: Outline): string {
   const i = outline.slides.findIndex((s) => s.id === spec.id);
@@ -99,16 +136,11 @@ export function buildMessages(spec: SlideSpec, input: WriteInput, outline: Outli
   const o = optionsOf(input.options);
   const pages = sourcePagesFor(spec, input);
   const sim = spec.layout === "experiment" ? findEmbed(`${spec.title} ${spec.keyPoints.join(" ")} ${pages.map((p) => p.text).join(" ")}`) : undefined;
-  const visualRule =
-    spec.layout !== "statement"
-      ? ""
-      : o.visualPlanning === "writer"
-        ? "Choose the visual kind (formula, function, chart or flow) that best explains this point."
-        : `The visual must be of kind "${spec.visual === "none" || spec.visual === "sim" ? "formula" : spec.visual}".`;
+  const visualRule = visualRuleFor(spec, o.visualPlanning);
   const lang = input.params.language === "zh" ? "Simplified Chinese" : "English";
   const def = PAGE_TYPES[spec.pageType];
   const system = [
-    `You write the on-screen content of ONE slide for a ${input.params.minutes}-minute lesson (student level: ${input.params.level}). Screen text in ${lang}.`,
+    `You write the on-screen content of ONE slide of a lesson (student level: ${input.params.level}). Screen text in ${lang}.`,
     input.params.language === "en+zh" ? "Students are Chinese speakers learning in English: give key terms with Chinese translations in `terms` where the layout has them." : "",
     `Layout "${spec.layout}" (${LAYOUTS[spec.layout].label.en}); page type ${spec.pageType} (${def.label.en}), about ${spec.minutes} minutes.`,
     o.budgetsInPrompt ? budgetText(spec.layout) : "",
@@ -179,11 +211,17 @@ export async function writeSlide(ai: AiLayer, outline: Outline, specId: string, 
     });
 
   const finish = (c: SlideContent) => pinSim(applyGlossary(c, outline.glossary), spec, pages);
+  const checkText = checkSourceText(spec.sourcePages, input.pages);
+  const invented = (c: SlideContent, notes: string) =>
+    verifyNumbers(c, checkText, { pageType: spec.pageType, notes })
+      .filter((u) => u.kind === "number" || u.kind === "calc")
+      .map((u) => (u.kind === "number" ? `number ${u.text}: not on the cited pages (待核实) — use only numbers from the source, or remove it` : `calculation ${u.text}: does not compute (待核实) — ${u.detail}`));
   let res = await call();
   let content = finish(res.output.content);
   let found = problemsOf(content, spec.pageType);
-  if (found.errors.length && res.providerId !== "stub" && o.slideCheckRetry) {
-    res = await call(found.errors);
+  const firstInvented = invented(content, res.output.notes);
+  if ((found.errors.length || firstInvented.length) && res.providerId !== "stub" && o.slideCheckRetry) {
+    res = await call([...found.errors, ...firstInvented]);
     content = finish(res.output.content);
     found = problemsOf(content, spec.pageType);
   }
@@ -191,11 +229,18 @@ export async function writeSlide(ai: AiLayer, outline: Outline, specId: string, 
     content = truncateLists(content, spec.pageType);
     found = problemsOf(content, spec.pageType);
   }
+  const safe = sanitizeWidgets(content);
+  if (safe.replaced.length) {
+    content = safe.content;
+    found = problemsOf(content, spec.pageType);
+  }
+  const notes = res.output.notes.slice(0, NOTES_MAX);
   return {
     content,
-    notes: res.output.notes.slice(0, NOTES_MAX),
+    notes,
     sources: spec.sourcePages,
-    warnings: [...found.errors, ...found.warnings],
+    warnings: [...safe.replaced.map((r) => `widget replaced: ${r}`), ...found.errors, ...found.warnings],
+    unverified: [...sourceUnverified(spec), ...verifyNumbers(content, checkText, { pageType: spec.pageType, notes })].slice(0, 10),
     providerId: res.providerId,
   };
 }

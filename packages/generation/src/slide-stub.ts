@@ -1,7 +1,7 @@
-import type { ExperimentSim, FunctionSpec, Outline, PageText, SlideContent, SlideSpec, VisualSpec } from "@kj/schema";
+import type { ExperimentSim, FunctionSpec, Outline, PageText, PlaceholderSpec, SlideContent, SlideSpec, TableSpec, VisualSpec } from "@kj/schema";
 import { BUDGETS } from "@kj/templates";
 import { findEmbed } from "@kj/widgets";
-import { clip, glossaryFrom, sentencesOf } from "./text.ts";
+import { clip, glossaryFrom, quantitiesIn, sentencesOf } from "./text.ts";
 
 const PREDICT: Record<string, { question: string; options: string[]; observe: string[] }> = {
   "wave-string": {
@@ -61,9 +61,30 @@ const waveFn = (params: boolean): FunctionSpec => ({
     : [],
 });
 
-function visualFor(spec: SlideSpec, source: string, bullets: string[]): VisualSpec {
+const placeholderFor = (spec: SlideSpec): PlaceholderSpec => ({ kind: "placeholder", hint: clip(`Diagram: ${spec.title}`, BUDGETS.placeholder.hint.max) });
+
+/** Quantity | (symbol) | unit table from the source, else term | 中文 from the glossary; none if fewer than two rows. */
+export function stubTable(source: string, outline: Outline, narrow: boolean): TableSpec | undefined {
+  const b = narrow ? BUDGETS.tableNarrow : BUDGETS.table;
+  const q = quantitiesIn(source).slice(0, b.rows.max);
+  if (q.length >= 2) {
+    return narrow
+      ? { kind: "table", columns: ["Quantity", "Unit"], rows: q.map((x) => [x.term, `${x.symbol} / ${x.unit}`]) }
+      : { kind: "table", columns: ["Quantity", "Symbol", "Unit"], rows: q.map((x) => [x.term, x.symbol, x.unit]), caption: "SI units used in this section" };
+  }
+  const lower = source.toLowerCase();
+  const terms = (outline.glossary.length ? outline.glossary.filter((g) => g.zh && lower.includes(g.term.toLowerCase())) : glossaryFrom(source, b.rows.max)).slice(0, b.rows.max);
+  if (terms.length >= 2) return { kind: "table", columns: ["Term", "中文"], rows: terms.map((t) => [clip(t.term, 2), t.zh]) };
+  return undefined;
+}
+
+function visualFor(spec: SlideSpec, source: string, bullets: string[], outline: Outline): VisualSpec {
   const formula = findFormula(source);
   switch (spec.visual) {
+    case "table":
+      return stubTable(source, outline, true) ?? placeholderFor(spec);
+    case "none":
+      return placeholderFor(spec);
     case "formula":
       if (formula) return { kind: "formula", tex: formula.tex, caption: `${formula.lhs}: ${formula.a} × ${formula.b}` };
       break;
@@ -74,7 +95,7 @@ function visualFor(spec: SlideSpec, source: string, bullets: string[]): VisualSp
       break;
   }
   if (formula && spec.visual !== "flow") return { kind: "formula", tex: formula.tex };
-  const steps = pad(bullets.map((b) => clip(b, 5).slice(0, 40)), 3, (i) => `Step ${i + 1}`).slice(0, 4);
+  const steps = pad(bullets.map((b) => clip(b, BUDGETS.flow.item.max).slice(0, 40)), 3, (i) => `Step ${i + 1}`).slice(0, BUDGETS.flow.soft);
   return { kind: "flow", steps };
 }
 
@@ -114,14 +135,14 @@ export function stubSlide(input: StubInput): { content: SlideContent; notes: str
       break;
     case "statement": {
       const bullets = pad(pts.slice(0, 3).map((p) => clip(p, 8)), 1, () => clip(spec.title, 8));
-      content = { layout: "statement", title, bullets, visual: visualFor(spec, source, bullets), terms: termsFor(`${spec.title} ${bullets.join(" ")}`, outline, 2) };
+      content = { layout: "statement", title, bullets, visual: visualFor(spec, source, bullets, outline), terms: termsFor(`${spec.title} ${bullets.join(" ")}`, outline, 2) };
       break;
     }
     case "chart":
       content = {
         layout: "chart",
         title,
-        chart: waveFn(true),
+        chart: spec.visual === "table" ? (stubTable(source, outline, false) ?? placeholderFor(spec)) : spec.visual === "none" ? placeholderFor(spec) : waveFn(true),
         takeaways: pad(pts.slice(0, 2).map((p) => clip(p, 8)), 1, () => "Read the trend from the graph"),
         source: spec.sourcePages.length ? `Textbook p.${spec.sourcePages[0]}` : "",
       };

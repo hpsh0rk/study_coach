@@ -6,7 +6,7 @@ const MODEL_SDKS = ["openai", "@anthropic-ai/sdk", "@google/genai", "@google/gen
 
 export default tseslint.config(
   {
-    ignores: ["**/node_modules/**", "**/dist/**", "**/.wrangler/**", "apps/app/migrations/**", "test-results/**", "playwright-report/**", "containers/**"],
+    ignores: ["**/node_modules/**", "**/dist/**", "apps/web/public/offline/**", "**/.wrangler/**", "apps/app/migrations/**", "test-results/**", "playwright-report/**", "containers/**"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

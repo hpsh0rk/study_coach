@@ -3,7 +3,7 @@ import { BarChart, LineChart, ScatterChart } from "echarts/charts";
 import { GridComponent, LegendComponent } from "echarts/components";
 import * as echarts from "echarts/core";
 import { SVGRenderer } from "echarts/renderers";
-import type { FlowSpec, FormulaSpec, FunctionSpec, SimSpec, WidgetSpec } from "@kj/schema";
+import type { FlowSpec, FormulaSpec, FunctionSpec, PlaceholderSpec, SimSpec, TableSpec, WidgetSpec } from "@kj/schema";
 import { chartOption, functionOption, initialValues, resolveEmbed, type Palette } from "../index.ts";
 
 echarts.use([BarChart, LineChart, ScatterChart, GridComponent, LegendComponent, SVGRenderer]);
@@ -15,6 +15,13 @@ export interface WidgetHandle {
 export interface WidgetContext {
   /** Thumbnails and measurement render static (no iframes, no slider handlers). */
   interactive: boolean;
+}
+
+let embedHtml: Record<string, string> | null = null;
+
+/** Self-contained decks (offline export) ship each simulation's HTML and load it via srcdoc. */
+export function inlineEmbeds(html: Record<string, string>): void {
+  embedHtml = html;
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?: string): HTMLElementTagNameMap[K] {
@@ -114,9 +121,10 @@ function renderFunction(spec: FunctionSpec, host: HTMLElement, ctx: WidgetContex
 
 function renderFlow(spec: FlowSpec, host: HTMLElement): WidgetHandle {
   const list = el("ol", "kj-flow");
+  list.dataset.n = String(spec.steps.length);
   spec.steps.forEach((s, i) => {
     const li = el("li", "kj-flow-step");
-    li.dataset.step = String(i + 1);
+    if (i > 0) li.dataset.step = String(i);
     renderRichText(li, s);
     list.append(li);
   });
@@ -149,7 +157,9 @@ function renderSim(spec: SimSpec, host: HTMLElement, ctx: WidgetContext): Widget
     const iframe = document.createElement("iframe");
     iframe.setAttribute("sandbox", "allow-scripts");
     iframe.title = entry.title.en;
-    iframe.src = entry.src;
+    const inline = embedHtml?.[entry.id];
+    if (inline !== undefined) iframe.srcdoc = inline;
+    else iframe.src = entry.src;
     frame.append(iframe);
   }
   if (entry) frame.append(el("div", "kj-sim-credit", spec.caption || entry.attribution));
@@ -157,8 +167,45 @@ function renderSim(spec: SimSpec, host: HTMLElement, ctx: WidgetContext): Widget
   return { dispose() {} };
 }
 
+function renderTable(spec: TableSpec, host: HTMLElement): WidgetHandle {
+  const table = el("table", "kj-table");
+  const head = el("tr", "");
+  for (const c of spec.columns) head.append(renderRichText(el("th", ""), c));
+  table.append(el("thead", ""), el("tbody", ""));
+  table.tHead!.append(head);
+  for (const r of spec.rows) {
+    const tr = el("tr", "");
+    for (const c of r) tr.append(renderRichText(el("td", ""), c));
+    table.tBodies[0]!.append(tr);
+  }
+  host.append(table);
+  if (spec.caption) host.append(renderRichText(el("div", "kj-table-caption"), spec.caption));
+  return { dispose() {} };
+}
+
+function renderPlaceholder(spec: PlaceholderSpec, host: HTMLElement): WidgetHandle {
+  const box = el("div", "kj-visual-todo");
+  box.append(el("b", "", "图示待补 · Visual to add"));
+  if (spec.hint) box.append(renderRichText(el("span", ""), spec.hint));
+  host.append(box);
+  return { dispose() {} };
+}
+
 /** Renders a widget into `host` (which must already have its final size). */
+/** Renders a widget; a spec that throws (e.g. an expression that does not compile) shows the 图示待补 placeholder instead. */
 export function renderWidget(spec: WidgetSpec, host: HTMLElement, ctx: WidgetContext): WidgetHandle {
+  try {
+    return renderWidgetUnchecked(spec, host, ctx);
+  } catch (e) {
+    host.replaceChildren();
+    host.classList.remove(`kj-widget-${spec.kind}`);
+    host.classList.add("kj-widget-placeholder", "kj-widget-failed");
+    host.dataset.error = (e as Error).message.slice(0, 200);
+    return renderPlaceholder({ kind: "placeholder", hint: "图示无法显示，请在编辑器里修改 · visual could not be drawn" }, host);
+  }
+}
+
+function renderWidgetUnchecked(spec: WidgetSpec, host: HTMLElement, ctx: WidgetContext): WidgetHandle {
   host.classList.add("kj-widget", `kj-widget-${spec.kind}`);
   switch (spec.kind) {
     case "chart": {
@@ -176,5 +223,9 @@ export function renderWidget(spec: WidgetSpec, host: HTMLElement, ctx: WidgetCon
       return renderFormula(spec, host);
     case "sim":
       return renderSim(spec, host, ctx);
+    case "table":
+      return renderTable(spec, host);
+    case "placeholder":
+      return renderPlaceholder(spec, host);
   }
 }
