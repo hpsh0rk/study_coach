@@ -151,6 +151,7 @@ for (let i = 0; i < titles.length; i++) {
 await pointAt(page, page.getByTestId("scope-estimate"));
 await pause(2500);
 await click(page, page.getByRole("button", { name: /下一步：课时设置/ }));
+if (await page.getByTestId("thin-warning").isVisible().catch(() => false)) await click(page, page.getByTestId("chapters-next"));
 
 // ── 4. Settings ─────────────────────────────────────────────────────────────────────────────────
 await page.waitForURL(/\/settings$/);
