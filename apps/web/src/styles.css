@@ -1452,3 +1452,33 @@ button.link {
   width: 2px;
   background: var(--text);
 }
+.unit-group {
+  margin-top: 22px;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--line, #e2e8f0);
+  border-left: 6px solid var(--primary, #2563eb);
+  border-radius: 14px;
+  background: #fff;
+}
+.unit-group.fresh {
+  box-shadow: 0 0 0 3px var(--primary-soft, #dbeafe);
+}
+.unit-title {
+  margin: 0;
+  font-size: 18px;
+}
+.unit-group .lesson-grid {
+  margin-top: 10px;
+}
+.split-hint {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+.split-hint .btn {
+  flex: 0 0 auto;
+}
+.slot-field.toggle {
+  align-items: flex-start;
+}

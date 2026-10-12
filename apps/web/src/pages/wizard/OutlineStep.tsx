@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router";
+import { useNavigate, useSearchParams } from "react-router";
 import { labelOf } from "@kj/pdf-structure";
 import { checkOutline, densityOf, outlineTiming, PAGE_TYPES, planBudget, TIME_TOLERANCE } from "@kj/pedagogy";
 import { PAGE_TYPE_IDS, type Outline, type PageType, type SlideSpec, type VisualKind } from "@kj/schema";
@@ -149,6 +149,7 @@ function Row({
 
 export function OutlineStep({ view, reached, onChanged }: { view: LessonView; reached: StepKey; onChanged: () => Promise<void> }) {
   const nav = useNavigate();
+  const copied = useSearchParams()[0].get("copied") === "1";
   const current = view.draft ?? view.confirmed;
   const [version, setVersion] = useState<VersionView | null>(current);
   const [outline, setOutline] = useState<Outline | null>(current?.outline ?? null);
@@ -274,6 +275,12 @@ export function OutlineStep({ view, reached, onChanged }: { view: LessonView; re
     <div className="wizard">
       <Stepper current="outline" reached={reached} lessonId={view.lesson.id} />
       <StepIntro step="outline" />
+      {copied && readOnly && (
+        <div className="alert info" data-testid="copied-hint">
+          已复制到新学期：大纲和 {view.slides.length} 页幻灯片（包括你手动改过的）都沿用了。点下方“修改大纲”按新学期调整，确认后只有改动过的页需要重新生成。· Copied with every slide;
+          revise the outline and only changed slides are regenerated.
+        </div>
+      )}
       <div className="card outline-head">
         <div className="row between">
           <div>

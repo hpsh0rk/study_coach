@@ -202,6 +202,19 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
     }
   }
 
+  async function planUnit() {
+    if (extra === null) return;
+    setBusy(true);
+    setError("");
+    try {
+      const res = await lessonApi.planUnit({ documentId, chapterIds: [...picked], ranges: extra, count: advice.lessons, lessonId: lesson?.lesson.id, params: lesson?.lesson.params });
+      nav(`/?unit=${res.unit.id}`);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : (e as Error).message);
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="wizard">
       <Stepper current="chapters" reached={reached} lessonId={lesson?.lesson.id} />
@@ -252,7 +265,8 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
             </div>
           )}
           {pages > 0 && advice.tooMuch && (
-            <div className="alert warn" data-testid="split-hint">
+            <div className="alert warn split-hint" data-testid="split-hint">
+              <span>
               {stats.unread.length > 0 ? (
                 <>
                   内容超出一份大纲能读的量：第 {fmtRanges(runsOf(stats.unread), labels)} 页读不进去，大纲不会覆盖这些页。建议拆成 {advice.lessons} 课时，或少选几节。· Pages beyond what one outline can read are left out: split the
@@ -260,10 +274,14 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
                 </>
               ) : (
                 <>
-                  内容偏多：按 {lessonMinutes} 分钟一节，大约需要 {advice.lessons} 节课。建议拆成 {advice.lessons} 课时，或只选前面几节；放不下的内容会列在大纲顶部的“未覆盖”里。· About {advice.lessons} lessons of {lessonMinutes} min:
+                  内容偏多：按 {lessonMinutes} 分钟一节，大约需要 {advice.lessons} 节课。可以整单元规划成 {advice.lessons} 节课（按章节切分，每节课单独确认大纲），或只选前面几节；放不下的内容会列在大纲顶部的“未覆盖”里。· About {advice.lessons} lessons of {lessonMinutes} min:
                   consider splitting the selection.
                 </>
               )}
+              </span>
+              <button className="btn small" disabled={busy || extra === null} onClick={planUnit} data-testid="plan-unit">
+                整单元规划：拆成 {advice.lessons} 节课 Plan as a unit
+              </button>
             </div>
           )}
           {tree.length > 0 && (

@@ -42,12 +42,12 @@ import {
   type VersionRow,
 } from "../store.ts";
 
-async function treeOf(env: Env, documentId: string): Promise<ChapterNode[]> {
+export async function treeOf(env: Env, documentId: string): Promise<ChapterNode[]> {
   const rows = await db(env).select().from(chapters).where(eq(chapters.documentId, documentId)).orderBy(chapters.ord);
   return rows.map(({ documentId: _d, ...ch }) => ch);
 }
 
-async function scopeFor(env: Env, user: SessionUser, documentId: string, chapterIds: string[], ranges: PageRange[]): Promise<{ scope: LessonScope; title: string }> {
+export async function scopeFor(env: Env, user: SessionUser, documentId: string, chapterIds: string[], ranges: PageRange[]): Promise<{ scope: LessonScope; title: string }> {
   const doc = await ownedDocument(env, user, documentId);
   if (doc.pagesReceived < doc.pageCount) throw new HttpError(409, "DOCUMENT_INCOMPLETE", "The PDF is still uploading · PDF 还在上传");
   const tree = await treeOf(env, doc.id);
@@ -156,7 +156,7 @@ async function shareView(env: Env, lessonId: string) {
  * `confirmed` (newest confirmed version and its slides) is what step 5 presents and shares; `draft`
  * is a newer unconfirmed outline, if any. A draft never hides the generated deck.
  */
-async function lessonView(env: Env, lesson: LessonRow) {
+export async function lessonView(env: Env, lesson: LessonRow) {
   const scope = lessonScope(lesson);
   const [latest, confirmed, labels, stats, share] = await Promise.all([
     latestVersion(env, lesson.id),
@@ -222,7 +222,8 @@ export const lessonRoutes = new Hono<AppBindings>()
     if (body.theme) patch.theme = body.theme;
     if (body.chapterIds || body.ranges) {
       const { scope, title } = await scopeFor(c.env, u, lesson.documentId, body.chapterIds ?? [], body.ranges ?? []);
-      patch.scope = JSON.stringify(scope);
+      const unit = lessonScope(lesson).unit;
+      patch.scope = JSON.stringify(unit ? { ...scope, unit } : scope);
       if (!body.title) patch.title = title;
     }
     await db(c.env).update(lessons).set(patch).where(eq(lessons.id, lesson.id));
