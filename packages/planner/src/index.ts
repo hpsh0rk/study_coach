@@ -21,8 +21,7 @@ export interface DraftResult {
 
 /** What the model returns: specs without ids; layout is derived from the page type. */
 const DraftSpec = SlideSpec.omit({ id: true, layout: true });
-const DraftOutline = z.object({ objectives: Outline.shape.objectives, slides: z.array(DraftSpec).min(3).max(40) });
-type DraftOutline = z.infer<typeof DraftOutline>;
+type DraftOutline = { objectives: Outline["objectives"]; slides: z.infer<typeof DraftSpec>[] };
 
 export const flagsOf = (input: { flags?: Partial<AblationFlags> }): AblationFlags => ({ ...DEFAULT_FLAGS, ...input.flags });
 

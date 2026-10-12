@@ -1,0 +1,289 @@
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router";
+import { checkOutline, densityOf, outlineTiming, PAGE_TYPES, TIME_TOLERANCE } from "@kj/pedagogy";
+import { PAGE_TYPE_IDS, type Outline, type PageType, type SlideSpec, type VisualKind } from "@kj/schema";
+import { layoutForPageType, LAYOUTS, PAGE_TYPE_VISUALS } from "@kj/templates";
+import { ApiError } from "../../api.ts";
+import { lessonApi, type LessonView, type VersionView } from "../../lessonApi.ts";
+import { Stepper, StepIntro, type StepKey } from "./Stepper.tsx";
+
+const VISUAL_LABEL: Record<VisualKind, string> = { none: "无 None", chart: "图表 Chart", function: "函数图 Plot", flow: "流程 Flow", formula: "公式 Formula", sim: "模拟实验 Sim" };
+
+function TimeBudget({ outline, minutes }: { outline: Outline; minutes: number }) {
+  const t = outlineTiming(outline, { minutes });
+  const max = minutes * 1.4;
+  const pct = (v: number) => `${Math.min(100, (v / max) * 100)}%`;
+  return (
+    <div className={`budget ${t.status}`} data-testid="budget">
+      <div className="budget-head">
+        <b>
+          总时长 {t.totalMinutes} / {minutes} 分钟
+        </b>
+        <span>
+          {t.status === "ok" ? "✓ 在 ±15% 以内 · within budget" : t.status === "over" ? `超出 ${Math.round(t.deviation * 100)}% · over budget` : `不足 ${Math.round(-t.deviation * 100)}% · under budget`}
+        </span>
+        <span className="muted small">
+          {t.slideCount} 页 · 讲授 {Math.round(t.lectureShare * 100)}% / 学生活动 {Math.round(t.activityShare * 100)}%
+        </span>
+      </div>
+      <div className="budget-track">
+        <div className="budget-band" style={{ left: pct(minutes * (1 - TIME_TOLERANCE)), width: `calc(${pct(minutes * (1 + TIME_TOLERANCE))} - ${pct(minutes * (1 - TIME_TOLERANCE))})` }} />
+        <div className="budget-fill" style={{ width: pct(t.totalMinutes) }} />
+        <div className="budget-target" style={{ left: pct(minutes) }} />
+      </div>
+    </div>
+  );
+}
+
+function Row({ spec, i, n, readOnly, onChange, onMove, onDelete, onAdd }: { spec: SlideSpec; i: number; n: number; readOnly: boolean; onChange: (s: SlideSpec) => void; onMove: (d: -1 | 1) => void; onDelete: () => void; onAdd: () => void }) {
+  const d = densityOf(spec);
+  const def = PAGE_TYPES[spec.pageType];
+  const visuals = PAGE_TYPE_VISUALS[spec.pageType];
+  return (
+    <li className={`outline-row ${def.mode}`} data-testid="outline-row">
+      <div className="row-num">{i + 1}</div>
+      <div className="row-main">
+        <div className="row-top">
+          <select
+            value={spec.pageType}
+            disabled={readOnly}
+            aria-label="页面类型 Page type"
+            onChange={(e) => {
+              const pageType = e.target.value as PageType;
+              const v = PAGE_TYPE_VISUALS[pageType];
+              onChange({ ...spec, pageType, layout: layoutForPageType(pageType), visual: v.includes(spec.visual) ? spec.visual : v[0]!, minutes: PAGE_TYPES[pageType].minutes });
+            }}
+          >
+            {PAGE_TYPE_IDS.map((t) => (
+              <option key={t} value={t}>
+                {PAGE_TYPES[t].label.zh} · {PAGE_TYPES[t].label.en}
+              </option>
+            ))}
+          </select>
+          <input className="row-title" value={spec.title} disabled={readOnly} aria-label="标题 Title" maxLength={160} onChange={(e) => onChange({ ...spec, title: e.target.value })} />
+          <label className="row-minutes">
+            <input type="number" min={0.5} max={15} step={0.5} value={spec.minutes} disabled={readOnly} aria-label="分钟 Minutes" onChange={(e) => onChange({ ...spec, minutes: Math.max(0.5, Math.min(15, Number(e.target.value) || 0.5)) })} />
+            分钟
+          </label>
+          <span className={`density ${d.level}`} title={d.reasons.join("\n") || "内容量合适 · OK"} data-testid="density">
+            {d.level === "ok" ? "● 合适" : d.level === "dense" ? "● 偏多" : "● 偏少"}
+          </span>
+        </div>
+        <textarea
+          className="row-points"
+          rows={Math.max(2, spec.keyPoints.length)}
+          disabled={readOnly}
+          aria-label="要点 Key points"
+          value={spec.keyPoints.join("\n")}
+          placeholder="每行一个要点 · one key point per line"
+          onChange={(e) => onChange({ ...spec, keyPoints: e.target.value.split("\n").slice(0, 6) })}
+          onBlur={() => onChange({ ...spec, keyPoints: spec.keyPoints.map((k) => k.trim()).filter(Boolean) })}
+        />
+        <div className="row-meta muted small">
+          <span>版式 {LAYOUTS[spec.layout].label.zh}</span>
+          {visuals.length > 1 ? (
+            <label>
+              图示
+              <select value={spec.visual} disabled={readOnly} onChange={(e) => onChange({ ...spec, visual: e.target.value as VisualKind })}>
+                {visuals.map((v) => (
+                  <option key={v} value={v}>
+                    {VISUAL_LABEL[v]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+          <span>教材 p.{spec.sourcePages.join(", ") || "—"}</span>
+          {d.reasons.length > 0 && <span className={`density-reason ${d.level}`}>{d.reasons[0]}</span>}
+        </div>
+      </div>
+      {!readOnly && (
+        <div className="row-actions">
+          <button className="icon" disabled={i === 0} onClick={() => onMove(-1)} aria-label="上移 Move up">
+            ↑
+          </button>
+          <button className="icon" disabled={i === n - 1} onClick={() => onMove(1)} aria-label="下移 Move down">
+            ↓
+          </button>
+          <button className="icon" onClick={onAdd} aria-label="在下方插入 Insert below">
+            ＋
+          </button>
+          <button className="icon danger" disabled={n <= 1} onClick={onDelete} aria-label="删除 Delete">
+            ✕
+          </button>
+        </div>
+      )}
+    </li>
+  );
+}
+
+export function OutlineStep({ view, reached, onChanged }: { view: LessonView; reached: StepKey; onChanged: () => Promise<void> }) {
+  const nav = useNavigate();
+  const [version, setVersion] = useState<VersionView | null>(view.version);
+  const [outline, setOutline] = useState<Outline | null>(view.version?.outline ?? null);
+  const [dirty, setDirty] = useState(false);
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const [needAck, setNeedAck] = useState<string | null>(null);
+  const params = view.lesson.params;
+  const readOnly = !!version?.confirmedAt;
+
+  useEffect(() => {
+    setVersion(view.version);
+    setOutline(view.version?.outline ?? null);
+    setDirty(false);
+  }, [view.version]);
+
+  const warnings = useMemo(() => (outline ? checkOutline(outline, params) : []), [outline, params]);
+
+  function update(slides: SlideSpec[]) {
+    if (!outline) return;
+    setOutline({ ...outline, slides });
+    setDirty(true);
+    setNeedAck(null);
+  }
+
+  async function run<T>(label: string, fn: () => Promise<T>): Promise<T | undefined> {
+    setBusy(label);
+    setError("");
+    try {
+      return await fn();
+    } catch (e) {
+      if (e instanceof ApiError && e.code === "OVER_BUDGET_ACK_REQUIRED") setNeedAck(e.message);
+      else setError(e instanceof ApiError ? e.message : (e as Error).message);
+      return undefined;
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function save(): Promise<VersionView | null> {
+    if (!version || !outline) return null;
+    const cleaned = { ...outline, slides: outline.slides.map((s) => ({ ...s, title: s.title.trim() || "Untitled", keyPoints: s.keyPoints.map((k) => k.trim()).filter(Boolean) })) };
+    const r = await lessonApi.save(view.lesson.id, version.id, cleaned);
+    setVersion(r.version);
+    setOutline(r.version.outline);
+    setDirty(false);
+    return r.version;
+  }
+
+  async function confirm(ack: boolean) {
+    const ok = await run("confirm", async () => {
+      const v = dirty ? await save() : version;
+      if (!v) return false;
+      await lessonApi.confirm(view.lesson.id, v.id, ack);
+      return true;
+    });
+    if (ok) {
+      await onChanged();
+      nav(`/lessons/${view.lesson.id}/slides`);
+    }
+  }
+
+  if (!version || !outline) {
+    return (
+      <div className="wizard">
+        <Stepper current="outline" reached={reached} lessonId={view.lesson.id} />
+        <StepIntro step="outline" />
+        <div className="card center">
+          <p>还没有大纲 · No outline yet</p>
+          <button className="btn primary" disabled={!!busy} onClick={() => run("draft", async () => (await lessonApi.draft(view.lesson.id), await onChanged()))}>
+            {busy ? "正在生成… Drafting" : "生成大纲 Draft outline"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const slides = outline.slides;
+  return (
+    <div className="wizard">
+      <Stepper current="outline" reached={reached} lessonId={view.lesson.id} />
+      <StepIntro step="outline" />
+      <div className="card outline-head">
+        <div className="row between">
+          <div>
+            <h2>{view.lesson.title}</h2>
+            <p className="muted small">
+              大纲第 {version.version} 版 · {readOnly ? "已确认（不可修改）· confirmed" : "草稿，可直接修改 · draft, edit freely"}
+            </p>
+          </div>
+          <div className="objectives">
+            {outline.objectives.map((o, i) => (
+              <span key={i} className="objective">
+                🎯 {o}
+              </span>
+            ))}
+          </div>
+        </div>
+        <TimeBudget outline={outline} minutes={params.minutes} />
+        {warnings.length > 0 && (
+          <ul className="warnings" data-testid="warnings">
+            {warnings.slice(0, 6).map((w, i) => (
+              <li key={i} className={w.level}>
+                {w.level === "error" ? "⚠" : "ⓘ"} {w.message}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <ol className="outline-list">
+        {slides.map((s, i) => (
+          <Row
+            key={s.id}
+            spec={s}
+            i={i}
+            n={slides.length}
+            readOnly={readOnly}
+            onChange={(next) => update(slides.map((x, j) => (j === i ? next : x)))}
+            onMove={(dir) => {
+              const arr = [...slides];
+              const [m] = arr.splice(i, 1);
+              arr.splice(i + dir, 0, m!);
+              update(arr);
+            }}
+            onDelete={() => update(slides.filter((_, j) => j !== i))}
+            onAdd={() => {
+              const arr = [...slides];
+              arr.splice(i + 1, 0, { id: `new${Date.now().toString(36)}`, pageType: "practice", layout: "questions", title: "Practice questions", purpose: "", keyPoints: [], visual: "none", minutes: PAGE_TYPES.practice.minutes, sourcePages: s.sourcePages, loop: s.loop });
+              update(arr);
+            }}
+          />
+        ))}
+      </ol>
+      {error && <div className="alert error">{error}</div>}
+      {needAck && (
+        <div className="alert warn" role="alert" data-testid="ack-box">
+          <p>{needAck}</p>
+          <button className="btn primary" onClick={() => confirm(true)} disabled={!!busy}>
+            我知道超时了，仍然确认 · Confirm anyway
+          </button>
+        </div>
+      )}
+      <div className="wizard-actions sticky">
+        <button className="btn ghost" onClick={() => nav(`/lessons/${view.lesson.id}/settings`)}>
+          ← 返回 Back
+        </button>
+        {readOnly ? (
+          <>
+            <button className="btn ghost" disabled={!!busy} onClick={() => run("revise", async () => (await lessonApi.revise(view.lesson.id, version.id), await onChanged()))}>
+              修改大纲（新版本）Edit as new version
+            </button>
+            <button className="btn primary" onClick={() => nav(`/lessons/${view.lesson.id}/slides`)}>
+              下一步：生成幻灯片 Next →
+            </button>
+          </>
+        ) : (
+          <>
+            <button className="btn ghost" disabled={!dirty || !!busy} onClick={() => run("save", save)}>
+              {dirty ? "保存修改 Save" : "已保存 Saved"}
+            </button>
+            <button className="btn primary" disabled={!!busy} onClick={() => confirm(false)} data-testid="confirm-outline">
+              {busy === "confirm" ? "确认中… Confirming" : "确认大纲 Confirm outline ✓"}
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}

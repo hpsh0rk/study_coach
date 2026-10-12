@@ -48,8 +48,14 @@ interface Manifest {
 export function providerFromEnv(env: NodeJS.ProcessEnv = process.env): { config: AiConfig; label: string } | null {
   let kind = env.KJ_EVAL_PROVIDER as ProviderKind | undefined;
   let apiKey = env.KJ_EVAL_API_KEY;
-  if (!apiKey && env.DEEPSEEK_API_KEY) (apiKey = env.DEEPSEEK_API_KEY), (kind ??= "deepseek");
-  if (!apiKey && (env.GLM_API_KEY || env.ZHIPU_API_KEY)) (apiKey = env.GLM_API_KEY || env.ZHIPU_API_KEY), (kind ??= "glm");
+  if (!apiKey && env.DEEPSEEK_API_KEY) {
+    apiKey = env.DEEPSEEK_API_KEY;
+    kind ??= "deepseek";
+  }
+  if (!apiKey && (env.GLM_API_KEY || env.ZHIPU_API_KEY)) {
+    apiKey = env.GLM_API_KEY || env.ZHIPU_API_KEY;
+    kind ??= "glm";
+  }
   if (!apiKey) return null;
   kind ??= "deepseek";
   const preset = PROVIDER_PRESETS[kind];

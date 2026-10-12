@@ -73,7 +73,7 @@ function normalizeEdited(outline: Outline): Outline {
   const seen = new Set<string>();
   return Outline.parse({
     ...outline,
-    slides: outline.slides.map((s, i) => {
+    slides: outline.slides.map((s) => {
       let id = s.id;
       if (seen.has(id)) id = newId("sp", 8);
       seen.add(id);
