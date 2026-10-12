@@ -534,6 +534,7 @@ label {
 }
 .tree-label {
   display: flex;
+  flex-direction: row;
   align-items: center;
   gap: 10px;
   flex: 1;
@@ -755,10 +756,17 @@ label {
 }
 .row-minutes {
   display: flex;
+  flex-direction: row;
   align-items: center;
   gap: 4px;
   white-space: nowrap;
   font-size: 13px;
+}
+.row-meta label {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  font-size: inherit;
 }
 .row-minutes input {
   width: 72px;

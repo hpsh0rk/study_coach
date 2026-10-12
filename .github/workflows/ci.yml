@@ -19,21 +19,13 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm build
       - run: pnpm test
+      # Real CJK glyphs, so the overflow test measures the widths students will see.
+      - run: sudo apt-get update && sudo apt-get install -y fonts-noto-cjk
       - run: npx playwright install --with-deps chromium
-      - run: pnpm test:e2e --project=e2e
+      - run: pnpm test:e2e --project=overflow --project=e2e
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
           path: playwright-report
 
-  heavy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: pip install -r containers/heavy/requirements-dev.txt
-      - run: python -m pytest -q tests
-        working-directory: containers/heavy

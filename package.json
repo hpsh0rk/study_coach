@@ -16,7 +16,6 @@
     "typecheck": "pnpm -r --parallel typecheck",
     "test": "pnpm -r --workspace-concurrency=1 test",
     "test:e2e": "playwright test",
-    "screenshots": "playwright test --project=screenshots",
     "deploy": "bash scripts/deploy.sh",
     "eval:run": "tsx tools/eval/src/run.ts",
     "eval:render": "tsx tools/eval/src/render.ts",
