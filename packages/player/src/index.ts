@@ -1,6 +1,6 @@
 import type { Slide, TeachingLanguage, ThemeId } from "@kj/schema";
 import { CANVAS, stepsOf } from "@kj/templates";
-import { applyStep, fitSlide, renderSlide, type RenderedSlide } from "@kj/templates/render";
+import { applyStep, fitSlide, fitSources, renderSlide, type RenderedSlide } from "@kj/templates/render";
 import { INK_COLORS, InkLayer, type Stroke } from "./ink.ts";
 import { clampPosition, fitStage, keyAction, nextPosition, prevPosition, type Position } from "./navigation.ts";
 
@@ -48,10 +48,11 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, parent?:
 }
 
 /** Keeps a 1920×1080 element scaled to its container. */
-function scaleInto(container: HTMLElement, inner: HTMLElement): ResizeObserver {
+function scaleInto(container: HTMLElement, inner: HTMLElement, after?: () => void): ResizeObserver {
   const apply = () => {
     const { scale, offsetX, offsetY } = fitStage(container.clientWidth || CANVAS.width, container.clientHeight || CANVAS.height, CANVAS.width, CANVAS.height);
     inner.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
+    after?.();
   };
   apply();
   const obs = new ResizeObserver(apply);
@@ -91,6 +92,7 @@ export class Player {
   private inkButton: HTMLButtonElement;
   private inkTools: HTMLElement;
   private tallyInputs: HTMLElement;
+  private bar: HTMLElement;
   private tallies = new Map<number, number[]>();
 
   constructor(
@@ -113,7 +115,7 @@ export class Player {
     this.notes.hidden = true;
     this.ink = new InkLayer(this.frame, this.stage, (index, strokes) => opts.onInk?.(index, strokes));
 
-    const bar = el("div", "kj-controls", main);
+    const bar = (this.bar = el("div", "kj-controls", main));
     const btn = (label: string, title: string, fn: () => void) => {
       const b = el("button", "kj-ctl", bar);
       b.type = "button";
@@ -207,7 +209,7 @@ export class Player {
       if (!this.blank.hidden) this.setBlank(false);
       else this.next();
     });
-    this.obs = scaleInto(this.frame, this.stage);
+    this.obs = scaleInto(this.frame, this.stage, () => this.fitFooter());
     this.disposers.push(() => doc.removeEventListener("keydown", onDocKey), () => this.ink.dispose());
     this.show();
     this.root.focus();
@@ -250,6 +252,7 @@ export class Player {
   setInk(tool: "pen" | "eraser" | null): void {
     this.ink.setTool(tool);
     this.syncInkButtons();
+    this.fitFooter();
   }
 
   get inkTool(): "pen" | "eraser" | null {
@@ -303,9 +306,20 @@ export class Player {
     this.stage.append(this.current.el);
     const root = this.current.el;
     fitSlide(root);
-    void fontsReady().then(() => fitSlide(root));
+    this.fitFooter();
+    void fontsReady().then(() => {
+      fitSlide(root);
+      this.fitFooter();
+    });
     this.notes.textContent = slide.notes || "—";
     this.reveal();
+  }
+
+  /** The control bar floats over the slide's bottom edge: keep the source chips out from under it. */
+  private fitFooter(): void {
+    if (!this.current || !this.bar) return;
+    const bar = this.bar.getBoundingClientRect();
+    fitSources(this.current.el, bar.width ? bar : null);
   }
 
   private buildTallyInputs(): void {

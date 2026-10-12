@@ -402,10 +402,11 @@ export function renderSlide(slide: Pick<Slide, "content" | "sources">, opts: Ren
   const src = node("div", "kj-sources", foot);
   if (slide.sources.length) {
     node("span", "kj-sources-label", src).textContent = label(opts, "Source", "教材");
-    for (const p of slide.sources) {
+    const pageLabel = (p: number) => opts.pageLabels?.[p] ?? String(p);
+    for (const [p, end] of sourceRuns(slide.sources)) {
       const chip = node("button", "kj-source", src);
       chip.type = "button";
-      chip.textContent = `p.${opts.pageLabels?.[p] ?? p}`;
+      chip.textContent = end > p ? `p.${pageLabel(p)}–${pageLabel(end)}` : `p.${pageLabel(p)}`;
       chip.dataset.page = String(p);
       if (opts.onSourceClick) {
         chip.addEventListener("click", (e) => {
@@ -423,6 +424,44 @@ export function renderSlide(slide: Pick<Slide, "content" | "sources">, opts: Ren
     ...(b.tally ? { tally: b.tally } : {}),
     dispose: () => b.handles.forEach((h) => h.dispose()),
   };
+}
+
+/** Consecutive source pages share one chip: [3, 4, 5, 9] → [[3, 5], [9, 9]]. */
+export function sourceRuns(pages: number[]): [number, number][] {
+  const runs: [number, number][] = [];
+  for (const p of [...new Set(pages)].sort((a, b) => a - b)) {
+    const last = runs[runs.length - 1];
+    if (last && p === last[1] + 1) last[1] = p;
+    else runs.push([p, p]);
+  }
+  return runs;
+}
+
+/**
+ * Keeps the source chips clear of `avoid` (the player's control bar, in screen coordinates): trailing
+ * chips that would run under it are hidden behind a "+N" chip whose tooltip lists them.
+ */
+export function fitSources(root: HTMLElement, avoid: DOMRect | null): void {
+  const src = root.querySelector<HTMLElement>(".kj-sources");
+  if (!src) return;
+  src.querySelector(".kj-source-more")?.remove();
+  const chips = [...src.querySelectorAll<HTMLElement>(".kj-source")];
+  chips.forEach((c) => (c.hidden = false));
+  if (!avoid || !chips.length) return;
+  const clashes = (el: HTMLElement) => {
+    const r = el.getBoundingClientRect();
+    // Chips run left to right from the footer's left edge, so anything reaching the bar's left edge is under it or past it.
+    return r.width > 0 && r.right > avoid.left - 8 && r.bottom > avoid.top && r.top < avoid.bottom;
+  };
+  if (!clashes(chips[chips.length - 1]!)) return;
+  const more = node("span", "kj-source kj-source-more", src);
+  let shown = chips.length;
+  do {
+    chips[--shown]!.hidden = true;
+    const hidden = chips.slice(shown);
+    more.textContent = `+${hidden.length}`;
+    more.title = hidden.map((c) => c.textContent).join(" ");
+  } while (shown > 0 && clashes(more));
 }
 
 /** Shows elements up to reveal step `k` (visibility only, so layout and measurements stay stable). */

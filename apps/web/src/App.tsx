@@ -80,9 +80,11 @@ const devRoutes = __KJ_DEV_PAGES__
   ? (() => {
       const GalleryPage = lazy(() => import("./pages/dev/GalleryPage.tsx").then((m) => ({ default: m.GalleryPage })));
       const RenderPage = lazy(() => import("./pages/dev/RenderPage.tsx").then((m) => ({ default: m.RenderPage })));
+      const PlayerPage = lazy(() => import("./pages/dev/PlayerPage.tsx").then((m) => ({ default: m.PlayerPage })));
       return [
         <Route key="gallery" path="/dev/gallery" element={<Suspense><GalleryPage /></Suspense>} />,
         <Route key="render" path="/dev/render" element={<Suspense><RenderPage /></Suspense>} />,
+        <Route key="player" path="/dev/player" element={<Suspense><PlayerPage /></Suspense>} />,
       ];
     })()
   : [];
