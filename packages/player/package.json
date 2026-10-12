@@ -1,0 +1,22 @@
+{
+  "name": "@kj/player",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./player.css": "./src/player.css"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@kj/renderer": "workspace:*",
+    "@kj/schema": "workspace:*"
+  },
+  "devDependencies": {
+    "happy-dom": "^20.0.0",
+    "vitest": "~4.1.11"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "name": "study-coach",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.33.4",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @kj/app dev",
+    "build": "pnpm --filter @kj/web build",
+    "db:migrate:local": "pnpm --filter @kj/app db:migrate:local",
+    "admin:create": "node scripts/create-admin.mjs",
+    "seed:sims": "node scripts/seed-sims.mjs",
+    "fixtures:pdf": "node scripts/make-fixture-pdf.mjs",
+    "lint": "eslint . && node scripts/check-ai-boundary.mjs",
+    "typecheck": "pnpm -r --parallel typecheck",
+    "test": "pnpm -r --workspace-concurrency=1 test",
+    "test:e2e": "playwright test",
+    "screenshots": "playwright test --project=screenshots",
+    "deploy": "bash scripts/deploy.sh"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "@playwright/test": "1.64.0",
+    "eslint": "^9.39.0",
+    "globals": "^16.4.0",
+    "pdf-lib": "1.17.1",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.71.1"
+  }
+}

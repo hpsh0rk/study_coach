@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+.env
+*.log
+coverage/
+test-results/
+playwright-report/
+apps/app/.wrangler.deploy.jsonc
+.DS_Store
