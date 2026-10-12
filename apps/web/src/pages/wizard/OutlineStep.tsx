@@ -91,7 +91,7 @@ function Row({
           </select>
           <input className="row-title" value={spec.title} disabled={readOnly} aria-label="标题 Title" maxLength={160} onChange={(e) => onChange({ ...spec, title: e.target.value })} />
           <label className="row-minutes">
-            <input type="number" min={0.5} max={15} step={0.5} value={spec.minutes} disabled={readOnly} aria-label="分钟 Minutes" onChange={(e) => onChange({ ...spec, minutes: Math.max(0.5, Math.min(15, Number(e.target.value) || 0.5)) })} />
+            <MinutesInput value={spec.minutes} disabled={readOnly} onChange={(minutes) => onChange({ ...spec, minutes })} />
             分钟
           </label>
           <UnverifiedBadge count={unverified} />
@@ -144,6 +144,39 @@ function Row({
         </div>
       )}
     </li>
+  );
+}
+
+const clampMinutes = (n: number) => Math.max(0.5, Math.min(15, n));
+
+/** Keeps what the teacher types ("1", "12", "") while typing; clamps to 0.5–15 only when the field loses focus. */
+function MinutesInput({ value, disabled, onChange }: { value: number; disabled: boolean; onChange: (minutes: number) => void }) {
+  const [text, setText] = useState(String(value));
+  const [focused, setFocused] = useState(false);
+  return (
+    <input
+      type="number"
+      min={0.5}
+      max={15}
+      step={0.5}
+      value={focused ? text : String(value)}
+      disabled={disabled}
+      aria-label="分钟 Minutes"
+      onFocus={() => {
+        setText(String(value));
+        setFocused(true);
+      }}
+      onChange={(e) => {
+        setText(e.target.value);
+        const n = Number(e.target.value);
+        if (e.target.value !== "" && Number.isFinite(n) && n >= 0.5 && n <= 15) onChange(n);
+      }}
+      onBlur={() => {
+        setFocused(false);
+        const n = clampMinutes(Number(text) || 0.5);
+        if (n !== value) onChange(n);
+      }}
+    />
   );
 }
 
@@ -224,7 +257,7 @@ export function OutlineStep({ view, reached, onChanged }: { view: LessonView; re
     });
     if (ok) {
       await onChanged();
-      nav(`/lessons/${view.lesson.id}/slides`);
+      nav(`/lessons/${view.lesson.id}/slides?generate=1`);
     }
   }
 

@@ -451,4 +451,19 @@ export const lessonRoutes = new Hono<AppBindings>()
     const lesson = await ownedLesson(c.env, c.get("user"), c.req.param("id"));
     await db(c.env).update(shareLinks).set({ revokedAt: Date.now() }).where(and(eq(shareLinks.lessonId, lesson.id), isNull(shareLinks.revokedAt)));
     return c.json({ ok: true });
+  })
+  /** Soft delete (archive): the share link stops working at once and is not brought back by a restore. */
+  .delete("/:id", async (c) => {
+    const lesson = await ownedLesson(c.env, c.get("user"), c.req.param("id"));
+    const at = Date.now();
+    await db(c.env).batch([
+      db(c.env).update(shareLinks).set({ revokedAt: at }).where(and(eq(shareLinks.lessonId, lesson.id), isNull(shareLinks.revokedAt))),
+      db(c.env).update(lessons).set({ archivedAt: at, draftingUntil: null }).where(eq(lessons.id, lesson.id)),
+    ]);
+    return c.json({ ok: true });
+  })
+  .post("/:id/restore", async (c) => {
+    const lesson = await ownedLesson(c.env, c.get("user"), c.req.param("id"), { archived: true });
+    await db(c.env).update(lessons).set({ archivedAt: null }).where(eq(lessons.id, lesson.id));
+    return c.json({ ok: true });
   });

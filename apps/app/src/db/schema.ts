@@ -106,6 +106,8 @@ export const lessons = sqliteTable(
     theme: text("theme").notNull().default("classic"),
     /** Set while an outline draft is running (a lock that expires on its own if the request dies). */
     draftingUntil: integer("drafting_until"),
+    /** Soft delete: hidden from the teacher and its share link revoked; restorable. */
+    archivedAt: integer("archived_at"),
     createdAt: integer("created_at").notNull().$defaultFn(now),
     updatedAt: integer("updated_at").notNull().$defaultFn(now),
   },

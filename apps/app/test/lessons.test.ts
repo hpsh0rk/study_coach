@@ -442,6 +442,29 @@ describe("sharing", () => {
     expect(fresh.json.path).not.toBe(shared.json.path);
   });
 
+  it("deleting a lesson archives it, kills its link at once, and a restore does not revive the link", async () => {
+    const { lessonId, v } = await confirmedLesson();
+    await generate(lessonId, v.id, v.outline.slides[0].id);
+    const shared = (await teacher.req("POST", `/api/lessons/${lessonId}/share`)).json;
+    expect((await publicDeck(shared.path)).status).toBe(200);
+    const other = await loggedIn("teacher2", "Teach12345");
+    expect((await other.req("DELETE", `/api/lessons/${lessonId}`)).status).toBe(404);
+
+    expect((await teacher.req("DELETE", `/api/lessons/${lessonId}`)).status).toBe(200);
+    expect((await publicDeck(shared.path)).status).toBe(404);
+    expect((await teacher.req("GET", `/api/lessons/${lessonId}`)).status).toBe(404);
+    expect((await teacher.req("GET", `/api/lessons/${lessonId}/deck`)).status).toBe(404);
+    expect((await teacher.req("GET", "/api/lessons")).json.lessons.map((l: any) => l.id)).not.toContain(lessonId);
+    expect(await e.DB.prepare("SELECT COUNT(*) AS n FROM slides WHERE lesson_id = ?").bind(lessonId).first("n")).toBe(1);
+
+    expect((await teacher.req("POST", `/api/lessons/${lessonId}/restore`)).status).toBe(200);
+    expect((await teacher.req("GET", "/api/lessons")).json.lessons.map((l: any) => l.id)).toContain(lessonId);
+    const view = (await teacher.req("GET", `/api/lessons/${lessonId}`)).json;
+    expect(view.slides).toHaveLength(1);
+    expect(view.share).toBeNull();
+    expect((await publicDeck(shared.path)).status).toBe(404);
+  });
+
   it("asks the teacher to check links and instruction-like text before sharing", async () => {
     const { lessonId, v } = await confirmedLesson();
     const spec = v.outline.slides.find((s: any) => s.layout === "statement") ?? v.outline.slides[1];

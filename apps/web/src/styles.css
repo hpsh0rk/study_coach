@@ -109,6 +109,10 @@ label {
   border-color: transparent;
   background: transparent;
 }
+.btn.danger-text {
+  color: #b91c1c;
+  margin-left: auto;
+}
 .btn.small {
   padding: 5px 10px;
   font-size: 13px;

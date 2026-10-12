@@ -1,5 +1,5 @@
-import { useCallback, useMemo, useState } from "react";
-import { useNavigate } from "react-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router";
 import { PAGE_TYPES } from "@kj/pedagogy";
 import type { Slide, SlideSpec } from "@kj/schema";
 import { ApiError } from "../../api.ts";
@@ -9,7 +9,6 @@ import { UnverifiedBadge, UnverifiedBox } from "../../components/Unverified.tsx"
 import { documentApi, lessonApi, type FlaggedSlide, type LessonView, type ShareView } from "../../lessonApi.ts";
 import { downloadOfflineHtml } from "../../offline/exportDeck.ts";
 import { downloadPptx } from "../../offline/exportPptx.ts";
-import { openPresenter } from "../PlayPages.tsx";
 import { Stepper, StepIntro, type StepKey } from "./Stepper.tsx";
 
 const CONCURRENCY = 2;
@@ -174,6 +173,16 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
     }
   }
 
+  // Arriving from "confirm outline" (?generate=1) starts generation; a reload or a later visit does not.
+  const [search, setSearch] = useSearchParams();
+  const autoStarted = useRef(false);
+  useEffect(() => {
+    if (search.get("generate") !== "1" || autoStarted.current) return;
+    autoStarted.current = true;
+    setSearch({}, { replace: true });
+    void generateAll();
+  });
+
   const replaceSlide = (slide: Slide) => setSlides((m) => ({ ...m, [slide.specId]: slide }));
 
   const openSource = useCallback(async (no: number) => setSource(await documentApi.page(view.lesson.documentId, no)), [view.lesson.documentId]);
@@ -226,9 +235,6 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
               ▶ 放映已生成的 Present
             </button>
           )}
-          <button className="btn ghost" disabled={done === 0} onClick={() => openPresenter(view.lesson.id)} title="讲稿、下一页、计时和答案，在你自己的屏幕上 · notes, next slide, timer and answers on your own screen">
-            演讲者视图 Presenter
-          </button>
           <details className="menu">
             <summary className="btn ghost" aria-disabled={done === 0}>
               导出 Export ▾

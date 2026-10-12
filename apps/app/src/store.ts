@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { checkSourceText, slideKey, sourceUnverified, suspiciousContent } from "@kj/generation";
 import { isEmptyPage, MIN_PAGE_WORDS, pagesInRanges, sourceCut } from "@kj/pdf-structure";
 import { OUTLINE_SOURCE_CHARS, verifyNumbers } from "@kj/pedagogy";
@@ -18,9 +18,10 @@ export async function ownedDocument(env: Env, user: SessionUser, id: string) {
   return row;
 }
 
-export async function ownedLesson(env: Env, user: SessionUser, id: string): Promise<LessonRow> {
+/** Archived lessons are not found unless `archived` is set (only restore asks for them). */
+export async function ownedLesson(env: Env, user: SessionUser, id: string, opts: { archived?: boolean } = {}): Promise<LessonRow> {
   const row = (await db(env).select().from(lessons).where(and(eq(lessons.id, id), eq(lessons.orgId, user.orgId), eq(lessons.ownerId, user.id))).limit(1))[0];
-  if (!row) throw new HttpError(404, "NOT_FOUND", "Lesson not found · 找不到该课");
+  if (!row || (row.archivedAt !== null && !opts.archived)) throw new HttpError(404, "NOT_FOUND", "Lesson not found · 找不到该课");
   return row;
 }
 
@@ -230,7 +231,7 @@ export async function lessonList(env: Env, user: SessionUser) {
       slides: sql<number>`(SELECT COUNT(*) FROM slides s WHERE s.outline_version_id = ${confirmedId})`,
     })
     .from(lessons)
-    .where(and(eq(lessons.orgId, user.orgId), eq(lessons.ownerId, user.id)))
+    .where(and(eq(lessons.orgId, user.orgId), eq(lessons.ownerId, user.id), isNull(lessons.archivedAt)))
     .orderBy(desc(lessons.updatedAt))
     .limit(100);
   return rows.map((r) => ({

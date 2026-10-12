@@ -99,12 +99,21 @@ describe("复制这节课到新学期 (duplicate)", () => {
 describe("整单元规划 (unit)", () => {
   it("plans one chapter range as several lessons, chapters kept whole, reusing the wizard's empty lesson", async () => {
     const draft = (await teacher.req("POST", "/api/lessons", { documentId: docId, chapterIds: ["c0"] })).json.lesson.id as string;
+    const before = (await teacher.req("GET", "/api/lessons")).json.lessons.length;
+    // A dry run previews the split and creates nothing.
+    const preview = await teacher.req("POST", "/api/lessons/unit?dryRun=1", { documentId: docId, chapterIds: ["c0", "c1", "c2", "c3"], count: 3, lessonId: draft, title: "13 Waves" });
+    expect(preview.status).toBe(200);
+    expect(preview.json.lessons).toHaveLength(3);
+    expect(preview.json.lessons[0]).toMatchObject({ ranges: [{ start: 1, end: 4 }], estimatedMinutes: expect.any(Number), over: expect.any(Boolean) });
+    expect((await teacher.req("GET", "/api/lessons")).json.lessons.length).toBe(before);
+    expect((await teacher.req("GET", `/api/lessons/${draft}`)).json.lesson.scope.unit).toBeUndefined();
     const res = await teacher.req("POST", "/api/lessons/unit", { documentId: docId, chapterIds: ["c0", "c1", "c2", "c3"], count: 3, lessonId: draft, title: "13 Waves" });
     expect(res.status).toBe(201);
     expect(res.json.unit.count).toBe(3);
     expect(res.json.lessons.map((l: any) => l.ranges)).toEqual([[{ start: 1, end: 4 }], [{ start: 5, end: 8 }], [{ start: 9, end: 12 }]]);
     expect(res.json.lessons[0].id).toBe(draft);
-    expect(res.json.lessons[1].title).toBe("13 Waves · 第 2/3 课 · 13.2 Wave Properties");
+    expect(res.json.lessons[1].title).toBe("13 Waves · 13.2 Wave Properties");
+    expect(res.json.lessons.map((l: any) => l.title).join()).not.toMatch(/第 \d/);
     const second = (await teacher.req("GET", `/api/lessons/${res.json.lessons[1].id}`)).json.lesson;
     expect(second.scope.chapterIds).toEqual(["c2"]);
     expect(second.scope.unit).toMatchObject({ title: "13 Waves", index: 2, count: 3 });

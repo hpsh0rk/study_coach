@@ -79,6 +79,23 @@ export interface LessonListItem {
   planned: number;
 }
 
+export type UnitRequest = {
+  documentId: string;
+  chapterIds: string[];
+  ranges: PageRange[];
+  count?: number;
+  lessonId?: string;
+  params?: LessonParams;
+  title?: string;
+};
+
+export interface UnitPreview {
+  unit: { title: string; count: number };
+  minutes: number;
+  maxMinutes: number;
+  lessons: { title: string; ranges: PageRange[]; estimatedMinutes: number; over: boolean }[];
+}
+
 export const lessonApi = {
   list: () => api<{ lessons: LessonListItem[] }>("/api/lessons"),
   get: (id: string) => api<LessonView>(`/api/lessons/${id}`),
@@ -95,11 +112,14 @@ export const lessonApi = {
   editSlide: (id: string, slideId: string, body: { content?: unknown; notes?: string }) => api<{ slide: Slide }>(`/api/lessons/${id}/slides/${slideId}`, { method: "PATCH", body }),
   undoSlide: (id: string, slideId: string) => api<{ slide: Slide }>(`/api/lessons/${id}/slides/${slideId}/undo`, { method: "POST" }),
   duplicate: (id: string, title?: string) => api<LessonView>(`/api/lessons/${id}/duplicate`, { body: title ? { title } : {} }),
-  planUnit: (body: { documentId: string; chapterIds: string[]; ranges: PageRange[]; count?: number; lessonId?: string; params?: LessonParams; title?: string }) =>
+  planUnit: (body: UnitRequest) =>
     api<{ unit: { id: string; title: string; count: number }; lessons: { id: string; title: string; ranges: PageRange[]; estimatedMinutes: number }[] }>("/api/lessons/unit", { body }),
+  previewUnit: (body: UnitRequest) => api<UnitPreview>("/api/lessons/unit?dryRun=1", { body }),
   deck: (id: string, audience: "teacher" | "student" = "teacher") => api<Record<string, unknown>>(`/api/lessons/${id}/deck${audience === "student" ? "?audience=student" : ""}`),
   share: (id: string, body: { versionId?: string; ack?: boolean } = {}) => api<ShareView>(`/api/lessons/${id}/share`, { body }),
   unshare: (id: string) => api(`/api/lessons/${id}/share`, { method: "DELETE" }),
+  archive: (id: string) => api(`/api/lessons/${id}`, { method: "DELETE" }),
+  restore: (id: string) => api(`/api/lessons/${id}/restore`, { body: {} }),
 };
 
 export const documentApi = {

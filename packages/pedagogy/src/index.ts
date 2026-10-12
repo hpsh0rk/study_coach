@@ -116,17 +116,42 @@ export interface UnitPiece {
 const pieceWords = (p: UnitPiece) => p.pages.reduce((n, x) => n + x.words, 0);
 
 /**
- * "整单元规划": splits a selection into `count` lessons (default: what the minutes estimate needs), keeping
- * chapters whole where possible. A chapter longer than a lesson is cut at page boundaries; cuts fall at the
- * piece boundaries closest to equal shares of the words.
+ * "整单元规划": splits a selection into `count` lessons (default: the fewest lessons whose estimates all stay
+ * within the L-03 tolerance, `maxMinutes`), keeping chapters whole where possible. A chapter longer than a
+ * lesson is cut at page boundaries; cuts fall at the piece boundaries closest to equal shares of the words.
  */
 export function planUnit(pieces: UnitPiece[], lessonMinutes: number, count?: number): UnitPiece[][] {
   const total = pieces.reduce((n, p) => n + pieceWords(p), 0);
-  let n = Math.max(1, Math.min(12, count ?? scopeAdvice(total, lessonMinutes).lessons));
-  const target = total / n;
+  if (count !== undefined) return splitUnit(pieces, total, Math.max(1, Math.min(12, count)), Infinity);
+  const cap = (planBudget({ minutes: lessonMinutes }).maxMinutes / MINUTES_PER_1000_WORDS) * 1000;
+  let groups: UnitPiece[][] = [];
+  for (let n = Math.max(1, Math.min(12, scopeAdvice(total, lessonMinutes).lessons)); n <= 12; n++) {
+    groups = splitUnit(pieces, total, n, cap);
+    if (groups.every((g) => g.reduce((w, p) => w + pieceWords(p), 0) <= cap) || groups.length < n) break;
+  }
+  return groups;
+}
+
+/** Minutes estimate of one planned lesson (same rule as the chapter step's meter). */
+export const unitGroupMinutes = (group: UnitPiece[], lessonMinutes: number) => scopeAdvice(group.reduce((w, p) => w + pieceWords(p), 0), lessonMinutes).estimatedMinutes;
+
+/** "4.1–4.3" when the first and last pieces are numbered sections, else "first – last" (or the one title). */
+export function unitGroupLabel(group: UnitPiece[]): string {
+  const first = group[0]?.title ?? "";
+  const last = group[group.length - 1]?.title ?? "";
+  if (first === last) return first;
+  const num = (t: string) => /^\s*(\d+(?:\.\d+)+)/.exec(t)?.[1];
+  const a = num(first);
+  const b = num(last);
+  return a && b ? `${a}–${b}` : `${first} – ${last}`;
+}
+
+function splitUnit(pieces: UnitPiece[], total: number, count: number, cap: number): UnitPiece[][] {
+  let n = count;
+  const target = Math.min(total / n, cap);
   const parts: UnitPiece[] = [];
   for (const p of pieces) {
-    if (pieceWords(p) <= target * 1.25 || p.pages.length < 2) {
+    if (pieceWords(p) <= Math.min(target * 1.25, cap) || p.pages.length < 2) {
       parts.push(p);
       continue;
     }
