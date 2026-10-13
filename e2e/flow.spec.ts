@@ -550,6 +550,39 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
     await page.getByTestId("undo-doc-delete").click();
     await expect(del).toBeVisible();
   });
+
+  await test.step("the same PDF again is found by its sha256: not parsed or uploaded again; a deleted copy is restored", async () => {
+    const { lesson } = await (await page.request.get(`/api/lessons/${lessonId}`)).json();
+    const writes: string[] = [];
+    const onRequest = (r: { method(): string; url(): string }) => {
+      if (r.method() === "POST" && /^\/api\/documents(\/[^/]+\/pages)?$/.test(new URL(r.url()).pathname)) writes.push(r.url());
+    };
+    page.on("request", onRequest);
+    await page.goto("/new");
+    await page.getByTestId("pdf-input").setInputFiles(PDF);
+    await page.waitForURL(new RegExp(`/new/${lesson.documentId}$`));
+    await expect(page.getByTestId("textbook-reused")).toContainText("没有重新解析");
+    await shot(page, "23-textbook-reused");
+
+    await page.goto("/new");
+    page.once("dialog", (d) => void d.accept());
+    await page.getByTestId(`delete-doc-${lesson.documentId}`).click();
+    await expect(page.getByTestId("doc-deleted-note")).toBeVisible();
+    const asked: string[] = [];
+    page.once("dialog", (d) => {
+      asked.push(d.message());
+      void d.accept();
+    });
+    await page.getByTestId("pdf-input").setInputFiles(PDF);
+    await page.waitForURL(new RegExp(`/new/${lesson.documentId}$`));
+    await expect(page.getByTestId("textbook-reused")).toContainText("已恢复");
+    expect(asked[0]).toContain("恢复");
+    page.off("request", onRequest);
+    expect(writes).toEqual([]);
+
+    await page.goto("/new");
+    await expect(page.locator('[data-testid^="delete-doc-"]')).toHaveCount(1);
+  });
 });
 
 test("Chinese CID-font PDF: text is extracted, scanned pages are flagged and can be pasted", async ({ page }) => {

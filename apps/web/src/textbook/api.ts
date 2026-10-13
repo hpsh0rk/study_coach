@@ -1,4 +1,4 @@
-import type { ChapterNode, PageText } from "@kj/schema";
+import type { ChapterNode, PageRange, PageText } from "@kj/schema";
 import { api } from "../api.ts";
 
 export interface DocumentRow {
@@ -17,10 +17,18 @@ export interface CreateTextbook {
   sizeBytes: number;
   pageCount: number;
   chapters: ChapterNode[];
+  sha256?: string;
 }
+
+export type TextbookLookup =
+  | { status: "none"; pageBatch: number }
+  | { status: "ready"; document: DocumentRow; pageBatch: number }
+  | { status: "incomplete"; document: DocumentRow; missing: PageRange[]; pageBatch: number }
+  | { status: "archived"; document: DocumentRow; pageBatch: number };
 
 export const documentApi = {
   list: () => api<{ documents: DocumentRow[] }>("/api/documents"),
+  lookup: (sha256: string) => api<TextbookLookup>("/api/documents/lookup", { body: { sha256 } }),
   create: (body: CreateTextbook) => api<{ id: string; pageBatch: number }>("/api/documents", { body: { ...body } }),
   putPages: (id: string, pages: PageText[]) => api<{ received: number; pageCount: number; complete: boolean }>(`/api/documents/${id}/pages`, { body: { pages } }),
   get: (id: string) =>

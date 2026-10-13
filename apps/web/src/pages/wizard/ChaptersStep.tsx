@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import { countPages, isEmptyPage, labelOf, normalizeRanges, pageForLabel, pagesInRanges, rangesForChapters, sourceCut, subtreeIds } from "@kj/pdf-structure";
 import { OUTLINE_SOURCE_CHARS, scopeAdvice } from "@kj/pedagogy";
 import type { ChapterNode, PageRange } from "@kj/schema";
 import { ApiError } from "../../api.ts";
 import { lessonApi, type LessonView, type UnitPreview } from "../../lessonApi.ts";
 import { documentApi, type DocumentRow } from "../../textbook/api.ts";
+import type { IngestOutcome } from "../../textbook/ingest.ts";
 import { Stepper, StepIntro, type StepKey } from "./Stepper.tsx";
 
 /**
@@ -100,8 +101,15 @@ function PastePanel({ documentId, run, labels, onDone }: { documentId: string; r
   );
 }
 
+const REUSED: Partial<Record<IngestOutcome, string>> = {
+  ready: "这份 PDF 之前上传过，直接用了上次读好的文字，没有重新解析 · Already uploaded: reused without parsing again",
+  resumed: "上次没有传完，这次只补传了缺的页 · Finished the interrupted upload; only the missing pages were sent",
+  restored: "已恢复之前删除的这份教材 · Restored the PDF you deleted earlier",
+};
+
 export function ChaptersStep({ documentId, lesson, reached }: { documentId: string; lesson?: LessonView; reached: StepKey }) {
   const nav = useNavigate();
+  const reused = REUSED[(useLocation().state as { textbook?: IngestOutcome } | null)?.textbook ?? "new"];
   const [doc, setDoc] = useState<DocumentRow | null>(null);
   const [tree, setTree] = useState<ChapterNode[]>([]);
   const [labels, setLabels] = useState<Map<number, string>>(new Map());
@@ -245,6 +253,11 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
     <div className="wizard">
       <Stepper current="chapters" reached={reached} lessonId={lesson?.lesson.id} />
       <StepIntro step="chapters" />
+      {reused && (
+        <div className="alert info" data-testid="textbook-reused">
+          {reused}
+        </div>
+      )}
       {doc && (
         <div className="card">
           <div className="row between">

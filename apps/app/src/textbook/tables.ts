@@ -1,4 +1,5 @@
-import { index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { sql } from "drizzle-orm";
+import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { now, orgs, users } from "../db/accounts.ts";
 
 /** Textbook tables: read and written only through apps/app/src/textbook (see .dependency-cruiser.cjs). */
@@ -15,11 +16,16 @@ export const documents = sqliteTable(
     /** Pages received so far; the document is usable once it equals page_count. */
     pagesReceived: integer("pages_received").notNull().default(0),
     hasBookmarks: integer("has_bookmarks", { mode: "boolean" }).notNull(),
+    /** sha256 of the PDF file (computed in the browser before parsing): the same book is parsed and stored once per teacher. Null for uploads before migration 0006. */
+    fileSha256: text("file_sha256"),
     createdAt: integer("created_at").notNull().$defaultFn(now),
     /** Soft delete, like lessons.archived_at: hidden from lists and new lessons; lessons made from it keep working. */
     archivedAt: integer("archived_at"),
   },
-  (t) => [index("documents_owner_idx").on(t.orgId, t.ownerId)],
+  (t) => [
+    index("documents_owner_idx").on(t.orgId, t.ownerId),
+    uniqueIndex("documents_owner_sha_uq").on(t.ownerId, t.fileSha256).where(sql`archived_at IS NULL AND file_sha256 IS NOT NULL`),
+  ],
 );
 
 export const pages = sqliteTable(

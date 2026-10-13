@@ -1,0 +1,2 @@
+ALTER TABLE `documents` ADD `file_sha256` text;--> statement-breakpoint
+CREATE UNIQUE INDEX `documents_owner_sha_uq` ON `documents` (`owner_id`,`file_sha256`) WHERE archived_at IS NULL AND file_sha256 IS NOT NULL;

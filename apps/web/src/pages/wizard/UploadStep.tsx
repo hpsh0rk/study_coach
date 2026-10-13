@@ -2,11 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { ApiError } from "../../api.ts";
 import { documentApi, type DocumentRow } from "../../textbook/api.ts";
-import { fileProblem, ingestPdf, MAX_MB } from "../../textbook/ingest.ts";
+import { fileProblem, ingestPdf, MAX_MB, sha256Hex } from "../../textbook/ingest.ts";
 import { parsePdf } from "../../textbook/pdf.ts";
 import { Stepper, StepIntro } from "./Stepper.tsx";
 
-type Phase = { kind: "idle" } | { kind: "parsing"; done: number; total: number } | { kind: "uploading"; done: number; total: number } | { kind: "error"; message: string };
+type Phase = { kind: "idle" } | { kind: "checking" } | { kind: "parsing"; done: number; total: number } | { kind: "uploading"; done: number; total: number } | { kind: "error"; message: string };
 
 export function UploadStep() {
   const nav = useNavigate();
@@ -53,15 +53,27 @@ export function UploadStep() {
     const problem = fileProblem(file);
     if (problem) return setPhase({ kind: "error", message: problem });
     try {
-      const id = await ingestPdf(file, { parse: (data, title, onProgress) => parsePdf(data, title, { onProgress }), create: documentApi.create, putPages: documentApi.putPages }, setPhase);
-      nav(`/new/${id}`);
+      const { id, outcome } = await ingestPdf(
+        file,
+        {
+          hash: sha256Hex,
+          lookup: documentApi.lookup,
+          parse: (data, title, onProgress) => parsePdf(data, title, { onProgress }),
+          create: documentApi.create,
+          putPages: documentApi.putPages,
+          restore: documentApi.restore,
+          confirmRestore: (d) => window.confirm(`这份 PDF 之前上传过（“${d.title}”），后来删除了。恢复它？选“取消”会重新上传一份。· You deleted this PDF earlier. Restore it? Cancel uploads it again.`),
+        },
+        setPhase,
+      );
+      nav(`/new/${id}`, { state: { textbook: outcome } });
     } catch (err) {
       setPhase({ kind: "error", message: err instanceof ApiError ? err.message : `无法读取这个 PDF · Could not read this PDF (${(err as Error).message})` });
     }
   }
 
-  const busy = phase.kind === "parsing" || phase.kind === "uploading";
-  const pct = busy ? Math.round((phase.done / Math.max(1, phase.total)) * 100) : 0;
+  const busy = phase.kind === "checking" || phase.kind === "parsing" || phase.kind === "uploading";
+  const pct = phase.kind === "parsing" || phase.kind === "uploading" ? Math.round((phase.done / Math.max(1, phase.total)) * 100) : 0;
 
   return (
     <div className="wizard">
@@ -100,7 +112,9 @@ export function UploadStep() {
         <div className="dropzone-icon">📄</div>
         {busy ? (
           <>
-            <b>{phase.kind === "parsing" ? `正在读取第 ${phase.done} / ${phase.total} 页… Reading pages` : `正在上传文字 ${phase.done} / ${phase.total} 页… Uploading text`}</b>
+            <b data-testid="ingest-phase" data-phase={phase.kind}>
+              {phase.kind === "checking" ? "正在检查是否上传过… Checking this PDF" : phase.kind === "parsing" ? `正在读取第 ${phase.done} / ${phase.total} 页… Reading pages` : `正在上传文字 ${phase.done} / ${phase.total} 页… Uploading text`}
+            </b>
             <div className="progress">
               <div style={{ width: `${pct}%` }} />
             </div>

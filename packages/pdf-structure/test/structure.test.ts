@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TocEntry } from "@kj/schema";
-import { buildChapterTree, chapterRunsOf, countPages, distributeText, formatPages, isEmptyPage, leafSections, normalizeRanges, pageForLabel, rangesForChapters, sourceCut, sourceForRanges, subtreeIds } from "../src/index.ts";
+import { buildChapterTree, chapterRunsOf, countPages, distributeText, formatPages, isEmptyPage, leafSections, missingRanges, normalizeRanges, pageForLabel, rangesForChapters, sourceCut, sourceForRanges, subtreeIds } from "../src/index.ts";
 
 const toc: TocEntry[] = [
   {
@@ -72,6 +72,16 @@ describe("ranges", () => {
       { start: 7, end: 8 },
     ]);
     expect(countPages(r)).toBe(5);
+  });
+
+  it("lists the pages an interrupted upload still has to send", () => {
+    expect(missingRanges([1, 2, 5, 6, 9], 10)).toEqual([
+      { start: 3, end: 4 },
+      { start: 7, end: 8 },
+      { start: 10, end: 10 },
+    ]);
+    expect(missingRanges([1, 2, 3], 3)).toEqual([]);
+    expect(missingRanges([], 2)).toEqual([{ start: 1, end: 2 }]);
   });
 });
 
