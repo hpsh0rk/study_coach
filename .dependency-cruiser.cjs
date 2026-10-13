@@ -126,10 +126,10 @@ module.exports = {
     },
     {
       name: "only-textbook-ingest-cuts-pdfs",
-      comment: "Cutting sub-PDFs (pdf-lib) and unzipping parser results (fflate) happen in apps/web/src/textbook only.",
+      comment: "Cutting sub-PDFs (pdf-lib) happens in apps/web/src/textbook only.",
       severity: "error",
       from: { path: "^apps/web/src/", pathNot: "^apps/web/src/textbook/" },
-      to: { path: "node_modules/(pdf-lib|fflate)/|^(pdf-lib|fflate)$" },
+      to: { path: "node_modules/pdf-lib/|^pdf-lib$" },
     },
     {
       name: "pedagogy-has-no-io",

@@ -60,7 +60,7 @@ async function seal(plain, secret) {
 
 const SEALED = [
   { table: "ai_providers", key: "id", columns: ["api_key_sealed", "headers_sealed"] },
-  { table: "parser_settings", key: "org_id", columns: ["mineru_token_sealed", "selfhost_url_sealed", "selfhost_key_sealed"] },
+  { table: "parser_settings", key: "org_id", columns: ["selfhost_url_sealed", "selfhost_key_sealed"] },
 ];
 const q = (s) => `'${String(s).replace(/'/g, "''")}'`;
 const d1 = (sql) => JSON.parse(wrangler(["d1", "execute", "DB", "--local", "--persist-to", stateDir, "--json", "--command", sql], { stdio: ["ignore", "pipe", "inherit"] }))[0]?.results ?? [];

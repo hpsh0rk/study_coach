@@ -178,7 +178,7 @@ export function AdminPage() {
 interface SetupView {
   ai: { state: "live"; provider: string; model: string } | { state: "stub" | "off" };
   vision: { state: "on" | "paid_off"; provider: string; model: string; separate: boolean } | { state: "none" };
-  external: ({ state: "on" } | { state: "off" } | { state: "unconfigured"; missing: "token" | "url" }) & { mode: "agent" | "token" | "selfhost"; stub: boolean };
+  external: ({ state: "on" } | { state: "off" } | { state: "unconfigured"; missing: "url" }) & { mode: "agent" | "selfhost"; stub: boolean };
   counts: { users: number; textbooks: number; lessons: number; parsedPagesToday: number; modelCallsToday: number; modelCallsPerDay: number };
 }
 
@@ -230,7 +230,7 @@ function CriticalBanner({ saved, open }: { saved: number; open: (tab: Tab) => vo
   );
 }
 
-const MODE_LABEL = { agent: "MinerU 免费轻量接口", token: "MinerU 精准接口", selfhost: "学校自部署的 MinerU" } as const;
+const MODE_LABEL = { agent: "MinerU 免费轻量接口", selfhost: "学校自部署的 MinerU" } as const;
 
 /** What each key-backed feature does now and, when something is missing, which feature is off and what to fill in where. */
 function setupRows(v: SetupView): { id: string; title: string; ok: boolean; badge: string; text: string; tab: Tab }[] {
@@ -257,7 +257,7 @@ function setupRows(v: SetupView): { id: string; title: string; ok: boolean; badg
         : {
             ok: false,
             badge: "未配置",
-            text: e.missing === "url" ? "选了“MinerU 自部署”，但还没有填服务地址。填好之前不会发送任何页面。" : "选了“精准接口”，但还没有填 MinerU Token。填好之前不会发送任何页面。",
+            text: "选了“MinerU 自部署”，但还没有填服务地址。填好之前不会发送任何页面。",
           };
   return [
     { id: "ai", title: "AI 模型（写大纲和幻灯片）", tab: "ai", ...ai },
@@ -835,14 +835,12 @@ function VisionProviderCard({ view, run, test }: { view: AiView; run: (fn: () =>
 }
 
 type ExternalChoice = "auto" | "on" | "off";
-type MineruApi = "agent" | "token" | "selfhost";
+type MineruApi = "agent" | "selfhost";
 
 interface ParsingView {
   externalChoice: ExternalChoice;
-  external: { state: "on" } | { state: "off" } | { state: "unconfigured"; missing: "token" | "url" };
+  external: { state: "on" } | { state: "off" } | { state: "unconfigured"; missing: "url" };
   mineruMode: MineruApi;
-  tokenHint: string | null;
-  envToken: boolean;
   selfhostUrlHint: string | null;
   selfhostKeyHint: string | null;
   stub: boolean;
@@ -865,14 +863,12 @@ const STATE_BADGE = {
 
 const MODE_NOTICE: Record<MineruApi, string> = {
   agent: "已切换到免费轻量接口 · Using the token-free API",
-  token: "已切换到精准接口 · Using the precise API",
   selfhost: "已切换到学校自部署的 MinerU · Using the self-hosted MinerU",
 };
 
 /** "外部解析服务": whether pages the browser could not read go to MinerU (online, or the school's own server). On once configured, unless an admin turns it off. */
 function ParsingPanel({ onSaved }: { onSaved: () => void }) {
   const [view, setView] = useState<ParsingView | null>(null);
-  const [token, setToken] = useState("");
   const [selfhostUrl, setSelfhostUrl] = useState("");
   const [selfhostKey, setSelfhostKey] = useState("");
   const [price, setPrice] = useState("");
@@ -969,33 +965,10 @@ function ParsingPanel({ onSaved }: { onSaved: () => void }) {
             <span>免费轻量接口：不需要 Token，每次最多 10 页、10 MB，按 IP 限频 · Token-free agent API</span>
           </label>
           <label className="check-row">
-            <input type="radio" name="mineru-mode" checked={view.mineruMode === "token"} onChange={() => void save({ mineruMode: "token" }, MODE_NOTICE.token)} data-testid="mineru-mode-token" />
-            <span>精准接口（vlm 模型，更准）：需要 MinerU Token · Precise API (needs a token)</span>
-          </label>
-          <label className="check-row">
             <input type="radio" name="mineru-mode" checked={view.mineruMode === "selfhost"} onChange={() => void save({ mineruMode: "selfhost" }, MODE_NOTICE.selfhost)} data-testid="mineru-mode-selfhost" />
-            <span>MinerU 自部署：学校自己的 mineru-api 服务（MinerU 4 的 /v1 接口，或 3.x 的 /tasks 接口），填地址和可选的 API Key · Self-hosted MinerU</span>
+            <span>MinerU 自部署：学校自己的 mineru-api 服务（MinerU 4 或更新版本的 /v1 接口），填地址和可选的 API Key · Self-hosted MinerU</span>
           </label>
         </fieldset>
-        {view.mineruMode === "token" && (
-          <form
-            className="row wrap"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void save({ token }, "Token 已加密保存 · Token saved (encrypted)").then(() => setToken(""));
-            }}
-          >
-            <input type="password" placeholder={view.tokenHint ?? (view.envToken ? "使用服务器上的 MINERU_API_TOKEN" : "MinerU API Token")} value={token} onChange={(e) => setToken(e.target.value)} autoComplete="off" />
-            <button className="btn small" disabled={token.trim().length < 8}>
-              保存 Token
-            </button>
-            {view.tokenHint && (
-              <button type="button" className="btn small ghost" onClick={() => void save({ token: null }, "Token 已删除 · Token removed")}>
-                删除 Remove
-              </button>
-            )}
-          </form>
-        )}
         {view.mineruMode === "selfhost" && (
           <form
             className="form-grid"
@@ -1036,9 +1009,7 @@ function ParsingPanel({ onSaved }: { onSaved: () => void }) {
         )}
         {view.external.state === "unconfigured" && (
           <div className="alert warn" data-testid="parsing-missing">
-            {view.external.missing === "url"
-              ? "还没有填写自部署 MinerU 的地址：填好之前外部解析服务不会开启，读不全的页交给看图模型（如果配置了）或老师粘贴。· Enter the self-hosted URL to turn it on."
-              : "精准接口需要 MinerU Token：填好之前外部解析服务不会开启，读不全的页交给看图模型（如果配置了）或老师粘贴。· The precise API needs a token."}
+            还没有填写自部署 MinerU 的地址：填好之前外部解析服务不会开启，读不全的页交给看图模型（如果配置了）或老师粘贴。· Enter the self-hosted URL to turn it on.
           </div>
         )}
         {view.stub && <div className="alert info">开发 / 测试环境：MinerU 在线接口用录制好的返回结果，不会真正发出页面（自部署按填写的地址连接）· Online API stubbed</div>}

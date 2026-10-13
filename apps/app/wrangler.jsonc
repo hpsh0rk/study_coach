@@ -30,8 +30,8 @@
     "ENVIRONMENT": "production",
     // Deterministic stub model when no provider is configured in /admin.
     "AI_ALLOW_STUB": "false",
-    // "外部解析服务" (admin switch, off by default): MinerU's token-free agent API unless an admin picks the
-    // precise API (token in /admin or the MINERU_API_TOKEN secret). Tests and E2E use "stub".
+    // Default API of "外部解析服务" (on once the chosen API is configured): MinerU's token-free agent API, or
+    // "selfhost" (the school's own MinerU 4+, URL entered in /admin). Tests and E2E use "stub".
     "PARSER_MINERU_MODE": "agent"
   }
 }

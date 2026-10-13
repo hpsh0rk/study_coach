@@ -77,11 +77,8 @@ export const parserSettings = sqliteTable("parser_settings", {
   orgId: text("org_id").primaryKey().references(() => orgs.id),
   /** `auto`: on when the chosen API is configured (a token for `token`, a URL for `selfhost`; `agent` needs nothing). `on` / `off`: the admin decided. */
   externalChoice: text("external_choice", { enum: ["auto", "on", "off"] }).notNull().default("auto"),
-  /** `agent`: MinerU's token-free API (≤ 20 pages, 10 MB per file). `token`: the precise API with a MinerU token. `selfhost`: the school's own mineru-api server. */
-  mineruMode: text("mineru_mode", { enum: ["agent", "token", "selfhost"] }).notNull().default("agent"),
-  /** Sealed with AI_CONFIG_KEY like ai_providers.api_key_sealed; falls back to the MINERU_API_TOKEN secret. */
-  mineruTokenSealed: text("mineru_token_sealed"),
-  mineruTokenHint: text("mineru_token_hint"),
+  /** `agent`: MinerU's token-free API (≤ 20 pages, 10 MB per file). `selfhost`: the school's own mineru-api server (MinerU ≥ 4). */
+  mineruMode: text("mineru_mode", { enum: ["agent", "selfhost"] }).notNull().default("agent"),
   /** Self-hosted MinerU base URL (before /v1), sealed like the keys: it may name a private host, so the browser only sees the hint. */
   selfhostUrlSealed: text("selfhost_url_sealed"),
   selfhostUrlHint: text("selfhost_url_hint"),

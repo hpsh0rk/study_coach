@@ -92,7 +92,7 @@ D1：orgs, users, sessions, login_attempts, ai_providers, ai_calls, audit_log,
 | `server-code-is-dom-free` | `apps/app`、`ai`、`generation`、`pedagogy`、`schema`，以及 `templates`/`widgets`/`textbook` 的核心入口，不得导入渲染入口、player、pdf.js、ECharts、KaTeX、React |
 | `model-calls-stay-on-the-server` | `apps/web`、`player` 不得导入 `ai`、`generation` |
 | `only-textbook-ingest-loads-pdfjs` | `apps/web` 里只有 `src/textbook/` 能导入 pdf.js 或 `textbook/browser` |
-| `only-textbook-ingest-cuts-pdfs` | `apps/web` 里只有 `src/textbook/` 能导入 pdf-lib（切子 PDF）和 fflate（解压解析结果）；两者都按需加载 |
+| `only-textbook-ingest-cuts-pdfs` | `apps/web` 里只有 `src/textbook/` 能导入 pdf-lib（切子 PDF），按需加载 |
 | `only-the-server-and-evals-orchestrate` | 其他 `packages/*` 不得导入 `generation`（只有 Worker 路由与 `tools/eval` 调用它） |
 | `product-code-never-imports-tools` | `apps/*`、`packages/*` 不得导入 `tools/*` |
 | `ai-layer-is-generic` | `ai` 只依赖 `schema`，不认识课、版式、教学规则 |
@@ -102,7 +102,7 @@ D1：orgs, users, sessions, login_attempts, ai_providers, ai_calls, audit_log,
 | `textbook-tables-are-private` | `documents` / `pages` / `chapters`（`apps/app/src/textbook/tables.ts`）只能在 `apps/app/src/textbook/` 里导入；`db/schema.ts` 只为 `lessons` 的外键导入且不再导出（`apps/app/test/boundaries.test.ts` 检查） |
 | `textbook-writes-only-from-the-documents-route` | `textbook/write.ts`（上传、粘贴、删除）只给 `routes/documents.ts` 用；其他代码只经 `textbook/index.ts` 读 |
 | `textbook-does-not-know-lessons` | `apps/app/src/textbook/` 不得导入 `store.ts`、`routes/*`、`ai.ts`，也不得导入 `generation`、`pedagogy`、`templates`、`widgets`、`player`、`pptx` |
-| `only-parser-adapters-call-ai` | 教材模块里只有 `textbook/parsers/` 能导入 `ai`：解封管理员填的 MinerU Token，以及看图模型兜底 `parsers/vision.ts`（模型层由 `routes/documents.ts` 按请求传进来，教材模块不导入 `apps/app/src/ai.ts`） |
+| `only-parser-adapters-call-ai` | 教材模块里只有 `textbook/parsers/` 能导入 `ai`：解封管理员填的自部署地址和 Key，以及看图模型兜底 `parsers/vision.ts`（模型层由 `routes/documents.ts` 按请求传进来，教材模块不导入 `apps/app/src/ai.ts`） |
 | `parsers-plug-in-through-the-textbook-module` | `textbook/parsers/` 只给教材模块自己、`routes/documents.ts`（解析任务）和 `routes/admin.ts`（开关）用 |
 | `admin-sees-parser-settings-only` | `routes/admin.ts` 只能导入 `textbook/parsers/settings.ts`，不碰任务和适配器 |
 | `pptx-export-reads-the-deck-only` | `pptx` 只依赖 `schema`、`templates` / `widgets` 的核心入口（和 pptxgenjs），不得导入渲染入口、player、`ai`、`generation`、`pedagogy`、`textbook` |
@@ -204,7 +204,7 @@ PipelineOptions = { budgetsInPrompt, outlineCheckRetry, slideCheckRetry, truncat
 | `slides` | id, lesson_id, outline_version_id, spec_id, spec_hash（= slideKey）, layout, page_type, minutes, content, notes, sources, warnings, unverified, provider_id, prev_content, prev_notes | UNIQUE(outline_version_id, spec_id)；INDEX(lesson_id, spec_hash)；触发器 `slides_require_confirmed_insert` |
 | `share_links` | id, token_hash, lesson_id, version_id, reviewed_at, answers, created_by, revoked_at | 每课最多一条有效链接；token = HMAC(密钥, 链接 id)，库里只存其 sha256；`answers` = `hidden`（课前预习，默认，迁移 0005 之前的链接也按它处理）/ `shown`（课后复习） |
 | `ai_providers` | id, org_id, purpose, kind, name, base_url, api_key_sealed, api_key_hint, model, vision_model, enabled | 每个组织每种 `purpose` 最多一个 enabled（启用一个会停用同一种的其他）。`purpose`（迁移 0012）：`text` 写大纲和幻灯片（`model`，可带同一提供方的 `vision_model`）；`vision` 是单独的看图提供方，用它自己的 Key，只读页面图片（`model` 就是看图模型），例如文字用 DeepSeek、看图用智谱 GLM-4.6V-Flash 或百炼 qwen-vl-ocr。读图时单独的看图提供方优先（`visionModelOf`）；`/me` 的 `ai` 模式只看 `text` |
-| `parser_settings` | org_id, external_choice, mineru_mode, mineru_token_sealed, mineru_token_hint, selfhost_url_sealed, selfhost_url_hint, selfhost_key_sealed, selfhost_key_hint, paid_enabled, monthly_budget_micro_yuan, vision_price_micro_yuan, updated_at, updated_by | 迁移 0009 / 0010 / 0011。管理员开关“外部解析服务”`external_choice`（迁移 0011 替换 `external_enabled`，原来开着的迁成 `on`）：`auto`（默认，没有这一行也是它）= 选中的接口配置好就开启，`on` 同样要配置好才真正发送，`off` = 任何页都不离开浏览器。`mineru_mode`：`agent`（MinerU 免 Token 轻量接口，每份 ≤ 20 页 / 10 MB，即 10 页内容 + 10 页分隔页；不需要配置，所以默认就开启）、`token`（精准接口 vlm 模型，Token 用 `AI_CONFIG_KEY` 加密存这里，没有时用 Worker 机密 `MINERU_API_TOKEN`；都没有 = 未配置）或 `selfhost`（MinerU 自部署：地址必填、API Key 可选，都加密存，地址也当机密只回显掩码；没有地址 = 未配置）。环境变量 `PARSER_MINERU_MODE` 是新组织的默认接口，`stub` 只给测试和 E2E（回放录制的 MinerU 返回，生产环境拒绝），只替换在线接口：自部署始终请求管理员填的地址（E2E 用本机 mock 服务）。迁移 0010：“允许付费兜底”`paid_enabled`（默认关：每页价格 > 0 的解析一律 402）、每月预算（微元，1 元 = 1,000,000）、管理员填的看图模型每页价格（空 = 用列表价） |
+| `parser_settings` | org_id, external_choice, mineru_mode, selfhost_url_sealed, selfhost_url_hint, selfhost_key_sealed, selfhost_key_hint, paid_enabled, monthly_budget_micro_yuan, vision_price_micro_yuan, updated_at, updated_by | 迁移 0009 / 0010 / 0011 / 0015。管理员开关“外部解析服务”`external_choice`（迁移 0011 替换 `external_enabled`，原来开着的迁成 `on`）：`auto`（默认，没有这一行也是它）= 选中的接口配置好就开启，`on` 同样要配置好才真正发送，`off` = 任何页都不离开浏览器。`mineru_mode`：`agent`（MinerU 免 Token 轻量接口，每份 ≤ 20 页 / 10 MB，即 10 页内容 + 10 页分隔页；不需要配置，所以默认就开启）或 `selfhost`（MinerU 4+ 自部署，`/v1` 接口：地址必填、API Key 可选，都加密存，地址也当机密只回显掩码；没有地址 = 未配置）。精准接口（`token`，从没在真机上验证过）和自部署的 MinerU 3.x `/tasks` 方言按设计评审 O1 删掉了：迁移 0015 把选了 `token` 的组织改回 `agent` 并删掉 Token 列。环境变量 `PARSER_MINERU_MODE` 是新组织的默认接口，`stub` 只给测试和 E2E（回放录制的 MinerU 返回，生产环境拒绝），只替换在线接口：自部署始终请求管理员填的地址（E2E 用本机 mock 服务）。迁移 0010：“允许付费兜底”`paid_enabled`（默认关：每页价格 > 0 的解析一律 402）、每月预算（微元，1 元 = 1,000,000）、管理员填的看图模型每页价格（空 = 用列表价） |
 | `parse_usage` | id, org_id, user_id, document_id, parser, reason, pages, page_count, cost_micro_yuan, state, task_id, upload_url, result_url, error, day | 迁移 0009（0010 把 `cost_fen` 改名为 `cost_micro_yuan`：看图模型一页可能不到 1 分）。每份发出去的子 PDF、或每张发给看图模型的页面图片一行：任务状态（submitted → uploaded → parsed → done / failed）和额度计数。`reason`：`auto`（必修页，不问老师）或 `refine`（老师点“精修本章”）。额度：每本书自动 300 页、每位老师每天 300 页、全站每天 900 页（只算 MinerU 在线接口，护住它每天的免费额度；自部署不计入全站额度，仍受每本书和每位老师的额度）（429 `PARSE_QUOTA`，`detail.scope`）；付费解析（每页价格 > 0）要先开“允许付费兜底”（否则 402 `PARSE_BUDGET` scope `off`），再受组织每月预算（`month`）和每本书 ¥5（`book`）约束；MinerU 两种接口都不收费，GLM-4.6V-Flash 免费。`day` 按北京时间。`upload_url` 是签名地址，不发给浏览器。从同一文件的副本复用的页不发出、不计数 |
 
 ---
@@ -224,8 +224,8 @@ PipelineOptions = { budgetsInPrompt, outlineCheckRetry, slideCheckRetry, truncat
                     整本书有必修页（公式没读出 / 扫描 / 乱码）时顶部显示“这本书有 N 页可能没读全”及各类页数；
                     章节标“N 页公式没读出”等；所选页里有文字但读不全的页单独提示，可粘贴完整文字替换
                     “外部解析服务”开启时（默认：管理员选的接口配置好就开启；免 Token 轻量接口不需要配置）：刚在本标签页上传的书，必修页（每本最多 300 页）自动送去重新识别——
-                    浏览器用 pdf-lib 切出这几页（每页前一页“KJPAGE i”）→ PUT /documents/:id/parse/:job/file（Worker 流式转给 MinerU；自部署：MinerU 4 是 POST /v1/tasks 原始字节，3.x 是 POST /tasks multipart，上传即建任务）
-                    → 轮询 → GET …/result（Worker 流式转回；token 模式是 zip，fflate 解压取 full.md）→ 按分隔页拆回各页 → POST …/pages；
+                    浏览器用 pdf-lib 切出这几页（每页前一页“KJPAGE i”）→ PUT /documents/:id/parse/:job/file（Worker 流式转给 MinerU；自部署：POST /v1/tasks 原始字节，上传即建任务）
+                    → 轮询 → GET …/result（Worker 流式转回 Markdown）→ 按分隔页拆回各页 → POST …/pages；
                     刷新后浏览器没有文件：点“用外部解析服务读这 N 页”再选一次同一个 PDF（按 sha256 核对）；
                     表格、公式多的章节可点“精修本章”（refine，不自动发）。章节标“N 页外部解析”。没读回来的页仍可粘贴
                     MinerU 没读回来的页（失败、限频、分隔页缺失）接着交给看图模型（如果可用）

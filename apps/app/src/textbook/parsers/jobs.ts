@@ -17,10 +17,9 @@ export interface ExternalParserInfo {
   parser: string;
   maxPagesPerJob: number;
   maxBytes: number;
-  format: "markdown" | "zip";
 }
 
-const info = (p: ExternalParser): ExternalParserInfo => ({ parser: p.id, maxPagesPerJob: p.maxPagesPerJob, maxBytes: p.maxBytes, format: p.format });
+const info = (p: ExternalParser): ExternalParserInfo => ({ parser: p.id, maxPagesPerJob: p.maxPagesPerJob, maxBytes: p.maxBytes });
 
 export async function externalParserInfo(env: Env, orgId: string): Promise<ExternalParserInfo | null> {
   try {
@@ -34,9 +33,7 @@ export async function externalParserInfo(env: Env, orgId: string): Promise<Exter
 /** Why there is no external parser, in words a teacher can act on (ask the admin). */
 export function externalOffMessage(state: Exclude<ExternalState, { state: "on" }>): string {
   if (state.state === "off") return "管理员关闭了外部解析服务 · External parsing is off";
-  return state.missing === "url"
-    ? "外部解析未配置：请联系管理员在后台“外部解析服务”里填写自部署 MinerU 的地址 · External parser not configured"
-    : "外部解析未配置：请联系管理员在后台“外部解析服务”里填写 MinerU Token · External parser not configured";
+  return "外部解析未配置：请联系管理员在后台“外部解析服务”里填写自部署 MinerU 的地址 · External parser not configured";
 }
 
 /** For the chapters step: why the external parser cannot take pages right now, or null when it can. Holds no secret. */

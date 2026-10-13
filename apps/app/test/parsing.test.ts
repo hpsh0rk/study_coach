@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { MINERU_AGENT_PARSER, MINERU_PARSER } from "@kj/textbook";
+import { MINERU_AGENT_PARSER } from "@kj/textbook";
 import recorded from "../src/textbook/parsers/mineru-recorded.json";
-import { agentParser, isMineruHost, tokenParser } from "../src/textbook/parsers/mineru.ts";
+import { agentParser, isMineruHost } from "../src/textbook/parsers/mineru.ts";
 import { chinaDay, PARSE_LIMITS, parseAllowance } from "../src/textbook/parsers/settings.ts";
 import { e, loggedIn, seedUser, type Client } from "./client.ts";
 
@@ -78,7 +78,7 @@ describe("external parser switch (外部解析服务)", () => {
   it("when on: must-fix pages go through the stubbed MinerU and come back as text by page", async () => {
     expect((await admin.req("PUT", "/api/admin/parsing", { externalChoice: "on" })).status).toBe(200);
     const id = await newBook(t7, "2".repeat(64));
-    expect((await t7.req("GET", `/api/documents/${id}`)).json.externalParser).toEqual({ parser: MINERU_AGENT_PARSER, maxPagesPerJob: 10, maxBytes: 10 * 1024 * 1024, format: "markdown" });
+    expect((await t7.req("GET", `/api/documents/${id}`)).json.externalParser).toEqual({ parser: MINERU_AGENT_PARSER, maxPagesPerJob: 10, maxBytes: 10 * 1024 * 1024 });
 
     // Readable pages are not sent; refine-kind pages only when the teacher asks.
     expect((await t7.req("POST", `/api/documents/${id}/parse`, { pages: [1], reason: "auto" })).json.error).toMatchObject({ code: "PAGES_NOT_ELIGIBLE", detail: { pages: [1] } });
@@ -207,7 +207,7 @@ describe("MinerU adapters (recorded exchange, no network)", () => {
 
   it("refuses URLs outside MinerU, and reports rate limits as busy", async () => {
     expect(isMineruHost("https://cdn-mineru.openxlab.org.cn/pdf/x/full.md")).toBe(true);
-    // The agent and token APIs hand out signed upload URLs on MinerU's own OSS bucket (seen live 2026-10-13).
+    // The agent API hands out signed upload URLs on MinerU's own OSS bucket (seen live 2026-10-13).
     expect(isMineruHost("https://mineru.oss-cn-shanghai.aliyuncs.com/api-upload/extract/x.pdf?Signature=s")).toBe(true);
     expect(isMineruHost("https://evil.example/full.md")).toBe(false);
     expect(isMineruHost("https://other-bucket.oss-cn-shanghai.aliyuncs.com/x")).toBe(false);
@@ -219,19 +219,4 @@ describe("MinerU adapters (recorded exchange, no network)", () => {
     await expect(agentParser(limited.f).submit({ ocr: true })).rejects.toMatchObject({ code: "PARSER_BUSY", status: 503 });
   });
 
-  it("token API: batch upload URL with the token, zip result", async () => {
-    const { f, asked } = replay([
-      json({ code: 0, data: { batch_id: "b1", file_urls: ["https://other-bucket.oss-cn-shanghai.aliyuncs.com/x"] } }),
-      json({ code: 0, data: { batch_id: "b1", file_urls: ["https://mineru.oss-cn-shanghai.aliyuncs.com/x"] } }),
-      json({ code: 0, data: { extract_result: [{ state: "done", full_zip_url: "https://cdn-mineru.openxlab.org.cn/pdf/b1.zip" }] } }),
-    ]);
-    const p = tokenParser("tok_secret", f);
-    expect(p.id).toBe(MINERU_PARSER);
-    await expect(p.submit({ ocr: false })).rejects.toMatchObject({ code: "PARSER_FAILED" });
-    const task = await p.submit({ ocr: true });
-    expect(new Headers(asked[1]!.init!.headers).get("authorization")).toBe("Bearer tok_secret");
-    expect(JSON.parse(asked[1]!.init!.body as string)).toMatchObject({ files: [{ name: "pages.pdf", is_ocr: true }], model_version: "vlm" });
-    expect(await p.poll(task.taskId)).toEqual({ state: "done", resultUrl: "https://cdn-mineru.openxlab.org.cn/pdf/b1.zip" });
-    expect(asked[2]!.url).toBe("https://mineru.net/api/v4/extract-results/batch/b1");
-  });
 });
