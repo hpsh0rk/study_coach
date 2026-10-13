@@ -53,7 +53,7 @@ async function toSettings(page: Page, thinShot?: string) {
 
 async function login(page: Page) {
   await page.goto("/login");
-  for (const password of [INITIAL, CHANGED]) {
+  for (const password of [CHANGED, INITIAL]) {
     await page.getByLabel("用户名 Username").fill("admin");
     await page.getByLabel("密码 Password").fill(password);
     await page.getByRole("button", { name: "登录 Log in" }).click();
