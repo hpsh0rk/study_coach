@@ -82,30 +82,20 @@ D1：orgs, users, sessions, login_attempts, ai_providers, ai_calls, audit_log,
    pptx（schema + templates 核心 + widgets 核心 → 可编辑 .pptx；不依赖应用、渲染入口、player、模型）
 ```
 
-**规则（`.dependency-cruiser.cjs`，`pnpm lint` 执行，违反即失败）**
+**规则**
+
+包与包之间的边界以各包的 `package.json` 为准：没有声明的工作区依赖导入不了，`tsc` 直接报错（上图的层次就是这些依赖声明）。`.dependency-cruiser.cjs` 只管 `tsc` 看不到的边界（`pnpm lint` 执行，违反即失败；设计评审 C1 把规则从 20 条删到这 8 条）：
 
 | 规则 | 说明 |
 |---|---|
 | `no-circular` | 禁止循环依赖 |
-| `schema-is-a-leaf` | `schema` 只放类型与 zod schema，不依赖其他包 |
-| `packages-never-import-apps` | `packages/*` 永不依赖 `apps/*` |
 | `server-code-is-dom-free` | `apps/app`、`ai`、`generation`、`pedagogy`、`schema`，以及 `templates`/`widgets`/`textbook` 的核心入口，不得导入渲染入口、player、pdf.js、ECharts、KaTeX、React |
 | `model-calls-stay-on-the-server` | `apps/web`、`player` 不得导入 `ai`、`generation` |
 | `only-textbook-ingest-loads-pdfjs` | `apps/web` 里只有 `src/textbook/` 能导入 pdf.js 或 `textbook/browser` |
 | `only-textbook-ingest-cuts-pdfs` | `apps/web` 里只有 `src/textbook/` 能导入 pdf-lib（切子 PDF），按需加载 |
-| `only-the-server-and-evals-orchestrate` | 其他 `packages/*` 不得导入 `generation`（只有 Worker 路由与 `tools/eval` 调用它） |
 | `product-code-never-imports-tools` | `apps/*`、`packages/*` 不得导入 `tools/*` |
 | `ai-layer-is-generic` | `ai` 只依赖 `schema`，不认识课、版式、教学规则 |
-| `pedagogy-rules-do-not-import-templates` | `pedagogy` 不得依赖 `templates`：共用的版式预算与页型 → 版式映射来自 `schema`（审查 #3 D-10）。规则同时匹配裸包名 `@kj/templates`，没有声明依赖、导入解析不了时也会报错 |
-| `pedagogy-has-no-io` | `pedagogy` 不得依赖 `ai`、`generation`、`player`、`textbook` |
-| `textbook-core-is-a-low-layer` | `textbook`（教材核心）只依赖 `schema`，不认识课、教学规则、版式、模型（同时匹配裸包名） |
 | `textbook-tables-are-private` | `documents` / `pages` / `chapters`（`apps/app/src/textbook/tables.ts`）只能在 `apps/app/src/textbook/` 里导入；`db/schema.ts` 只为 `lessons` 的外键导入且不再导出（`apps/app/test/boundaries.test.ts` 检查） |
-| `textbook-writes-only-from-the-documents-route` | `textbook/write.ts`（上传、粘贴、删除）只给 `routes/documents.ts` 用；其他代码只经 `textbook/index.ts` 读 |
-| `textbook-does-not-know-lessons` | `apps/app/src/textbook/` 不得导入 `store.ts`、`routes/*`、`ai.ts`，也不得导入 `generation`、`pedagogy`、`templates`、`widgets`、`player`、`pptx` |
-| `only-parser-adapters-call-ai` | 教材模块里只有 `textbook/parsers/` 能导入 `ai`：解封管理员填的自部署地址和 Key，以及看图模型兜底 `parsers/vision.ts`（模型层由 `routes/documents.ts` 按请求传进来，教材模块不导入 `apps/app/src/ai.ts`） |
-| `parsers-plug-in-through-the-textbook-module` | `textbook/parsers/` 只给教材模块自己、`routes/documents.ts`（解析任务）和 `routes/admin.ts`（开关）用 |
-| `admin-sees-parser-settings-only` | `routes/admin.ts` 只能导入 `textbook/parsers/settings.ts`，不碰任务和适配器 |
-| `pptx-export-reads-the-deck-only` | `pptx` 只依赖 `schema`、`templates` / `widgets` 的核心入口（和 pptxgenjs），不得导入渲染入口、player、`ai`、`generation`、`pedagogy`、`textbook` |
 | AI 出口检查 | 只有 `packages/ai` 能导入模型 SDK 或写模型端点（`scripts/check-ai-boundary.mjs`，扫描 apps、packages、tools、scripts；这是这条边界唯一的检查） |
 
 ---

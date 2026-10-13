@@ -1,31 +1,12 @@
-/** Module boundaries for the core slice (docs/architecture.md). Run with `pnpm lint:deps`. */
+/**
+ * The boundaries tsc and package.json cannot see (docs/architecture.md §2). Package-to-package edges are governed
+ * by each package.json: an undeclared workspace import fails tsc. Run with `pnpm lint:deps`.
+ */
 const BROWSER_ONLY = "^(packages/(templates|widgets)/src/render|packages/player|packages/textbook/src/browser\\.ts|apps/web)|node_modules/(react|react-dom|react-router|echarts|zrender|katex|pdfjs-dist)/";
-const GENERATION = "^packages/generation/";
 
 module.exports = {
   forbidden: [
     { name: "no-circular", severity: "error", from: {}, to: { circular: true } },
-    {
-      name: "schema-is-a-leaf",
-      comment: "@kj/schema holds types and zod schemas only.",
-      severity: "error",
-      from: { path: "^packages/schema/" },
-      to: { path: "^(packages|apps)/", pathNot: "^packages/schema/" },
-    },
-    {
-      name: "pedagogy-rules-do-not-import-templates",
-      comment: "Teaching rules sit below the slide templates: shared budgets and the page-type → layout map come from @kj/schema (review #3 D-10).",
-      severity: "error",
-      from: { path: "^packages/pedagogy/" },
-      // The bare name catches the import even before someone re-adds the workspace dependency.
-      to: { path: "^(packages/templates/|@kj/templates)" },
-    },
-    {
-      name: "packages-never-import-apps",
-      severity: "error",
-      from: { path: "^packages/" },
-      to: { path: "^apps/" },
-    },
     {
       name: "server-code-is-dom-free",
       comment: "The Worker, model callers and rules must not pull in DOM renderers, the player, pdf.js or React.",
@@ -39,13 +20,6 @@ module.exports = {
       severity: "error",
       from: { path: "^(apps/web|packages/player)" },
       to: { path: "^packages/(ai|generation)/" },
-    },
-    {
-      name: "only-the-server-and-evals-orchestrate",
-      comment: "The generation pipeline is called by the Worker routes and tools/eval, nobody else.",
-      severity: "error",
-      from: { path: "^packages/", pathNot: GENERATION },
-      to: { path: GENERATION },
     },
     {
       name: "product-code-never-imports-tools",
@@ -62,60 +36,11 @@ module.exports = {
       to: { path: "^packages/", pathNot: "^packages/(ai|schema)/" },
     },
     {
-      name: "pptx-export-reads-the-deck-only",
-      comment: "packages/pptx maps slide content to PPTX objects: schema, template budgets and widget data only — no app, DOM renderers, player or model calls.",
-      severity: "error",
-      from: { path: "^packages/pptx/" },
-      to: { path: ["^packages/(ai|generation|player|pedagogy|textbook)/", BROWSER_ONLY] },
-    },
-    {
-      name: "textbook-core-is-a-low-layer",
-      comment: "The textbook core (chapter tree, ranges, labels, source text) depends on @kj/schema only: it knows no lessons, rules, templates or models.",
-      severity: "error",
-      from: { path: "^packages/textbook/" },
-      to: { path: "^(packages|apps)/|^@kj/", pathNot: "^packages/(textbook|schema)/|^@kj/schema$" },
-    },
-    {
       name: "textbook-tables-are-private",
       comment: "documents / pages / chapters are read and written only inside apps/app/src/textbook; db/schema.ts imports them for the lessons foreign key only.",
       severity: "error",
       from: { path: "^apps/app/src/", pathNot: "^apps/app/src/(textbook/|db/schema\\.ts$)" },
       to: { path: "^apps/app/src/textbook/tables\\.ts$" },
-    },
-    {
-      name: "textbook-writes-only-from-the-documents-route",
-      comment: "Uploads, pastes and deletes go through routes/documents.ts; everyone else reads through textbook/index.ts.",
-      severity: "error",
-      from: { path: "^apps/app/src/", pathNot: "^apps/app/src/(textbook/|routes/documents\\.ts$)" },
-      to: { path: "^apps/app/src/textbook/write\\.ts$" },
-    },
-    {
-      name: "textbook-does-not-know-lessons",
-      comment: "The textbook module never imports the lesson store, routes or model layer, nor teaching rules, templates or generation.",
-      severity: "error",
-      from: { path: "^apps/app/src/textbook/" },
-      to: { path: ["^apps/app/src/(store\\.ts|routes/|ai\\.ts)", "^packages/(generation|pedagogy|templates|widgets|player|pptx)/"] },
-    },
-    {
-      name: "only-parser-adapters-call-ai",
-      comment: "Inside the textbook module only the parser adapters (textbook/parsers) use @kj/ai: sealed parser tokens, and the vision-model fallback (parsers/vision.ts), which gets the request's model layer from the documents route.",
-      severity: "error",
-      from: { path: "^apps/app/src/textbook/", pathNot: "^apps/app/src/textbook/parsers/" },
-      to: { path: "^packages/ai/" },
-    },
-    {
-      name: "parsers-plug-in-through-the-textbook-module",
-      comment: "External parsers are reached through the documents route (jobs) and the admin route (the 外部解析服务 switch) only.",
-      severity: "error",
-      from: { path: "^apps/app/src/", pathNot: "^apps/app/src/(textbook/|routes/(documents|admin)\\.ts$)" },
-      to: { path: "^apps/app/src/textbook/parsers/" },
-    },
-    {
-      name: "admin-sees-parser-settings-only",
-      comment: "The admin route reads and writes the switch; jobs and adapters belong to the documents route.",
-      severity: "error",
-      from: { path: "^apps/app/src/routes/admin\\.ts$" },
-      to: { path: "^apps/app/src/textbook/parsers/", pathNot: "^apps/app/src/textbook/parsers/settings\\.ts$" },
     },
     {
       name: "only-textbook-ingest-loads-pdfjs",
@@ -130,12 +55,6 @@ module.exports = {
       severity: "error",
       from: { path: "^apps/web/src/", pathNot: "^apps/web/src/textbook/" },
       to: { path: "node_modules/pdf-lib/|^pdf-lib$" },
-    },
-    {
-      name: "pedagogy-has-no-io",
-      severity: "error",
-      from: { path: "^packages/pedagogy/" },
-      to: { path: "^packages/(ai|generation|player|textbook)/" },
     },
   ],
   options: {
