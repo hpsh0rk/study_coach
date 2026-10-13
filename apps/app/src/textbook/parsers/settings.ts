@@ -4,7 +4,7 @@ import { db } from "../../db/index.ts";
 import { secret, type Env, type SessionUser } from "../../env.ts";
 import { parserSettings, parseUsage } from "../tables.ts";
 import { MINERU_AGENT_PARSER, MINERU_PARSER } from "@kj/textbook";
-import { agentParser, checkConnection, selfhostParser, stubParser, tokenParser, type ExternalParser, type MineruMode } from "./mineru.ts";
+import { agentParser, checkConnection, selfhostParser, stubParser, type ExternalParser, type MineruMode } from "./mineru.ts";
 
 export { maskUrl, normalizeBaseUrl } from "./mineru.ts";
 
@@ -24,14 +24,12 @@ export const VISION_PRICES: Readonly<Record<string, number>> = {
 export const UNKNOWN_VISION_PRICE = 11_000;
 
 export type ExternalChoice = "auto" | "on" | "off";
-export type MineruApi = "agent" | "token" | "selfhost";
+export type MineruApi = "agent" | "selfhost";
 type Sealed = { sealed: string; hint: string };
 
 export interface ParserSettings {
   externalChoice: ExternalChoice;
   mineruMode: MineruApi;
-  mineruTokenSealed: string | null;
-  mineruTokenHint: string | null;
   selfhostUrlSealed: string | null;
   selfhostUrlHint: string | null;
   selfhostKeySealed: string | null;
@@ -45,7 +43,6 @@ export interface ParserSettings {
 export interface SettingsPatch {
   externalChoice?: ExternalChoice;
   mineruMode?: MineruApi;
-  token?: Sealed | null;
   selfhostUrl?: Sealed | null;
   selfhostKey?: Sealed | null;
   paidEnabled?: boolean;
@@ -55,7 +52,7 @@ export interface SettingsPatch {
 }
 
 function defaultMode(env: Env): MineruApi {
-  return env.PARSER_MINERU_MODE === "token" || env.PARSER_MINERU_MODE === "selfhost" ? env.PARSER_MINERU_MODE : "agent";
+  return env.PARSER_MINERU_MODE === "selfhost" ? "selfhost" : "agent";
 }
 
 export async function parserSettingsOf(env: Env, orgId: string): Promise<ParserSettings> {
@@ -64,8 +61,6 @@ export async function parserSettingsOf(env: Env, orgId: string): Promise<ParserS
     row ?? {
       externalChoice: "auto",
       mineruMode: defaultMode(env),
-      mineruTokenSealed: null,
-      mineruTokenHint: null,
       selfhostUrlSealed: null,
       selfhostUrlHint: null,
       selfhostKeySealed: null,
@@ -82,14 +77,11 @@ const keep = (patch: Sealed | null | undefined, sealed: string | null, hint: str
 
 export async function saveParserSettings(env: Env, user: SessionUser, patch: SettingsPatch): Promise<void> {
   const current = await parserSettingsOf(env, user.orgId);
-  const [mineruTokenSealed, mineruTokenHint] = keep(patch.token, current.mineruTokenSealed, current.mineruTokenHint);
   const [selfhostUrlSealed, selfhostUrlHint] = keep(patch.selfhostUrl, current.selfhostUrlSealed, current.selfhostUrlHint);
   const [selfhostKeySealed, selfhostKeyHint] = keep(patch.selfhostKey, current.selfhostKeySealed, current.selfhostKeyHint);
   const next = {
     externalChoice: patch.externalChoice ?? current.externalChoice,
     mineruMode: patch.mineruMode ?? current.mineruMode,
-    mineruTokenSealed,
-    mineruTokenHint,
     selfhostUrlSealed,
     selfhostUrlHint,
     selfhostKeySealed,
@@ -118,19 +110,16 @@ export function effectiveMode(env: Env, settings: ParserSettings): MineruMode {
   return settings.mineruMode;
 }
 
-/** What the chosen API still lacks: `token` (precise API), `url` (self-hosted), or null when it can run. */
-export function missingConfig(env: Env, settings: ParserSettings): "token" | "url" | null {
-  const mode = effectiveMode(env, settings);
-  if (mode === "token" && !settings.mineruTokenSealed && !env.MINERU_API_TOKEN) return "token";
-  if (mode === "selfhost" && !settings.selfhostUrlSealed) return "url";
-  return null;
+/** What the chosen API still lacks: `url` (self-hosted), or null when it can run (the agent API needs nothing). */
+export function missingConfig(env: Env, settings: ParserSettings): "url" | null {
+  return effectiveMode(env, settings) === "selfhost" && !settings.selfhostUrlSealed ? "url" : null;
 }
 
 /**
  * Whether pages may go to the external parser: `off` when the admin turned it off, `unconfigured` when the
- * chosen API lacks its token or URL, else `on` (`auto` means on once configured).
+ * self-hosted server has no URL yet, else `on` (`auto` means on once configured).
  */
-export type ExternalState = { state: "on" } | { state: "off" } | { state: "unconfigured"; missing: "token" | "url" };
+export type ExternalState = { state: "on" } | { state: "off" } | { state: "unconfigured"; missing: "url" };
 
 export function externalState(env: Env, settings: ParserSettings): ExternalState {
   if (settings.externalChoice === "off") return { state: "off" };
@@ -145,24 +134,14 @@ export async function configuredParser(env: Env, settings: ParserSettings, f: ty
   const key = secret(env, "AI_CONFIG_KEY");
   if (mode === "stub") return stubParser();
   if (mode === "agent") return agentParser(f);
-  if (mode === "selfhost") {
-    const url = await openSecret(settings.selfhostUrlSealed!, key);
-    return selfhostParser(url, settings.selfhostKeySealed ? await openSecret(settings.selfhostKeySealed, key) : null, f);
-  }
-  return tokenParser(settings.mineruTokenSealed ? await openSecret(settings.mineruTokenSealed, key) : env.MINERU_API_TOKEN!, f);
+  const url = await openSecret(settings.selfhostUrlSealed!, key);
+  return selfhostParser(url, settings.selfhostKeySealed ? await openSecret(settings.selfhostKeySealed, key) : null, f);
 }
 
 /** "测试连接" for the chosen API, whether or not the switch is on. Sends no page. */
 export async function testExternalConnection(env: Env, settings: ParserSettings, f: typeof fetch = fetch): Promise<{ ok: boolean; message: string }> {
-  const missing = missingConfig(env, settings);
-  if (missing) {
-    return { ok: false, message: missing === "url" ? "还没有填写自部署 MinerU 的地址 · No self-hosted URL yet" : "还没有填写 MinerU Token · No token yet" };
-  }
-  const parser = (await configuredParser(env, settings, f))!;
-  const mode = effectiveMode(env, settings);
-  const token =
-    mode === "token" ? (settings.mineruTokenSealed ? await openSecret(settings.mineruTokenSealed, secret(env, "AI_CONFIG_KEY")) : (env.MINERU_API_TOKEN ?? null)) : null;
-  return checkConnection(mode, parser, token, f);
+  if (missingConfig(env, settings)) return { ok: false, message: "还没有填写自部署 MinerU 的地址 · No self-hosted URL yet" };
+  return checkConnection(effectiveMode(env, settings), (await configuredParser(env, settings, f))!, f);
 }
 
 /** The external parser pages may go to, or null while it is off or not configured. */

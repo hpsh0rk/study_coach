@@ -1,6 +1,4 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { Env } from "../src/env.ts";
-import { externalNote } from "../src/textbook/parsers/jobs.ts";
 import { parserSettingsOf } from "../src/textbook/parsers/settings.ts";
 import { e, loggedIn, seedUser, type Client } from "./client.ts";
 
@@ -56,12 +54,6 @@ describe("keys and reminders", () => {
     expect(await readers(id)).toEqual({ external: null, vision: expect.stringContaining("看图模型未配置：请联系管理员在后台“AI 模型”里填写看图模型") });
     expect((await teacher.req("GET", "/api/admin/status")).status).toBe(403);
 
-    // Tests stub MinerU's online APIs, so a missing token only shows outside the stub.
-    await admin.req("PUT", "/api/admin/parsing", { mineruMode: "token" });
-    expect((await status()).external).toEqual({ state: "on", mode: "token", stub: true });
-    const live = { ...e, PARSER_MINERU_MODE: "agent" } as Env;
-    expect(externalNote(live, await parserSettingsOf(live, "org_default"))).toMatch(/^外部解析未配置：请联系管理员在后台“外部解析服务”里填写 MinerU Token/);
-
     await admin.req("PUT", "/api/admin/parsing", { mineruMode: "selfhost" });
     expect((await status()).external).toEqual({ state: "unconfigured", missing: "url", mode: "selfhost", stub: false });
     expect((await readers(id)).external).toMatch(/^外部解析未配置：请联系管理员在后台“外部解析服务”里填写自部署 MinerU 的地址/);
@@ -83,24 +75,22 @@ describe("keys and reminders", () => {
     await e.DB.prepare("DELETE FROM ai_providers").run();
   });
 
-  it("no key, token, self-hosted URL or self-hosted key appears in any admin or teacher response", async () => {
+  it("no key, self-hosted URL or self-hosted key appears in any admin or teacher response", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("no outside calls"));
     const secrets = {
       text: "sk-text-7f3a9c1e5b2d8a4f",
       vision: "glm-vision-2b8e6d4c1a9f7e3b",
-      token: "mineru-token-5c1d9e7a3b8f2e6d",
       url: "http://10.20.30.40:8123",
       selfKey: "selfhost-key-8e2c6a4f1d9b7e3c",
       header: "hdr-value-4d7b1e9c6a2f",
     };
     await admin.req("POST", "/api/admin/ai/providers", { kind: "deepseek", name: "DeepSeek", apiKey: secrets.text, model: "deepseek-chat", headers: { "x-source": secrets.header } });
     await admin.req("POST", "/api/admin/ai/providers", { kind: "glm", name: "GLM", apiKey: secrets.vision, model: "glm-4.6v-flash", purpose: "vision" });
-    expect((await admin.req("PUT", "/api/admin/parsing", { mineruMode: "token", token: secrets.token })).status).toBe(200);
     expect((await admin.req("PUT", "/api/admin/parsing", { selfhostUrl: secrets.url, selfhostKey: secrets.selfKey })).status).toBe(200);
     const id = await newBook();
 
     const responses: string[] = [];
-    for (const mode of ["token", "selfhost"]) {
+    for (const mode of ["agent", "selfhost"]) {
       await admin.req("PUT", "/api/admin/parsing", { mineruMode: mode });
       for (const path of ["/api/admin/ai", "/api/admin/parsing", "/api/admin/status", "/api/admin/audit", "/api/admin/users", "/api/auth/me"]) {
         responses.push(JSON.stringify((await admin.req("GET", path)).json));

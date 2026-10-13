@@ -39,18 +39,9 @@ export interface ExternalOutcome {
 const POLL_MS = 2_000;
 const POLL_LIMIT = 150;
 
-/** Markdown (or a zip with `full.md`) → text per page of the job, null where the separator did not come back. */
-export async function readResult(data: ArrayBuffer, format: ExternalParserInfo["format"], count: number): Promise<(string | null)[]> {
-  let md: string;
-  if (format === "zip") {
-    const { unzipSync, strFromU8 } = await import("fflate");
-    const entries = unzipSync(new Uint8Array(data), { filter: (f) => f.name.endsWith("full.md") });
-    const name = Object.keys(entries).sort((a, b) => a.length - b.length)[0];
-    md = name ? strFromU8(entries[name]!) : "";
-  } else {
-    md = new TextDecoder().decode(data);
-  }
-  return splitSeparated(md, count);
+/** The parser's Markdown → text per page of the job, null where the separator did not come back. */
+export function readResult(data: ArrayBuffer, count: number): (string | null)[] {
+  return splitSeparated(new TextDecoder().decode(data), count);
 }
 
 /** Cuts pages out of the book with pdf-lib (loaded on first use; the book is parsed once per cutter). */
@@ -80,7 +71,7 @@ const STOPS = new Set([402, 403, 429, 503]);
  */
 export async function parseExternally(
   pages: { no: number; kind: PageKind | undefined }[],
-  info: Pick<ExternalParserInfo, "maxPagesPerJob" | "maxBytes" | "format">,
+  info: Pick<ExternalParserInfo, "maxPagesPerJob" | "maxBytes">,
   deps: ExternalDeps,
   onProgress: (done: number, total: number) => void = () => undefined,
 ): Promise<ExternalOutcome> {
@@ -116,7 +107,7 @@ export async function parseExternally(
           }
           if (state !== "ready") out.missed.push(...job.pages);
           else {
-            const texts = await readResult(await deps.result(job.id), info.format, job.pages.length);
+            const texts = readResult(await deps.result(job.id), job.pages.length);
             const got = job.pages.flatMap((no, i) => (texts[i] === null ? [] : [{ no, text: texts[i]! }]));
             out.saved.push(...(await deps.save(job.id, got)));
             out.missed.push(...job.pages.filter((_, i) => texts[i] === null));

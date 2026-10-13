@@ -301,7 +301,7 @@ export const adminRoutes = new Hono<AppBindings>()
   /**
    * "外部解析服务": whether pages the browser could not read (scans, formulas drawn as outlines, garbled text)
    * go to MinerU (online API or the school's own server). `auto` turns it on once the chosen API is configured.
-   * Secrets (token, self-host URL and key) come back as hints only.
+   * Secrets (self-host URL and key) come back as hints only.
    */
   .get("/parsing", async (c) => {
     const orgId = c.get("user").orgId;
@@ -310,8 +310,6 @@ export const adminRoutes = new Hono<AppBindings>()
       externalChoice: settings.externalChoice,
       external: externalState(c.env, settings),
       mineruMode: settings.mineruMode,
-      tokenHint: settings.mineruTokenHint,
-      envToken: !!c.env.MINERU_API_TOKEN,
       selfhostUrlHint: settings.selfhostUrlHint,
       selfhostKeyHint: settings.selfhostKeyHint,
       stub: effectiveMode(c.env, settings) === "stub",
@@ -328,8 +326,7 @@ export const adminRoutes = new Hono<AppBindings>()
       c,
       z.object({
         externalChoice: z.enum(["auto", "on", "off"]).optional(),
-        mineruMode: z.enum(["agent", "token", "selfhost"]).optional(),
-        token: z.string().trim().min(8).max(4000).nullable().optional(),
+        mineruMode: z.enum(["agent", "selfhost"]).optional(),
         selfhostUrl: z
           .string()
           .trim()
@@ -348,7 +345,7 @@ export const adminRoutes = new Hono<AppBindings>()
     const key = secret(c.env, "AI_CONFIG_KEY");
     const seal = async (plain: string | null | undefined, hint: (s: string) => string) =>
       plain === undefined ? undefined : plain === null ? null : { sealed: await sealSecret(plain, key), hint: hint(plain) };
-    const { token, selfhostUrl, selfhostKey, ...rest } = body;
+    const { selfhostUrl, selfhostKey, ...rest } = body;
     const url = selfhostUrl ? normalizeBaseUrl(selfhostUrl) : selfhostUrl;
     if (url && selfhostKey === undefined) {
       const stored = await parserSettingsOf(c.env, me.orgId);
@@ -358,7 +355,6 @@ export const adminRoutes = new Hono<AppBindings>()
     }
     await saveParserSettings(c.env, me, {
       ...rest,
-      token: await seal(token, maskSecret),
       selfhostUrl: await seal(url, maskUrl),
       selfhostKey: await seal(selfhostKey, maskSecret),
     });
@@ -373,9 +369,7 @@ export const adminRoutes = new Hono<AppBindings>()
               : "paid_off"
             : selfhostUrl !== undefined || selfhostKey !== undefined
               ? "selfhost"
-              : token !== undefined
-                ? "token"
-                : "settings";
+              : "settings";
     await db(c.env).insert(auditLog).values({ orgId: me.orgId, actorId: me.id, action: "admin.parser_settings", target });
     return c.json({ ok: true });
   })

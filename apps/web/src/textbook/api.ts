@@ -18,7 +18,6 @@ export interface ExternalParserInfo {
   parser: string;
   maxPagesPerJob: number;
   maxBytes: number;
-  format: "markdown" | "zip";
 }
 
 /** The configured provider's vision model, when it may be used (free, or paid parsing allowed). */

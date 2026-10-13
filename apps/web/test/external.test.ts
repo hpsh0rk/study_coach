@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { strToU8, zipSync } from "fflate";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import { separatorText } from "@kj/textbook";
 import { ApiError } from "../src/api.ts";
-import { parseExternally, pdfCutter, readResult, type ExternalDeps } from "../src/textbook/external.ts";
+import { parseExternally, pdfCutter, type ExternalDeps } from "../src/textbook/external.ts";
 
 const md = (count: number, missing: number[] = []) =>
   Array.from({ length: count }, (_, i) => (missing.includes(i + 1) ? "" : `${separatorText(i + 1)}\n$$ v_${i + 1} = u + a t $$`)).join("\n");
@@ -42,7 +41,7 @@ function fakes(over: Partial<ExternalDeps> = {}, opts: { size?: (pages: number[]
   return { deps, calls };
 }
 
-const info = { maxPagesPerJob: 2, maxBytes: 1000, format: "markdown" as const };
+const info = { maxPagesPerJob: 2, maxBytes: 1000 };
 
 describe("external parsing in the browser", () => {
   it("sends scans and broken fonts with OCR, formula pages without, a few pages per job, and maps results back by page", async () => {
@@ -110,11 +109,6 @@ describe("external parsing in the browser", () => {
     const out = await parseExternally([1, 2, 3].map((no) => ({ no, kind: "formula-lost" as const })), { ...info, maxPagesPerJob: 2 }, deps);
     expect(out).toMatchObject({ missed: [1, 2], stopped: null, failure: "外部解析服务出错：unexpected URL" });
     expect(out.saved.map((p) => p.no)).toEqual([3]);
-  });
-
-  it("reads the precise API's zip (full.md inside)", async () => {
-    const zip = zipSync({ "pages/full.md": strToU8(md(2)), "pages/images/a.jpg": new Uint8Array([1, 2]) });
-    expect(await readResult(zip.buffer as ArrayBuffer, "zip", 2)).toEqual(["$$ v_1 = u + a t $$", "$$ v_2 = u + a t $$"]);
   });
 
   it("cuts the pages out of the book, each behind a separator page", async () => {
