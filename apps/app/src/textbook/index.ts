@@ -4,7 +4,7 @@
  */
 import { and, asc, between, desc, eq, gte, inArray, isNotNull, isNull, lte, or } from "drizzle-orm";
 import { chapterRunsOf, isEmptyPage, MIN_PAGE_WORDS, missingRanges, PDFJS_PARSER, type PageFlag, normalizeRanges, pagesInRanges, rangesForChapters, sourceCut, type ChapterRun } from "@kj/pdf-structure";
-import type { ChapterNode, LessonScope, PageRange, PageText } from "@kj/schema";
+import type { ChapterNode, LessonScope, PageKind, PageRange, PageText } from "@kj/schema";
 import { db } from "../db/index.ts";
 import type { Env, SessionUser } from "../env.ts";
 import { HttpError } from "../http.ts";
@@ -69,21 +69,24 @@ export interface PageMeta {
   parsers: Record<number, string>;
   /** Only pages with suspicious text. */
   flags: Record<number, PageFlag[]>;
+  /** Only pages whose kind is neither `text` nor `blank` (must-fix and refine kinds). */
+  kinds: Record<number, PageKind>;
 }
 
 /** Per-page facts for the chapters step, without page text. */
 export async function pageMeta(env: Env, doc: Pick<TextbookRow, "id" | "pageCount">): Promise<PageMeta> {
   const rows = await db(env)
-    .select({ no: pages.no, words: pages.words, chars: pages.chars, label: pages.label, parser: pages.parser, flags: pages.flags })
+    .select({ no: pages.no, words: pages.words, chars: pages.chars, label: pages.label, parser: pages.parser, flags: pages.flags, kind: pages.kind })
     .from(pages)
     .where(eq(pages.documentId, doc.id));
-  const meta: PageMeta = { labels: {}, words: new Array<number>(doc.pageCount).fill(0), chars: new Array<number>(doc.pageCount).fill(0), parsers: {}, flags: {} };
+  const meta: PageMeta = { labels: {}, words: new Array<number>(doc.pageCount).fill(0), chars: new Array<number>(doc.pageCount).fill(0), parsers: {}, flags: {}, kinds: {} };
   for (const p of rows) {
     meta.words[p.no - 1] = p.words;
     meta.chars[p.no - 1] = p.chars;
     if (p.label) meta.labels[p.no] = p.label;
     if (p.parser !== PDFJS_PARSER) meta.parsers[p.no] = p.parser;
     if (p.flags.length) meta.flags[p.no] = p.flags;
+    if (p.kind && p.kind !== "text" && p.kind !== "blank") meta.kinds[p.no] = p.kind;
   }
   return meta;
 }

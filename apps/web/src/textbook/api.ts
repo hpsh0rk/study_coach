@@ -1,4 +1,4 @@
-import type { ChapterNode, PageRange, PageText } from "@kj/schema";
+import type { ChapterNode, PageKind, PageRange, PageText } from "@kj/schema";
 import type { PageFlag } from "@kj/pdf-structure";
 import { api } from "../api.ts";
 
@@ -56,6 +56,7 @@ export const documentApi = {
       pageChars: number[];
       pageParsers: Record<number, string>;
       pageFlags: Record<number, PageFlag[]>;
+      pageKinds: Record<number, PageKind>;
     }>(`/api/documents/${id}`),
   page: (id: string, no: number) => api<TextbookPage>(`/api/documents/${id}/pages/${no}`),
   paste: (id: string, start: number, end: number, text: string) => api<{ pages: PastedPage[] }>(`/api/documents/${id}/pages/paste`, { body: { start, end, text } }),

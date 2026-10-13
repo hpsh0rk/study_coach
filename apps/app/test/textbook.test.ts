@@ -108,4 +108,36 @@ describe("page facts are stored next to the text", () => {
     expect(after.pageChars[2]).toBe(pasted.json.pages[0].chars);
     expect((await t5.req("GET", `/api/documents/${id}/pages/3`)).json).toMatchObject({ no: 3, parser: "paste" });
   });
+
+  it("stores page kinds; paste replaces pdf.js text only on must-fix pages", async () => {
+    const created = await t5.req("POST", "/api/documents", book("d".repeat(64), 4));
+    const id = created.json.id as string;
+    const lossy = "3.1 Equations of motion The velocity after time t is and the displacement is";
+    await t5.req("POST", `/api/documents/${id}/pages`, {
+      pages: [
+        { no: 1, text: TEXT, kind: "text" },
+        { no: 2, text: lossy, kind: "formula-lost" },
+        { no: 3, text: TEXT, kind: "table" },
+        { no: 4, text: "", kind: "scanned" },
+      ],
+    });
+    expect((await t5.req("POST", `/api/documents/${id}/pages`, { pages: [{ no: 1, text: TEXT, kind: "photo" }] })).status).toBe(400);
+    expect((await t5.req("GET", `/api/documents/${id}`)).json.pageKinds).toEqual({ 2: "formula-lost", 3: "table", 4: "scanned" });
+
+    const refused = await t5.req("POST", `/api/documents/${id}/pages/paste`, { start: 1, end: 1, text: "anything" });
+    expect(refused.status).toBe(409);
+    expect(refused.json.error.code).toBe("PAGES_HAVE_TEXT");
+    // Refine kinds (table, formula-text) keep their pdf.js text: they are readable, just not perfect.
+    expect((await t5.req("POST", `/api/documents/${id}/pages/paste`, { start: 3, end: 3, text: "anything" })).status).toBe(409);
+
+    const formula = "3.1 Equations of motion v = v0 + a t, s = v0 t + a t^2 / 2";
+    const pasted = await t5.req("POST", `/api/documents/${id}/pages/paste`, { start: 1, end: 3, text: formula });
+    expect(pasted.json.pages).toEqual([expect.objectContaining({ no: 2, parser: "paste" })]);
+    expect((await t5.req("GET", `/api/documents/${id}/pages/2`)).json).toMatchObject({ text: formula, parser: "paste" });
+    // Once pasted, the page is fixed: a second paste is refused, but the kind is kept as a fact.
+    expect((await t5.req("POST", `/api/documents/${id}/pages/paste`, { start: 2, end: 2, text: "again" })).status).toBe(409);
+    const after = (await t5.req("GET", `/api/documents/${id}`)).json;
+    expect(after.pageKinds[2]).toBe("formula-lost");
+    expect(after.pageParsers).toEqual({ 2: "paste" });
+  });
 });

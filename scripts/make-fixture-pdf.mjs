@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Generates fixtures/pdfs/waves-mini.pdf: an 8-page born-digital "textbook" with nested bookmarks.
+// Generates the fixture PDFs: waves-mini.pdf (8-page born-digital "textbook" with nested bookmarks),
+// newton-zh-cid.pdf (Chinese CID font, two scanned pages) and kinematics-outlines.pdf (formulas drawn as glyph outlines).
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -143,6 +144,9 @@ const chunks = (s, n) => Array.from({ length: Math.ceil(s.length / n) }, (_, i) 
  * Chinese text set in a non-embedded CID font (Adobe-GB1, UniGB-UTF16-H), as many publisher PDFs do.
  * pdf.js can only extract its text with the predefined CMaps. Pages 5–6 are image-only ("scanned").
  */
+/** A 1×1 grey PNG, scaled up to stand in for a scanned page. */
+const GREY_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGNoAAAAggCBd81ytgAAAABJRU5ErkJggg==", "base64");
+
 export async function makeCidFixturePdf() {
   const doc = await PDFDocument.create();
   doc.setTitle("牛顿运动定律（中文 CID 字体样例）");
@@ -158,29 +162,85 @@ export async function makeCidFixturePdf() {
     }),
   );
   const font = ctx.register(ctx.obj({ Type: "Font", Subtype: "Type0", BaseFont: "STSong-Light-UniGB-UTF16-H", Encoding: "UniGB-UTF16-H", DescendantFonts: [descendant] }));
+  const scan = await doc.embedPng(GREY_PNG);
   const pageRefs = [];
   ZH_PAGES.forEach((p, i) => {
     const page = doc.addPage([595, 842]);
     pageRefs.push(page.ref);
-    page.node.setFontDictionary(PDFName.of("F1"), font);
-    const ops = [];
     if (p.scanned) {
-      ops.push("0.85 g 60 120 475 650 re f");
-    } else {
-      ops.push(`BT /F1 22 Tf 60 770 Td <${utf16Hex(p.heading)}> Tj ET`);
-      chunks(p.body, 22).forEach((line, j) => ops.push(`BT /F1 20 Tf 60 ${720 - j * 30} Td <${utf16Hex(line)}> Tj ET`));
-      ops.push(`BT /F1 10 Tf 290 40 Td <${utf16Hex(String(i + 1))}> Tj ET`);
+      page.drawImage(scan, { x: 60, y: 120, width: 475, height: 650 });
+      return;
     }
+    page.node.setFontDictionary(PDFName.of("F1"), font);
+    const ops = [`BT /F1 22 Tf 60 770 Td <${utf16Hex(p.heading)}> Tj ET`];
+    chunks(p.body, 22).forEach((line, j) => ops.push(`BT /F1 20 Tf 60 ${720 - j * 30} Td <${utf16Hex(line)}> Tj ET`));
+    ops.push(`BT /F1 10 Tf 290 40 Td <${utf16Hex(String(i + 1))}> Tj ET`);
     page.node.set(PDFName.of("Contents"), ctx.register(ctx.stream(ops.join("\n"))));
   });
   addOutline(doc, pageRefs, ZH_OUTLINE);
   return doc.save();
 }
 
+const KINEMATICS = [
+  {
+    heading: "Chapter 3  Motion in a straight line",
+    body: "This chapter describes motion with displacement, velocity and acceleration, and derives the equations that link them for constant acceleration. You will use these equations to predict where a moving object will be and how fast it will be going.",
+  },
+  {
+    heading: "3.1  Equations of motion",
+    body: "For an object that starts with velocity u and moves with constant acceleration a for a time t, the final velocity and the displacement are given by the two equations below. The equations are typeset as outlines, as in many published physics books, so the text layer of this page has no formulas at all.",
+    formulas: true,
+  },
+  {
+    heading: "3.2  Using the equations",
+    body: "Choose the equation that contains the three quantities you know and the one you want. Write down the known values with units before substituting, and check that the answer has a sensible size and unit.",
+  },
+];
+
+/** A formula line drawn the way OpenStax books draw it: each glyph a small filled outline, no text. */
+function drawOutlineFormula(page, x, y, glyphs) {
+  for (let k = 0; k < glyphs; k++) page.drawEllipse({ x: x + k * 12, y, xScale: 4, yScale: 5.5, color: rgb(0, 0, 0) });
+}
+
+/** Formulas drawn as glyph outlines: pdf.js reads the prose around them and silently loses every formula and number. */
+export async function makeKinematicsFixturePdf() {
+  const doc = await PDFDocument.create();
+  doc.setTitle("Kinematics with outline formulas (fixture)");
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  const pageRefs = [];
+  KINEMATICS.forEach((p, i) => {
+    const page = doc.addPage([595, 842]);
+    pageRefs.push(page.ref);
+    page.drawText(p.heading, { x: 60, y: 770, size: 20, font: bold, color: rgb(0.1, 0.2, 0.5) });
+    let y = 730;
+    for (const line of wrap(p.body, font, 12, 475)) {
+      page.drawText(line, { x: 60, y, size: 12, font });
+      y -= 18;
+    }
+    if (p.formulas) {
+      drawOutlineFormula(page, 200, y - 40, 7);
+      drawOutlineFormula(page, 200, y - 90, 9);
+      page.drawText("A car accelerating from rest at", { x: 60, y: y - 140, size: 12, font });
+      drawOutlineFormula(page, 240, y - 136, 3);
+      page.drawText("reaches", { x: 290, y: y - 140, size: 12, font });
+      drawOutlineFormula(page, 340, y - 136, 3);
+      page.drawText("after ten seconds.", { x: 385, y: y - 140, size: 12, font });
+    }
+    page.drawText(String(i + 1), { x: 290, y: 40, size: 10, font });
+  });
+  addOutline(doc, pageRefs, [{ title: "Chapter 3  Motion in a straight line", page: 0, children: [{ title: "3.1  Equations of motion", page: 1 }, { title: "3.2  Using the equations", page: 2 }] }]);
+  return doc.save();
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const dir = resolve(dirname(fileURLToPath(import.meta.url)), "../fixtures/pdfs");
   mkdirSync(dir, { recursive: true });
-  for (const [name, make] of [["waves-mini.pdf", makeFixturePdf], ["newton-zh-cid.pdf", makeCidFixturePdf]]) {
+  for (const [name, make] of [
+    ["waves-mini.pdf", makeFixturePdf],
+    ["newton-zh-cid.pdf", makeCidFixturePdf],
+    ["kinematics-outlines.pdf", makeKinematicsFixturePdf],
+  ]) {
     writeFileSync(resolve(dir, name), await make());
     console.log(`wrote ${resolve(dir, name)}`);
   }

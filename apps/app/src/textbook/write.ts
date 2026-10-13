@@ -3,7 +3,7 @@
  * upserts pages, and a paste only fills pages that have no text.
  */
 import { and, asc, between, count, eq, isNull, sql } from "drizzle-orm";
-import { distributeText, isEmptyPage, PASTE_PARSER, PDFJS_PARSER, pageFacts, type PageFacts } from "@kj/pdf-structure";
+import { distributeText, needsText, PASTE_PARSER, PDFJS_PARSER, pageFacts, type PageFacts } from "@kj/pdf-structure";
 import { newId, type ChapterNode, type PageText } from "@kj/schema";
 import { db } from "../db/index.ts";
 import { auditLog } from "../db/schema.ts";
@@ -69,7 +69,7 @@ export async function putPages(env: Env, doc: TextbookRow, batch: PageText[]): P
   const d = db(env);
   await d.batch(
     batch.map((p) => {
-      const row = { text: p.text, label: p.label ?? null, ...pageFacts(p.text), parser: PDFJS_PARSER };
+      const row = { text: p.text, label: p.label ?? null, ...pageFacts(p.text), parser: PDFJS_PARSER, kind: p.kind ?? null };
       return d.insert(pages).values({ documentId: doc.id, no: p.no, ...row }).onConflictDoUpdate({ target: [pages.documentId, pages.no], set: row });
     }) as [any, ...any[]],
   );
@@ -78,12 +78,19 @@ export async function putPages(env: Env, doc: TextbookRow, batch: PageText[]): P
   return { received, pageCount: doc.pageCount, complete: received === doc.pageCount };
 }
 
-/** Text a teacher pasted for a page range, spread over the range's pages without text (pages with text are never overwritten). */
+/**
+ * Text a teacher pasted for a page range, spread over the range's pages that need it: pages without text,
+ * and must-fix pages (scanned, garbled, formula-lost) still holding pdf.js text. Other text is never overwritten.
+ */
 export async function pastePages(env: Env, doc: TextbookRow, start: number, end: number, text: string): Promise<({ no: number; parser: string } & PageFacts)[]> {
   const d = db(env);
-  const rows = await d.select({ no: pages.no, words: pages.words }).from(pages).where(and(eq(pages.documentId, doc.id), between(pages.no, start, end))).orderBy(asc(pages.no));
-  const empty = rows.filter((r) => isEmptyPage(r.words)).map((r) => r.no);
-  if (!empty.length) throw new HttpError(409, "PAGES_HAVE_TEXT", "这些页已经有文字，不需要粘贴 · These pages already have text");
+  const rows = await d
+    .select({ no: pages.no, words: pages.words, kind: pages.kind, parser: pages.parser })
+    .from(pages)
+    .where(and(eq(pages.documentId, doc.id), between(pages.no, start, end)))
+    .orderBy(asc(pages.no));
+  const empty = rows.filter((r) => needsText(r)).map((r) => r.no);
+  if (!empty.length) throw new HttpError(409, "PAGES_HAVE_TEXT", "这些页的文字已经读好了，不需要粘贴 · These pages already have readable text");
   if (empty.length > PAGE_BATCH) throw new HttpError(400, "TOO_MANY_PAGES", `一次最多为 ${PAGE_BATCH} 页粘贴文字，请分几次 · At most ${PAGE_BATCH} pages at a time`);
   const parts = distributeText(text, empty.length);
   const filled = empty.map((no, i) => {

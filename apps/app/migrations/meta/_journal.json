@@ -57,6 +57,13 @@
       "when": 1791855827252,
       "tag": "0007_textbook_page_facts",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1791857152372,
+      "tag": "0008_textbook_page_kind",
+      "breakpoints": true
     }
   ]
 }

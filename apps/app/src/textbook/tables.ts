@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import type { PageFlag } from "@kj/pdf-structure";
+import type { PageKind } from "@kj/schema";
 import { now, orgs, users } from "../db/accounts.ts";
 
 /** Textbook tables: read and written only through apps/app/src/textbook (see .dependency-cruiser.cjs). */
@@ -44,6 +45,8 @@ export const pages = sqliteTable(
     parser: text("parser").notNull().default("pdfjs/1"),
     /** Kinds of suspicious text on the page (`instruction`, `link`, `email`, `file`); `[]` for pages stored before migration 0007. */
     flags: text("flags", { mode: "json" }).$type<PageFlag[]>().notNull().default([]),
+    /** What the browser's probe saw on the PDF page (pdf-structure `classifyPage`); null for pages stored before migration 0008. Stays when the text is later pasted: `parser` says whether it was fixed. */
+    kind: text("kind").$type<PageKind>(),
   },
   (t) => [primaryKey({ columns: [t.documentId, t.no] })],
 );
