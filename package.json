@@ -11,6 +11,7 @@
     "build": "pnpm --filter @kj/web build",
     "db:migrate:local": "pnpm --filter @kj/app db:migrate:local",
     "admin:create": "node scripts/create-admin.mjs",
+    "setup:local": "pnpm db:migrate:local && node scripts/create-admin.mjs --keep",
     "fixtures:pdf": "node scripts/make-fixture-pdf.mjs",
     "lint": "eslint . && node scripts/check-ai-boundary.mjs && pnpm lint:deps",
     "typecheck": "pnpm -r --parallel typecheck",
