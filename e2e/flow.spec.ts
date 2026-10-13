@@ -964,6 +964,61 @@ test("后台概览: the overview tab comes first with counts and the setup statu
   await expect(page.getByTestId("critical-banner")).toHaveCount(0);
 });
 
+test("教材管理: rename, reuse without uploading again, archive/restore, delete only when no lesson uses it", async ({ page }) => {
+  await login(page);
+  page.on("dialog", (d) => void d.accept());
+  await page.goto("/new");
+  await page.getByTestId("pdf-input").setInputFiles(await kinematicsCopy("Kinematics library"));
+  await page.waitForURL(/\/new\/[^/]+$/);
+  const docId = page.url().split("/").pop()!;
+
+  await page.getByRole("link", { name: "教材 Textbooks" }).click();
+  const row = page.locator(`[data-testid=library-row][data-id="${docId}"]`);
+  await expect(row.getByTestId("library-title")).toHaveText("Kinematics library");
+  await expect(row).toContainText("3 页");
+  await expect(row.getByTestId("library-status")).toHaveText(/已读好|页还没读好/);
+  await row.getByTestId("library-rename").click();
+  await page.getByTestId("library-title-input").fill("运动学 第3章");
+  await page.getByTestId("library-rename-save").click();
+  await expect(row.getByTestId("library-title")).toHaveText("运动学 第3章");
+
+  // A new lesson from the same book: picked from the list, nothing uploaded.
+  await page.goto("/new");
+  await expect(page.getByTestId("manage-textbooks")).toBeVisible();
+  await page.getByRole("button", { name: /^📘 运动学 第3章/ }).click();
+  await expect(page).toHaveURL(new RegExp(`/new/${docId}$`));
+  await page.getByRole("treeitem").first().locator("input[type=checkbox]").check();
+  await toSettings(page);
+  await page.waitForURL(/\/lessons\/[^/]+\/settings$/);
+
+  await page.goto("/textbooks");
+  await expect(row.getByTestId("library-lessons")).toHaveText("1 节");
+  await expect(row.getByTestId("library-purge")).toBeDisabled();
+  await shot(page, "40-textbook-library");
+  await row.getByTestId("library-archive").click();
+  await expect(page.locator(".alert.success")).toContainText("已归档");
+  await expect(row).toHaveCount(0);
+  await page.getByTestId("show-archived").check();
+  await expect(row).toContainText("已归档");
+  await row.getByTestId("library-restore").click();
+  await expect(row).not.toContainText("已归档");
+
+  await row.getByTestId("library-open").click();
+  await expect(page).toHaveURL(new RegExp(`/new/${docId}$`));
+  await expect(page.getByRole("treeitem").first()).toBeVisible();
+
+  await page.goto("/new");
+  await page.getByTestId("pdf-input").setInputFiles(await kinematicsCopy("Kinematics unused"));
+  await page.waitForURL(/\/new\/[^/]+$/);
+  const unusedId = page.url().split("/").pop()!;
+  await page.goto("/textbooks");
+  const unused = page.locator(`[data-testid=library-row][data-id="${unusedId}"]`);
+  await unused.getByTestId("library-purge").click();
+  await expect(page.locator(".alert.success")).toContainText("已彻底删除");
+  await expect(unused).toHaveCount(0);
+  expect((await page.request.get(`/api/documents/${unusedId}`)).status()).toBe(404);
+});
+
 /** A Messages-dialect gateway (POST /v1/messages, SSE) that only answers with the right Bearer key and x-source header. */
 async function mockMessagesGateway() {
   const asked: { url: string; auth?: string; source?: string; body: Record<string, unknown> }[] = [];

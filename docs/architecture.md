@@ -1,6 +1,6 @@
 # AI 课件工坊 · 架构（v10，教材模块：教材读写收进一个模块，见 docs/design/textbook-module.md）
 
-> 状态：2026-10-13 · 与 `main` 上的代码一致（本地运行 / 密钥与自部署 PR E 合并后）。来源文档：第一性原理审查 · 夜间决策记录（权威）· HTML 课件调研 · 教学规则（规则编号 L/P/V/I/T/Q 出自此文）· 老师调研 · 项目决策记录 · 对抗审查 1 / 2 / 3 · 消融结果（均在项目资料库 `docs/`，不在本仓库）。代码与本文冲突时以代码为准，并修正本文。
+> 状态：2026-10-13 · 与 `main` 上的代码一致（后台与教材库：Messages 协议、测试连接、概览、教材管理合并后）。来源文档：第一性原理审查 · 夜间决策记录（权威）· HTML 课件调研 · 教学规则（规则编号 L/P/V/I/T/Q 出自此文）· 老师调研 · 项目决策记录 · 对抗审查 1 / 2 / 3 · 消融结果（均在项目资料库 `docs/`，不在本仓库）。代码与本文冲突时以代码为准，并修正本文。
 
 ---
 
@@ -196,7 +196,7 @@ PipelineOptions = { budgetsInPrompt, outlineCheckRetry, slideCheckRetry, truncat
 
 | 表 | 列（摘要） | 约束 |
 |---|---|---|
-| `documents` | id, org_id, owner_id, filename, title, size_bytes, page_count, pages_received, has_bookmarks, file_sha256, archived_at | `file_sha256`（迁移 0006）：浏览器算的文件哈希，部分唯一索引 `documents_owner_sha_uq` 保证同一老师未删除的教材里每个文件只有一份；旧数据为空、不去重； 扫描页由服务端按 `pages.words` 判断，不存标志；`archived_at`：软删除（迁移 0005），列表和新建课看不到，已用它做的课仍可读页、改范围、粘贴扫描页文字 |
+| `documents` | id, org_id, owner_id, filename, title, size_bytes, page_count, pages_received, has_bookmarks, file_sha256, archived_at, purged_at | `purged_at`（迁移 0014）：彻底删除（只在没有任何课——包括已删除的课——引用它时）：页和章节删掉、`file_sha256` 清空，行保留，让 `parse_usage` 的当天额度照算；读取一律 404。`file_sha256`（迁移 0006）：浏览器算的文件哈希，部分唯一索引 `documents_owner_sha_uq` 保证同一老师未删除的教材里每个文件只有一份；旧数据为空、不去重； 扫描页由服务端按 `pages.words` 判断，不存标志；`archived_at`：软删除（迁移 0005），列表和新建课看不到，已用它做的课仍可读页、改范围、粘贴扫描页文字 |
 | `pages` | document_id, no, text, label, words, chars, parser, flags, kind | PK(document_id, no)；`chars` / `parser` / `flags` 来自迁移 0007：`chars` 替代 `LENGTH(text)`（回填），`parser` 是 `pdfjs/1`、`paste`（老师粘贴）、外部解析器 `mineru-agent/1` / `mineru/1`（迁移 0009 起）或看图模型 `vlm:<模型>/1`（迁移 0010 起；界面提示老师核对数字）；都带版本号，作为（文件 sha256，页号，解析器）缓存键的一部分，`flags` 是可疑文字的种类（JSON，0007 之前存的页为 `[]`）。都由服务端 `pageFacts` 算，不信任浏览器。`kind`（迁移 0008，可空）是浏览器探针给的页种类：服务端没有 PDF，只能存下来；它只决定提示和路由（哪些页值得换解析器、哪些页允许粘贴替换），不进提示词。粘贴后 `kind` 不变（是关于 PDF 的事实），`parser` 变为 `paste` 即视为已补 |
 | `chapters` | document_id, id, parent_id, ord, level, title, page_start, page_end, words | |
 | `lessons` | id, org_id, owner_id, document_id, title, scope, params, theme, drafting_until, archived_at | `drafting_until`：起草锁（§1）；`archived_at`：软删除（迁移 0004），`ownedLesson` 和列表都看不到 |
@@ -317,7 +317,7 @@ PipelineOptions = { budgetsInPrompt, outlineCheckRetry, slideCheckRetry, truncat
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | POST / GET | `/api/auth/login` · `/logout` · `/change-password` · `/me` | 白名单登录（PBKDF2），首次登录强制改密 |
-| * | `/api/admin/users…` · `/api/admin/ai…` · GET / PUT `/api/admin/parsing` · GET `/api/admin/status` · GET `/api/admin/audit` | 管理员：`status` 是后台顶部的“配置状态”：AI 模型（live / stub / off，提供方名和模型名）、看图模型（on / paid_off / none，是否单独的看图提供方）、外部解析服务（on / off / unconfigured{missing}、接口、是否 stub），只有名称和模型名，没有 Key 和地址；账号、AI 模型（提供方 + 模型名 + 可选的看图模型，启用一个即停用其他；可另加一个 `purpose: vision` 的单独看图提供方，用它自己的 Key；测试连接：`POST /api/admin/ai/providers/:id/test`，文字模型发一句 JSON 提示，`{vision: true}` 或看图提供方发一张小图；GET 只回显 Key 的掩码）；外部解析服务开关（跟随配置 / 开启 / 关闭）、接口（免 Token / 精准 / 自部署）、Token 与自部署地址和 Key（加密存储，只回显掩码；未配置时显示“未配置”和该填什么）与今天的用量；POST `/api/admin/parsing/test` 测试连接（不发页面）；看图模型的每页价格（来源：管理员 / 列表价 / 未知）、“允许付费兜底”、每月预算与本月花费（审计 `admin.parser_settings`，target `external_auto/on/off`、`mode_agent/token/selfhost`、`paid_on/off`、`selfhost`、`token` 或 `settings`）；最近 20 条审计记录 |
+| * | `/api/admin/users…` · `/api/admin/ai…` · GET / PUT `/api/admin/parsing` · GET `/api/admin/status` · GET `/api/admin/audit` | 管理员：`status` 是后台“概览”页（第一个、默认的标签）：`counts`（在用账号、教材、课、今天外部解析页数）加“配置状态”：AI 模型（live / stub / off，提供方名和模型名）、看图模型（on / paid_off / none，是否单独的看图提供方）、外部解析服务（on / off / unconfigured{missing}、接口、是否 stub），只有名称和模型名，没有 Key 和地址；账号、AI 模型（提供方 + 模型名 + 可选的看图模型，启用一个即停用其他；可另加一个 `purpose: vision` 的单独看图提供方，用它自己的 Key；每个提供方可选接口协议 `openai | messages`、`maxTokens`、自定义请求头（加密，GET 只回名称和两个字的提示）；测试连接：`POST /api/admin/ai/providers/:id/test`，文字模型发一句 JSON 提示，`{vision: true}` 或看图提供方发一张小图，返回 `{ok, message, kind?, latencyMs}`：成功（延迟 + 回复开头）/ Key 不对 / 模型名不对 / 连不上 / 空回复 / 其他 HTTP 错误，全是中文；GET 只回显 Key 的掩码）；外部解析服务开关（跟随配置 / 开启 / 关闭）、接口（免 Token / 精准 / 自部署）、Token 与自部署地址和 Key（加密存储，只回显掩码；未配置时显示“未配置”和该填什么）与今天的用量；POST `/api/admin/parsing/test` 测试连接（不发页面）；看图模型的每页价格（来源：管理员 / 列表价 / 未知）、“允许付费兜底”、每月预算与本月花费（审计 `admin.parser_settings`，target `external_auto/on/off`、`mode_agent/token/selfhost`、`paid_on/off`、`selfhost`、`token` 或 `settings`）；最近 20 条审计记录 |
 | GET / POST | `/api/documents` | 列表；`{filename, title, sizeBytes, pageCount, chapters, sha256?}` 新建 → `{id, pageBatch: 40}`；同一文件已在 → 409 `DOCUMENT_EXISTS`（`detail.id`），超过每人 30 本 / 15000 页 → 409 `TEXTBOOK_QUOTA` |
 | POST | `/api/documents/lookup` | `{sha256}` → `{status: none \| ready \| incomplete \| archived, document?, missing?, pageBatch}`（只查自己的） |
 | POST | `/api/documents/:id/pages` | `{pages:[{no, text, label?}]}` |
@@ -325,7 +325,8 @@ PipelineOptions = { budgetsInPrompt, outlineCheckRetry, slideCheckRetry, truncat
 | POST | `/api/documents/:id/parse-image` | 看图模型兜底：`{no, image: data:image/jpeg;base64,…, reason}` → `{page, reused}`。没有看图模型 → 403 `VISION_OFF`；不该重读的页 409；额度 429、付费关闭 / 预算 402；模型限频 → 503 `PARSER_BUSY`，其他失败 502 `VISION_FAILED`（失败也记一行用量）。只检查图片前缀（扫描整段 base64 太费 CPU），上限 4 MB |
 | POST | `/api/documents/:id/pages/paste` | `{start, end, text}` → 文字分到范围内没有文字的页和必修页（含看图模型读的页）（`needsText`；可读的文字页、精修类页和已粘贴的页不动，都不需要时 409 `PAGES_HAVE_TEXT`；一次最多 40 页） |
 | GET | `/api/documents/:id` · `/api/documents/:id/pages/:no` | 章节树、`pageLabels`、`pageWords`、`pageChars`、`pageParsers`（只列不是 `pdfjs/1` 的页）、`pageFlags`（只列有可疑文字的页）、`pageKinds`（只列不是 text / blank 的页）、`externalParser`（开关打开时：解析器 id、每份页数与字节上限、结果格式；关闭时 null）、`visionParser`（可用时：解析器 id、看图模型名、每页价格；没有或付费未开启时 null）、`readers: {external, vision}`（不可用时给老师看的中文原因，说明找管理员在后台哪里填什么：`externalNote` / `visionNote`；可用时 null；不含任何密钥或地址）；某页原文、印刷页码与 `parser`（已删除的教材也可读，供已有的课使用） |
-| DELETE / POST | `/api/documents/:id` · `/api/documents/:id/restore` | 软删除 → `{ok, lessons}`（仍在用它的课数）；恢复（同一文件已有在用的一份 → 409 `DOCUMENT_EXISTS`）。都写审计日志 |
+| DELETE / POST | `/api/documents/:id`（= POST `/:id/archive`）· `/api/documents/:id/restore` | 归档（软删除）→ `{ok, lessons}`（仍在用它的课数）；恢复（同一文件已有在用的一份 → 409 `DOCUMENT_EXISTS`）。都写审计日志 |
+| GET / PATCH / DELETE | `/api/documents/library` · `/api/documents/:id` · `/api/documents/:id/permanent` | 教材管理：老师自己的全部教材（含已归档，不含彻底删除的）：页数、已收到页数、还没读好的页数（几乎没字且不是空白页，或必修页仍是 pdf.js 文字）、用它做的课数（`lessons` 在用 / `lessonsAll` 含已删除）；改名（审计 `document.renamed`）；彻底删除：有课引用 → 409 `IN_USE`，否则清掉页和章节（审计 `document.purged`）。“查看页面 / 备课”打开 `/new/:id`（原有的选章节页，可重读没读好的页）；上传页的“或使用之前上传的教材”直接选已有教材，不再上传 |
 | GET | `/api/auth/me` | `{user, ai}`：`ai` = `live` / `stub` / `off`，界面据此显示演示模式横幅 |
 | GET / POST | `/api/lessons` | 列表（单条聚合 SQL）；`{documentId, chapterIds, ranges}` 新建 |
 | DELETE / POST | `/api/lessons/:id` · `/api/lessons/:id/restore` | 软删除（撤销分享链接、清起草锁、记审计）；恢复（链接不恢复） |

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { ApiError } from "../../api.ts";
 import { documentApi, type DocumentRow } from "../../textbook/api.ts";
 import { rememberFile } from "../../textbook/external.ts";
@@ -147,7 +147,12 @@ export function UploadStep() {
       {docError && <div className="alert error">{docError}</div>}
       {docs.length > 0 && (
         <div className="card">
-          <h2>或使用之前上传的教材 · Or reuse a PDF</h2>
+          <div className="row between">
+            <h2>或使用之前上传的教材 · Or reuse a PDF</h2>
+            <Link to="/textbooks" className="small" data-testid="manage-textbooks">
+              管理教材 →
+            </Link>
+          </div>
           <ul className="doc-list">
             {docs.map((d) => (
               <li key={d.id} className="doc-item">
