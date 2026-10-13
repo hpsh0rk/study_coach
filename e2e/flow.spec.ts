@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { PDFDocument } from "pdf-lib";
 
 const PDF = path.resolve("fixtures/pdfs/waves-mini.pdf");
 const INITIAL = "Admin12345";
@@ -675,6 +676,10 @@ test("formulas drawn as outlines: the chapters step shows the gap, and pasting c
   const summary = page.getByTestId("must-fix-summary");
   await expect(summary).toContainText("公式没读出 1 页");
   await expect(summary).toHaveAttribute("data-count", "1");
+  // 外部解析服务 is off by default: nothing is sent, the teacher is told the gap and how to close it.
+  await expect(summary.getByTestId("external-off")).toContainText("外部解析服务");
+  await expect(page.getByTestId("external-run")).toHaveCount(0);
+  await expect(page.getByTestId("external-progress")).toHaveCount(0);
   const lossy = page.getByRole("treeitem").filter({ hasText: "Equations of motion" });
   await expect(lossy.getByTestId("chapter-lossy")).toHaveText("1 页公式没读出");
   await expect(page.getByRole("treeitem").filter({ hasText: "Using the equations" }).getByTestId("chapter-lossy")).toHaveCount(0);
@@ -694,4 +699,65 @@ test("formulas drawn as outlines: the chapters step shows the gap, and pasting c
   const fixed = await (await page.request.get(`/api/documents/${docId}/pages/2`)).json();
   expect(fixed).toMatchObject({ parser: "paste" });
   expect(fixed.text).toContain("v = v0 + a t");
+});
+
+/** The kinematics fixture under another title: a different file (sha256) with the same pages. */
+async function kinematicsCopy(title: string): Promise<string> {
+  const doc = await PDFDocument.load(fs.readFileSync(path.resolve("fixtures/pdfs/kinematics-outlines.pdf")));
+  doc.setTitle(title);
+  const out = path.join(os.tmpdir(), `kj-${title.replace(/\W+/g, "-")}.pdf`);
+  fs.writeFileSync(out, await doc.save());
+  return out;
+}
+
+test("外部解析服务 on (stubbed MinerU): unread formulas are re-read; after a reload the teacher picks the file again", async ({ page }) => {
+  await login(page);
+  const later = await kinematicsCopy("Kinematics reloaded");
+  await page.getByTestId("new-lesson").click();
+  await page.getByTestId("pdf-input").setInputFiles(later);
+  await page.waitForURL(/\/new\/[^/]+$/);
+  const laterId = page.url().split("/").pop()!;
+  await expect(page.getByTestId("external-off")).toBeVisible();
+
+  await page.goto("/admin");
+  await page.getByTestId("admin-tab-parsing").click();
+  await expect(page.getByTestId("parsing-state")).toHaveText(/已关闭/);
+  await page.getByTestId("parsing-enabled").click();
+  await expect(page.getByTestId("parsing-state")).toHaveText(/已开启/);
+  await shot(page, "25-admin-parsing");
+
+  // A full page load forgets the file: re-reading asks for it again, and only the same file is accepted.
+  await page.goto(`/new/${laterId}`);
+  const summary = page.getByTestId("must-fix-summary");
+  await expect(summary.getByTestId("external-run")).toHaveText("用外部解析服务读这 1 页");
+  const pick = async (file: string) => {
+    const [chooser] = await Promise.all([page.waitForEvent("filechooser"), page.getByTestId("external-run").click()]);
+    await chooser.setFiles(file);
+  };
+  await pick(PDF);
+  await expect(page.getByTestId("external-error")).toContainText("不是这本教材");
+  await pick(later);
+  await expect(page.getByTestId("external-done")).toHaveAttribute("data-read", "1");
+  await expect(summary).toHaveCount(0);
+  const section = page.getByRole("treeitem").filter({ hasText: "Equations of motion" });
+  await expect(section.getByTestId("chapter-external")).toHaveText("1 页外部解析");
+  await expect(section.getByTestId("chapter-lossy")).toHaveCount(0);
+
+  // Right after an upload in this tab, must-fix pages are sent without asking.
+  await page.goto("/new");
+  await page.getByTestId("pdf-input").setInputFiles(await kinematicsCopy("Kinematics fresh"));
+  await page.waitForURL(/\/new\/[^/]+$/);
+  const freshId = page.url().split("/").pop()!;
+  await expect(page.getByTestId("external-done")).toHaveAttribute("data-read", "1");
+  await expect(page.getByTestId("must-fix-summary")).toHaveCount(0);
+  await shot(page, "26-external-parsed");
+  const reread = await (await page.request.get(`/api/documents/${freshId}/pages/2`)).json();
+  expect(reread).toMatchObject({ parser: "mineru-agent/1" });
+  expect(reread.text).toContain("\\mathtt { v } = \\mathtt { u }");
+  expect((await (await page.request.get(`/api/documents/${freshId}/pages/1`)).json()).parser).toBe("pdfjs/1");
+
+  await page.goto("/admin");
+  await page.getByTestId("admin-tab-parsing").click();
+  await page.getByTestId("parsing-enabled").click();
+  await expect(page.getByTestId("parsing-state")).toHaveText(/已关闭/);
 });

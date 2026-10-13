@@ -12,4 +12,5 @@ npx wrangler d1 migrations apply DB --local --persist-to "$PERSIST" >/dev/null
 cd ../..
 node scripts/create-admin.mjs --username admin --password Admin12345 --persist-to "$PERSIST" >/dev/null
 cd apps/app
-exec npx wrangler dev --port "$PORT" --ip 127.0.0.1 --persist-to "$PERSIST" --show-interactive-dev-session=false
+# External parsing replays a recorded MinerU response: E2E never calls outside services.
+exec npx wrangler dev --port "$PORT" --ip 127.0.0.1 --persist-to "$PERSIST" --var PARSER_MINERU_MODE:stub --show-interactive-dev-session=false

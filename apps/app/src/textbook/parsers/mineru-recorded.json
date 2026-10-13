@@ -1,0 +1,44 @@
+{
+  "recordedAt": "2026-10-13",
+  "request": {
+    "endpoint": "POST https://mineru.net/api/v1/agent/parse/file",
+    "body": {
+      "file_name": "pages.pdf",
+      "language": "ch",
+      "enable_formula": true,
+      "enable_table": true,
+      "is_ocr": false
+    },
+    "upload": "fixtures/pdfs/kinematics-outlines.pdf page 2 behind a KJPAGE 1 separator page"
+  },
+  "submit": {
+    "code": 0,
+    "msg": "ok",
+    "trace_id": "d919e3c3c479ad37f682ad81fa49f489",
+    "data": {
+      "task_id": "74ea511b-6cd6-47d2-81f2-107fa470ef5407",
+      "file_url": "https://oss-mineru.openxlab.org.cn/agent/recorded.pdf?Expires=0&Signature=redacted"
+    }
+  },
+  "polls": [
+    {
+      "code": 0,
+      "msg": "ok",
+      "data": {
+        "task_id": "74ea511b-6cd6-47d2-81f2-107fa470ef5407",
+        "state": "running"
+      }
+    },
+    {
+      "code": 0,
+      "msg": "ok",
+      "trace_id": "7a09d9536a52d956b791ccc0566c27d7",
+      "data": {
+        "task_id": "74ea511b-6cd6-47d2-81f2-107fa470ef5407",
+        "state": "done",
+        "markdown_url": "https://cdn-mineru.openxlab.org.cn/pdf/2026-10-13/bcb86f82-0dfe-45fb-9472-d8d392b61fa2/full.md"
+      }
+    }
+  ],
+  "markdown": "KJPAGE 1\n\n## 3.1 Equations of motion\n\nFor an object that starts with velocity u and moves with constant acceleration a for a time t, the final velocity and the displacement are given by the two equations below. The equations are typeset as outlines, as in many published physics books, so the text layer of this page has no formulas at all.\n\n$$\n\\mathtt { v } = \\mathtt { u } + \\mathtt { a } \\mathtt { t }\n$$\n\n$$\n\\mathsf { s } = \\mathrm { u t } + \\mathsf { a t } ^ { 2 } / 2\n$$\n\nA car accelerating from rest at $2 ~ \\mathrm { m } / \\mathrm { s } ^ { 2 }$ reaches after ten seconds."
+}

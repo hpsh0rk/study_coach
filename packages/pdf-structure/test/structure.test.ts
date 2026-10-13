@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PageProbe, TocEntry } from "@kj/schema";
-import { buildChapterTree, chapterRunsOf, countPages, distributeText, formatPages, isEmptyPage, leafSections, missingRanges, normalizeRanges, pageFacts, badCharRatio, classifyPage, mathScore, routePages, MUST_FIX_KINDS, REFINE_KINDS, pageForLabel, rangesForChapters, sourceCut, sourceForRanges, subtreeIds } from "../src/index.ts";
+import { buildChapterTree, chapterRunsOf, countPages, distributeText, formatPages, isEmptyPage, leafSections, missingRanges, normalizeRanges, pageFacts, badCharRatio, classifyPage, mathScore, routePages, splitSeparated, separatorText, cleanParsedMarkdown, MUST_FIX_KINDS, REFINE_KINDS, pageForLabel, rangesForChapters, sourceCut, sourceForRanges, subtreeIds } from "../src/index.ts";
 
 const toc: TocEntry[] = [
   {
@@ -227,5 +227,19 @@ describe("page kinds", () => {
     expect(routePages(pages, [mineru], { kinds: MUST_FIX_KINDS, limit: 2 })).toEqual({ mineru: [2, 3], manual: [5, 6] });
     // Refining a chapter is the teacher's call: table and formula-text pages only when asked for.
     expect(routePages(pages, [{ id: "mineru", kinds: [...MUST_FIX_KINDS, ...REFINE_KINDS] }], { kinds: REFINE_KINDS, limit: 300 })).toEqual({ mineru: [4] });
+  });
+});
+
+describe("external parser results", () => {
+  it("maps one Markdown file back to pages by the separator pages", () => {
+    const md = [separatorText(1), "## 3.1 Equations", "$$ v = u + a t $$", "", `# ${separatorText(3)}`, "<!-- image-->", "Third", separatorText(9), "ignored"].join("\n");
+    expect(splitSeparated(md, 3)).toEqual(["## 3.1 Equations\n$$ v = u + a t $$", null, "Third"]);
+    expect(splitSeparated("no separators at all", 2)).toEqual([null, null]);
+    // A separator that is empty still counts: an empty page is a result, not a failure.
+    expect(splitSeparated(`${separatorText(1)}\n<!-- image-->\n${separatorText(2)}\nB`, 2)).toEqual(["", "B"]);
+  });
+
+  it("turns parser Markdown into page text", () => {
+    expect(cleanParsedMarkdown("A ![fig](images/a.jpg) B\n\n\n\n<table><tr><td>t</td><td>v</td></tr><tr><td>1</td><td>2</td></tr></table>")).toBe("A  B\n\nt | v\n1 | 2");
   });
 });

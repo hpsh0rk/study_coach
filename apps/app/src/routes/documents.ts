@@ -7,6 +7,7 @@ import { requireUser } from "../auth/session.ts";
 import { lessonsUsing } from "../store.ts";
 import { chapterTree, lookupTextbook, ownedTextbook, page, pageMeta, textbookList } from "../textbook/index.ts";
 import { createTextbook, PAGE_BATCH, pastePages, putPages, setTextbookArchived } from "../textbook/write.ts";
+import { createParseJob, externalParserInfo, jobResult, pollJob, saveJobPages, uploadJobFile } from "../textbook/parsers/jobs.ts";
 
 export const MAX_PAGES = 600;
 export { PAGE_BATCH };
@@ -58,8 +59,46 @@ export const documentRoutes = new Hono<AppBindings>()
   })
   .get("/:id", async (c) => {
     const doc = await ownedTextbook(c.env, c.get("user"), c.req.param("id"), { archived: true });
-    const [tree, meta] = await Promise.all([chapterTree(c.env, doc.id), pageMeta(c.env, doc)]);
-    return c.json({ document: doc, chapters: tree, pageLabels: meta.labels, pageWords: meta.words, pageChars: meta.chars, pageParsers: meta.parsers, pageFlags: meta.flags, pageKinds: meta.kinds });
+    const [tree, meta, externalParser] = await Promise.all([chapterTree(c.env, doc.id), pageMeta(c.env, doc), externalParserInfo(c.env, c.get("user").orgId)]);
+    return c.json({
+      document: doc,
+      chapters: tree,
+      pageLabels: meta.labels,
+      pageWords: meta.words,
+      pageChars: meta.chars,
+      pageParsers: meta.parsers,
+      pageFlags: meta.flags,
+      pageKinds: meta.kinds,
+      externalParser,
+    });
+  })
+  /**
+   * External parser ("外部解析服务", admin switch, off by default). The browser cuts the pages into a small
+   * PDF; the Worker streams it to the parser and the result back, and stores the text the browser maps back
+   * by page. Pages a copy of the same file already got are copied instead of sent.
+   */
+  .post("/:id/parse", async (c) => {
+    const doc = await ownedTextbook(c.env, c.get("user"), c.req.param("id"), { archived: true });
+    const body = await parseJson(c, z.object({ pages: z.array(z.number().int().min(1).max(doc.pageCount)).min(1).max(50), reason: z.enum(["auto", "refine"]), ocr: z.boolean().default(false) }));
+    return c.json(await createParseJob(c.env, c.get("user"), doc, body));
+  })
+  .put("/:id/parse/:job/file", async (c) => {
+    const doc = await ownedTextbook(c.env, c.get("user"), c.req.param("id"), { archived: true });
+    await uploadJobFile(c.env, c.get("user"), doc, c.req.param("job"), c.req.raw.body, Number(c.req.header("content-length")));
+    return c.json({ ok: true });
+  })
+  .get("/:id/parse/:job", async (c) => {
+    const doc = await ownedTextbook(c.env, c.get("user"), c.req.param("id"), { archived: true });
+    return c.json(await pollJob(c.env, c.get("user"), doc, c.req.param("job")));
+  })
+  .get("/:id/parse/:job/result", async (c) => {
+    const doc = await ownedTextbook(c.env, c.get("user"), c.req.param("id"), { archived: true });
+    return jobResult(c.env, c.get("user"), doc, c.req.param("job"));
+  })
+  .post("/:id/parse/:job/pages", async (c) => {
+    const doc = await ownedTextbook(c.env, c.get("user"), c.req.param("id"), { archived: true });
+    const body = await parseJson(c, z.object({ pages: z.array(z.object({ no: z.number().int().min(1), text: z.string().max(40_000) })).max(50) }));
+    return c.json({ pages: await saveJobPages(c.env, c.get("user"), doc, c.req.param("job"), body.pages) });
   })
   .get("/:id/pages/:no", async (c) => {
     const doc = await ownedTextbook(c.env, c.get("user"), c.req.param("id"), { archived: true });

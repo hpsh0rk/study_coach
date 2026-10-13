@@ -9,6 +9,7 @@ import { HttpError, parseJson } from "../http.ts";
 import { generatePassword, hashPassword, passwordProblem } from "../auth/password.ts";
 import { destroyUserSessions, requireAdmin, requireUser } from "../auth/session.ts";
 import { db } from "../db/index.ts";
+import { effectiveMode, PARSE_LIMITS, parserSettingsOf, parseUsageToday, saveParserSettings } from "../textbook/parsers/settings.ts";
 
 const Username = z
   .string()
@@ -151,6 +152,32 @@ export const adminRoutes = new Hono<AppBindings>()
     if (!row) throw new HttpError(404, "NOT_FOUND", "Provider not found");
     const provider = { id: row.id, kind: row.kind, name: row.name, baseUrl: row.baseUrl, apiKey: await openSecret(row.apiKeySealed, secret(c.env, "AI_CONFIG_KEY")) };
     return c.json(await testProvider(provider, body.model ?? row.model));
+  })
+  // ---- external parser ----
+  /**
+   * "外部解析服务": whether pages the browser could not read (scans, formulas drawn as outlines, garbled text)
+   * may be sent to MinerU. Off until an admin turns it on.
+   */
+  .get("/parsing", async (c) => {
+    const orgId = c.get("user").orgId;
+    const [settings, today] = await Promise.all([parserSettingsOf(c.env, orgId), parseUsageToday(c.env, orgId)]);
+    return c.json({
+      externalEnabled: settings.externalEnabled,
+      mineruMode: settings.mineruMode,
+      tokenHint: settings.mineruTokenHint,
+      envToken: !!c.env.MINERU_API_TOKEN,
+      stub: effectiveMode(c.env, settings) === "stub",
+      limits: PARSE_LIMITS,
+      today,
+    });
+  })
+  .put("/parsing", async (c) => {
+    const body = await parseJson(c, z.object({ externalEnabled: z.boolean().optional(), mineruMode: z.enum(["agent", "token"]).optional(), token: z.string().trim().min(8).max(4000).nullable().optional() }));
+    const me = c.get("user");
+    const token = body.token === undefined ? undefined : body.token === null ? null : { sealed: await sealSecret(body.token, secret(c.env, "AI_CONFIG_KEY")), hint: maskSecret(body.token) };
+    await saveParserSettings(c.env, me, { externalEnabled: body.externalEnabled, mineruMode: body.mineruMode, token });
+    await db(c.env).insert(auditLog).values({ orgId: me.orgId, actorId: me.id, action: "admin.parser_settings", target: body.externalEnabled === undefined ? "settings" : body.externalEnabled ? "external_on" : "external_off" });
+    return c.json({ ok: true });
   });
 
 async function disableOthers(env: Env, orgId: string, keepId: string): Promise<void> {

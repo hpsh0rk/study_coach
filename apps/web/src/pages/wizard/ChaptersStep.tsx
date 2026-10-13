@@ -1,12 +1,30 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { countPages, isEmptyPage, isMustFix, labelOf, MUST_FIX_KINDS, normalizeRanges, PASTE_PARSER, PDFJS_PARSER, pageForLabel, pagesInRanges, rangesForChapters, sourceCut, subtreeIds, type PageFlag } from "@kj/pdf-structure";
+import {
+  countPages,
+  isEmptyPage,
+  isExternalParser,
+  isMustFix,
+  labelOf,
+  MUST_FIX_KINDS,
+  normalizeRanges,
+  PASTE_PARSER,
+  PDFJS_PARSER,
+  pageForLabel,
+  pagesInRanges,
+  rangesForChapters,
+  REFINE_KINDS,
+  sourceCut,
+  subtreeIds,
+  type PageFlag,
+} from "@kj/pdf-structure";
 import { OUTLINE_SOURCE_CHARS, scopeAdvice } from "@kj/pedagogy";
 import type { ChapterNode, PageKind, PageRange } from "@kj/schema";
 import { ApiError } from "../../api.ts";
 import { lessonApi, type LessonView, type UnitPreview } from "../../lessonApi.ts";
-import { documentApi, type DocumentRow, type PastedPage } from "../../textbook/api.ts";
-import type { IngestOutcome } from "../../textbook/ingest.ts";
+import { documentApi, type DocumentRow, type ExternalParserInfo, type PastedPage } from "../../textbook/api.ts";
+import { parseExternally, pdfCutter, rememberedFile, rememberFile, type ExternalOutcome } from "../../textbook/external.ts";
+import { sha256Hex, type IngestOutcome } from "../../textbook/ingest.ts";
 import { Stepper, StepIntro, type StepKey } from "./Stepper.tsx";
 
 /**
@@ -103,6 +121,38 @@ function PastePanel({ documentId, run, labels, onDone }: { documentId: string; r
 
 const LOSSY: Partial<Record<PageKind, string>> = { "formula-lost": "公式没读出", scanned: "扫描", garbled: "乱码" };
 
+/** Books whose must-fix pages were already sent automatically in this tab (once per book, even if the step remounts). */
+const autoSent = new Set<string>();
+const AUTO_LIMIT = 300;
+
+type ExternalRun = { kind: "running"; done: number; total: number } | ({ kind: "done" } & ExternalOutcome) | { kind: "error"; message: string };
+
+function ExternalStatus({ run }: { run: ExternalRun }) {
+  if (run.kind === "running")
+    return (
+      <div className="alert info" data-testid="external-progress">
+        外部解析服务正在重新读取 {run.done} / {run.total} 页…（只发送这几页，不发送整本书）· Re-reading pages with the external parser
+        <div className="progress">
+          <div style={{ width: `${Math.round((run.done / Math.max(1, run.total)) * 100)}%` }} />
+        </div>
+      </div>
+    );
+  if (run.kind === "error")
+    return (
+      <div className="alert error" data-testid="external-error">
+        {run.message}
+      </div>
+    );
+  const read = new Set(run.saved.map((p) => p.no)).size;
+  return (
+    <div className={`alert ${run.missed.length ? "warn" : "info"}`} data-testid="external-done" data-read={read} data-missed={run.missed.length}>
+      外部解析服务读好了 {read} 页
+      {run.missed.length > 0 && `，${run.missed.length} 页没读出来，选到这些页时可以粘贴文字补上`}
+      {run.stopped && `（${run.stopped}）`}。· Re-read {read} page(s){run.missed.length > 0 && `; ${run.missed.length} not read`}.
+    </div>
+  );
+}
+
 const REUSED: Partial<Record<IngestOutcome, string>> = {
   ready: "这份 PDF 之前上传过，直接用了上次读好的文字，没有重新解析 · Already uploaded: reused without parsing again",
   resumed: "上次没有传完，这次只补传了缺的页 · Finished the interrupted upload; only the missing pages were sent",
@@ -120,6 +170,10 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
   const [pageParsers, setPageParsers] = useState<Record<number, string>>({});
   const [pageFlags, setPageFlags] = useState<Record<number, PageFlag[]>>({});
   const [pageKinds, setPageKinds] = useState<Record<number, PageKind>>({});
+  const [external, setExternal] = useState<ExternalParserInfo | null>(null);
+  const [extRun, setExtRun] = useState<ExternalRun | null>(null);
+  const pickFor = useRef<((file: File) => void) | null>(null);
+  const filePicker = useRef<HTMLInputElement>(null);
   const [pasting, setPasting] = useState<PageRange | null>(null);
   const [preview, setPreview] = useState<{ start: string; end: string } | null>(null);
   const [picked, setPicked] = useState<Set<string>>(new Set(lesson?.lesson.scope.chapterIds ?? []));
@@ -141,6 +195,7 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
         setPageParsers(r.pageParsers);
         setPageFlags(r.pageFlags);
         setPageKinds(r.pageKinds);
+        setExternal(r.externalParser);
         setCollapsed(new Set(r.chapters.filter((c) => c.level >= 2 && r.chapters.some((k) => k.parentId === c.id)).map((c) => c.id)));
         if (lesson && !lesson.lesson.scope.chapterIds.length) setRangeText(fmtRanges(lesson.lesson.scope.ranges, map));
       })
@@ -169,25 +224,78 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
     return count ? [{ kind, count }] : [];
   });
   const lossyRuns = runsOf(pagesInRanges(ranges).filter((p) => unfixed(p) && !isEmptyPage(pageWords[p - 1] ?? 0)));
+  const externalIn = (c: ChapterNode) => pagesOf(c).filter((p) => isExternalParser(pageParsers[p]) && pageParsers[p] !== PASTE_PARSER).length;
+  // "精修本章": pages the text layer read but not well (formula-heavy, tables), plus must-fix ones still unread.
+  const refinable = (c: ChapterNode) => pagesOf(c).filter((p) => unfixed(p) || (REFINE_KINDS.includes(pageKinds[p]!) && (pageParsers[p] ?? PDFJS_PARSER) === PDFJS_PARSER));
+  const unfixedPages = Object.keys(pageKinds)
+    .map(Number)
+    .filter(unfixed)
+    .sort((a, b) => a - b);
+
+  /** New facts for re-read pages (paste or external parser); functional updates, as a parser run outlives renders. */
+  function applyFacts(rows: PastedPage[]) {
+    setPageWords((w) => rows.reduce((n, r) => ((n[r.no - 1] = r.words), n), [...w]));
+    setPageChars((ch) => rows.reduce((n, r) => ((n[r.no - 1] = r.chars), n), [...ch]));
+    setPageParsers((ps) => rows.reduce((n, r) => ((n[r.no] = r.parser), n), { ...ps }));
+    setPageFlags((fs) =>
+      rows.reduce(
+        (n, r) => {
+          if (r.flags.length) n[r.no] = r.flags;
+          else delete n[r.no];
+          return n;
+        },
+        { ...fs },
+      ),
+    );
+  }
 
   function pasted(rows: PastedPage[]) {
-    const words = [...pageWords];
-    const chars = [...pageChars];
-    const parsers = { ...pageParsers };
-    const flags = { ...pageFlags };
-    for (const r of rows) {
-      words[r.no - 1] = r.words;
-      chars[r.no - 1] = r.chars;
-      parsers[r.no] = r.parser;
-      if (r.flags.length) flags[r.no] = r.flags;
-      else delete flags[r.no];
-    }
-    setPageWords(words);
-    setPageChars(chars);
-    setPageParsers(parsers);
-    setPageFlags(flags);
+    applyFacts(rows);
     setPasting(null);
   }
+
+  async function runExternal(nos: number[], reason: "auto" | "refine", file: Blob) {
+    if (!external || !nos.length) return;
+    setExtRun({ kind: "running", done: 0, total: nos.length });
+    const out = await parseExternally(
+      nos.map((no) => ({ no, kind: pageKinds[no] })),
+      external,
+      {
+        create: (pages, ocr) => documentApi.parse(documentId, pages, reason, ocr),
+        upload: async (job, pdf) => void (await documentApi.parseUpload(documentId, job, pdf)),
+        poll: (job) => documentApi.parsePoll(documentId, job),
+        result: (job) => documentApi.parseResult(documentId, job),
+        save: async (job, pages) => (await documentApi.parseSave(documentId, job, pages)).pages,
+        cut: pdfCutter(file),
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+      },
+      (done, total) => setExtRun({ kind: "running", done, total }),
+    );
+    applyFacts(out.saved);
+    setExtRun({ kind: "done", ...out });
+  }
+
+  /** The book's file: kept from the upload in this tab, or picked again (checked against the stored hash). */
+  function withFile(then: (file: Blob) => void) {
+    const kept = rememberedFile(documentId);
+    if (kept) return then(kept);
+    pickFor.current = async (file) => {
+      if (doc?.fileSha256 && (await sha256Hex(await file.arrayBuffer())) !== doc.fileSha256) {
+        return setExtRun({ kind: "error", message: "选的不是这本教材的 PDF，请选上传时的同一个文件 · That is not the same PDF" });
+      }
+      rememberFile(documentId, file);
+      then(file);
+    };
+    filePicker.current?.click();
+  }
+
+  // Right after an upload in this tab, must-fix pages go to the external parser without asking (when it is on).
+  useEffect(() => {
+    const file = rememberedFile(documentId);
+    if (!external || !file || autoSent.has(documentId) || !unfixedPages.length) return;
+    autoSent.add(documentId);
+    void runExternal(unfixedPages.slice(0, AUTO_LIMIT), "auto", file);
+  }, [external, documentId, unfixedPages.length]);
 
   // First line of the first and last typed page, so teachers can check the numbers match their book.
   useEffect(() => {
@@ -306,9 +414,39 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
           </div>
           {bookLossy.length > 0 && (
             <div className="alert info" data-testid="must-fix-summary" data-count={bookLossy.reduce((n, k) => n + k.count, 0)}>
-              这本书有 {bookLossy.reduce((n, k) => n + k.count, 0)} 页可能没读全：{bookLossy.map((k) => `${LOSSY[k.kind]} ${k.count} 页`).join(" · ")}。浏览器只能读出文字层，扫描图和画成图形的公式读不到；选到这些页时可以粘贴文字补上。· Some pages were not fully read (scans, formulas drawn as outlines); paste their text where you need it.
+              这本书有 {bookLossy.reduce((n, k) => n + k.count, 0)} 页可能没读全：{bookLossy.map((k) => `${LOSSY[k.kind]} ${k.count} 页`).join(" · ")}。浏览器只能读出文字层，扫描图和画成图形的公式读不到。
+              {external ? (
+                extRun?.kind !== "running" && (
+                  <span>
+                    {" "}
+                    可以用外部解析服务重新读这些页（只发送这几页），或选到这些页时粘贴文字补上。
+                    <button className="btn small" onClick={() => withFile((f) => void runExternal(unfixedPages.slice(0, AUTO_LIMIT), "auto", f))} data-testid="external-run">
+                      用外部解析服务读这 {Math.min(AUTO_LIMIT, unfixedPages.length)} 页
+                    </button>
+                  </span>
+                )
+              ) : (
+                <span data-testid="external-off">
+                  {" "}
+                  选到这些页时可以粘贴文字补上；管理员在后台开启“外部解析服务”后，这些页可以送去自动识别。
+                </span>
+              )}{" "}
+              · Some pages were not fully read (scans, formulas drawn as outlines){external ? ": re-read them with the external parser, or paste their text." : "; paste their text where you need it."}
             </div>
           )}
+          {extRun && <ExternalStatus run={extRun} />}
+          <input
+            ref={filePicker}
+            type="file"
+            accept="application/pdf,.pdf"
+            hidden
+            data-testid="external-file"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) pickFor.current?.(f);
+              e.target.value = "";
+            }}
+          />
           {pages === 0 ? (
             <div className="empty-inline" data-testid="chapters-empty">
               还没选内容：勾选下面的章节，或在下方输入页码。· Nothing selected yet: tick chapters below or type page ranges.
@@ -438,8 +576,13 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
                         ) : null;
                       })}
                       {pastedIn(c) > 0 && (
-                        <span className="badge note" data-testid="chapter-pasted" title="这些页是扫描图，文字由老师粘贴 · Text pasted by the teacher for scanned pages">
+                        <span className="badge note" data-testid="chapter-pasted" title="这些页的文字由老师粘贴 · Text pasted by the teacher">
                           {pastedIn(c)} 页老师粘贴
+                        </span>
+                      )}
+                      {externalIn(c) > 0 && (
+                        <span className="badge note" data-testid="chapter-external" title="浏览器读不全这些页，文字由外部解析服务重新识别 · Re-read by the external parser">
+                          {externalIn(c)} 页外部解析
                         </span>
                       )}
                       {flaggedIn(c).length > 0 && (
@@ -448,6 +591,16 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
                         </span>
                       )}
                     </label>
+                    {external && extRun?.kind !== "running" && refinable(c).some((p) => REFINE_KINDS.includes(pageKinds[p]!)) && (
+                      <button
+                        className="btn small ghost"
+                        title="这一节的表格和公式读得不完整：只把这几页送去外部解析服务重新识别 · Re-read this section's tables and formulas"
+                        onClick={() => withFile((f) => void runExternal(refinable(c).slice(0, 50), "refine", f))}
+                        data-testid="refine-chapter"
+                      >
+                        精修本章
+                      </button>
+                    )}
                   </li>
                 );
               })}

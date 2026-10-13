@@ -87,6 +87,45 @@ export function routePages(pages: { no: number; kind: PageKind }[], parsers: rea
   return out;
 }
 
+/** External parsers. The id carries the version: a page read by one is reused (same file, same page) only by the same id. */
+export const MINERU_AGENT_PARSER = "mineru-agent/1";
+export const MINERU_PARSER = "mineru/1";
+export const isExternalParser = (parser: string | null | undefined) => !!parser && parser !== PDFJS_PARSER && parser !== PASTE_PARSER;
+
+/**
+ * A sub-PDF sent to an external parser has a page reading `KJPAGE n` before its n-th page. The result
+ * comes back as one Markdown file without page boundaries; the separators map it back by page index.
+ * (Text stamped into the page margin is dropped as a running header, so separators are whole pages.)
+ */
+export const separatorText = (i: number) => `KJPAGE ${i}`;
+
+/** The Markdown of each of `count` pages, or null where its separator did not come back. */
+export function splitSeparated(markdown: string, count: number): (string | null)[] {
+  const out: (string | null)[] = new Array<string | null>(count).fill(null);
+  const marks = [...markdown.matchAll(/^[ \t]*(?:#+[ \t]*)?KJPAGE[ \t]+(\d+)[ \t]*$/gm)];
+  marks.forEach((m, k) => {
+    const i = Number(m[1]) - 1;
+    if (i < 0 || i >= count || out[i] !== null) return;
+    const end = k + 1 < marks.length ? marks[k + 1]!.index : markdown.length;
+    out[i] = cleanParsedMarkdown(markdown.slice(m.index + m[0].length, end));
+  });
+  return out;
+}
+
+/** Parser Markdown as page text: images and comments dropped, HTML tables as `a | b` rows; headings and LaTeX kept. */
+export function cleanParsedMarkdown(md: string): string {
+  return md
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+    .replace(/<\/t[dh]>\s*<t[dh][^>]*>/gi, " | ")
+    .replace(/<tr[^>]*>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+    .slice(0, 40_000);
+}
+
 interface FlatEntry {
   title: string;
   page: number;

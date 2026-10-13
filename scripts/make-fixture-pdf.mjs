@@ -197,9 +197,26 @@ const KINEMATICS = [
   },
 ];
 
-/** A formula line drawn the way OpenStax books draw it: each glyph a small filled outline, no text. */
-function drawOutlineFormula(page, x, y, glyphs) {
-  for (let k = 0; k < glyphs; k++) page.drawEllipse({ x: x + k * 12, y, xScale: 4, yScale: 5.5, color: rgb(0, 0, 0) });
+/** DejaVu Serif outlines (Bitstream Vera licence), 1000 units per em, y down: [advance, SVG path]. */
+const GLYPHS = {"v": [565, "M247 0 56 -467H-3V-519H236V-467H153L299 -110L445 -467H367V-519H562V-467H504L313 0Z"], "u": [644, "M354 -519H522V-52H607V0H432V-92Q407 -40 368 -13Q328 14 276 14Q189 14 149 -35Q108 -84 108 -189V-467H27V-519H198V-217Q198 -122 221 -87Q245 -52 304 -52Q367 -52 399 -98Q432 -144 432 -231V-467H354Z"], "a": [596, "M398 -163V-273H282Q215 -273 183 -244Q150 -215 150 -156Q150 -102 183 -70Q216 -38 273 -38Q329 -38 364 -73Q398 -107 398 -163ZM488 -324V-52H568V0H398V-56Q368 -20 329 -3Q290 14 238 14Q151 14 101 -32Q50 -78 50 -156Q50 -236 108 -281Q166 -325 272 -325H398V-361Q398 -420 362 -452Q326 -485 261 -485Q208 -485 176 -460Q144 -436 136 -388H90V-493Q137 -513 181 -523Q225 -533 267 -533Q375 -533 431 -480Q488 -426 488 -324Z"], "t": [402, "M108 -467H29V-519H108V-680H198V-519H367V-467H198V-137Q198 -71 211 -53Q224 -34 258 -34Q293 -34 309 -55Q325 -76 326 -122H394Q390 -51 355 -19Q321 14 250 14Q172 14 140 -20Q108 -55 108 -137Z"], "s": [513, "M56 -29V-150H108Q110 -92 144 -63Q179 -34 246 -34Q307 -34 338 -57Q370 -80 370 -123Q370 -157 347 -178Q324 -199 249 -223L184 -245Q117 -267 87 -299Q57 -331 57 -381Q57 -452 109 -493Q162 -533 254 -533Q295 -533 340 -522Q386 -512 434 -491V-378H382Q380 -428 347 -457Q314 -485 257 -485Q200 -485 171 -465Q142 -445 142 -405Q142 -372 164 -352Q186 -333 252 -312L323 -290Q397 -267 429 -233Q462 -198 462 -144Q462 -70 406 -28Q349 14 250 14Q200 14 152 3Q104 -7 56 -29Z"], "m": [948, "M518 -418Q544 -475 584 -504Q625 -533 678 -533Q760 -533 800 -483Q840 -432 840 -330V-52H921V0H672V-52H750V-320Q750 -399 727 -433Q703 -467 649 -467Q589 -467 557 -421Q526 -376 526 -289V-52H604V0H358V-52H436V-323Q436 -401 413 -434Q389 -467 335 -467Q275 -467 243 -421Q212 -376 212 -289V-52H290V0H41V-52H122V-468H36V-519H212V-427Q237 -479 275 -506Q314 -533 363 -533Q423 -533 464 -503Q504 -473 518 -418Z"], "=": [838, "M106 -452H732V-374H106ZM106 -253H732V-175H106Z"], "+": [838, "M458 -627V-353H732V-274H458V0H380V-274H106V-353H380V-627Z"], "/": [337, "M259 -729H337L78 93H0Z"], "2": [636, "M128 -555H73V-685Q125 -713 178 -728Q231 -742 282 -742Q396 -742 462 -687Q528 -632 528 -537Q528 -430 378 -281Q367 -270 361 -264L177 -80H481V-170H538V0H68V-53L289 -274Q362 -347 394 -408Q425 -470 425 -537Q425 -611 386 -652Q348 -694 281 -694Q211 -694 173 -659Q135 -625 128 -555Z"], "0": [636, "M318 -34Q393 -34 430 -116Q467 -198 467 -364Q467 -530 430 -612Q393 -694 318 -694Q243 -694 206 -612Q169 -530 169 -364Q169 -198 206 -116Q243 -34 318 -34ZM318 14Q199 14 133 -85Q66 -185 66 -364Q66 -543 133 -643Q199 -742 318 -742Q437 -742 503 -643Q570 -543 570 -364Q570 -185 503 -85Q437 14 318 14Z"]};
+
+/**
+ * Math drawn the way OpenStax books draw it: every glyph a separate filled outline, nothing in the text layer.
+ * Each token is [characters, size, rise]; spaces advance by 0.3 em. Returns the x after the last glyph.
+ */
+function drawOutlineMath(page, x, y, tokens) {
+  for (const [chars, size, rise = 0] of tokens) {
+    for (const ch of chars) {
+      if (ch === " ") {
+        x += 0.3 * size;
+        continue;
+      }
+      const [advance, d] = GLYPHS[ch];
+      page.drawSvgPath(d, { x, y: y + rise, scale: size / 1000, color: rgb(0, 0, 0) });
+      x += (advance * size) / 1000;
+    }
+  }
+  return x;
 }
 
 /** Formulas drawn as glyph outlines: pdf.js reads the prose around them and silently loses every formula and number. */
@@ -219,13 +236,19 @@ export async function makeKinematicsFixturePdf() {
       y -= 18;
     }
     if (p.formulas) {
-      drawOutlineFormula(page, 200, y - 40, 7);
-      drawOutlineFormula(page, 200, y - 90, 9);
-      page.drawText("A car accelerating from rest at", { x: 60, y: y - 140, size: 12, font });
-      drawOutlineFormula(page, 240, y - 136, 3);
-      page.drawText("reaches", { x: 290, y: y - 140, size: 12, font });
-      drawOutlineFormula(page, 340, y - 136, 3);
-      page.drawText("after ten seconds.", { x: 385, y: y - 140, size: 12, font });
+      drawOutlineMath(page, 220, y - 40, [["v = u + at", 14]]);
+      drawOutlineMath(page, 220, y - 90, [["s = ut + at", 14], ["2", 9, 6], ["/2", 14]]);
+      const line = y - 140;
+      let x = 60;
+      const words = (text) => {
+        page.drawText(text, { x, y: line, size: 12, font });
+        x += font.widthOfTextAtSize(text, 12) + 4;
+      };
+      words("A car accelerating from rest at");
+      x = drawOutlineMath(page, x, line, [["2 m/s", 12], ["2", 8, 5]]) + 4;
+      words("reaches");
+      x = drawOutlineMath(page, x, line, [["20 m/s", 12]]) + 4;
+      words("after ten seconds.");
     }
     page.drawText(String(i + 1), { x: 290, y: 40, size: 10, font });
   });

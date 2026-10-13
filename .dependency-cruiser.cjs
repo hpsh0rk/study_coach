@@ -94,7 +94,28 @@ module.exports = {
       comment: "The textbook module never imports the lesson store, routes or model layer, nor teaching rules, templates or generation.",
       severity: "error",
       from: { path: "^apps/app/src/textbook/" },
-      to: { path: ["^apps/app/src/(store\\.ts|routes/|ai\\.ts)", "^packages/(generation|pedagogy|templates|widgets|ai|player|pptx)/"] },
+      to: { path: ["^apps/app/src/(store\\.ts|routes/|ai\\.ts)", "^packages/(generation|pedagogy|templates|widgets|player|pptx)/"] },
+    },
+    {
+      name: "only-parser-adapters-call-ai",
+      comment: "Inside the textbook module only the parser adapters (textbook/parsers) use @kj/ai: sealed parser tokens now, a vision-model fallback later.",
+      severity: "error",
+      from: { path: "^apps/app/src/textbook/", pathNot: "^apps/app/src/textbook/parsers/" },
+      to: { path: "^packages/ai/" },
+    },
+    {
+      name: "parsers-plug-in-through-the-textbook-module",
+      comment: "External parsers are reached through the documents route (jobs) and the admin route (the 外部解析服务 switch) only.",
+      severity: "error",
+      from: { path: "^apps/app/src/", pathNot: "^apps/app/src/(textbook/|routes/(documents|admin)\\.ts$)" },
+      to: { path: "^apps/app/src/textbook/parsers/" },
+    },
+    {
+      name: "admin-sees-parser-settings-only",
+      comment: "The admin route reads and writes the switch; jobs and adapters belong to the documents route.",
+      severity: "error",
+      from: { path: "^apps/app/src/routes/admin\\.ts$" },
+      to: { path: "^apps/app/src/textbook/parsers/", pathNot: "^apps/app/src/textbook/parsers/settings\\.ts$" },
     },
     {
       name: "only-textbook-ingest-loads-pdfjs",
@@ -102,6 +123,13 @@ module.exports = {
       severity: "error",
       from: { path: "^apps/web/src/", pathNot: "^apps/web/src/textbook/" },
       to: { path: "^packages/pdf-structure/src/browser\\.ts$|node_modules/pdfjs-dist/|^pdfjs-dist" },
+    },
+    {
+      name: "only-textbook-ingest-cuts-pdfs",
+      comment: "Cutting sub-PDFs (pdf-lib) and unzipping parser results (fflate) happen in apps/web/src/textbook only.",
+      severity: "error",
+      from: { path: "^apps/web/src/", pathNot: "^apps/web/src/textbook/" },
+      to: { path: "node_modules/(pdf-lib|fflate)/|^(pdf-lib|fflate)$" },
     },
     {
       name: "pedagogy-has-no-io",
