@@ -22,7 +22,10 @@ const CreateDocument = z.object({
   title: z.string().trim().min(1).max(300),
   sizeBytes: z.number().int().min(1).max(200 * 1024 * 1024),
   pageCount: z.number().int().min(1).max(MAX_PAGES),
-  chapters: z.array(ChapterNode).max(800),
+  chapters: z
+    .array(ChapterNode)
+    .max(800)
+    .refine((list) => new Set(list.map((ch) => ch.id)).size === list.length, "chapter ids must be unique"),
   sha256: Sha256.optional(),
 });
 

@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { MAX_TEXTBOOKS } from "../src/textbook/write.ts";
+import { createTextbook, MAX_TEXTBOOKS } from "../src/textbook/write.ts";
 import { e, loggedIn, seedUser, type Client } from "./client.ts";
 
 const SHA_A = "a".repeat(64);
@@ -139,5 +139,26 @@ describe("page facts are stored next to the text", () => {
     const after = (await t5.req("GET", `/api/documents/${id}`)).json;
     expect(after.pageKinds[2]).toBe("formula-lost");
     expect(after.pageParsers).toEqual({ 2: "paste" });
+  });
+});
+
+describe("createTextbook is atomic", () => {
+  const chapterList = (n: number, dupe = false) =>
+    Array.from({ length: n }, (_, i) => ({ id: dupe && i === n - 1 ? "c0" : `c${i}`, parentId: null, level: 1, ord: i, title: `${i + 1} Section`, pageStart: 1, pageEnd: 6, words: 10 }));
+
+  it("stores 800 chapters in one go, and rejects duplicate chapter ids before writing", async () => {
+    const big = await t4.req("POST", "/api/documents", { ...book(undefined), title: "Big", chapters: chapterList(800) });
+    expect(big.status).toBe(201);
+    expect((await t4.req("GET", `/api/documents/${big.json.id}`)).json.chapters).toHaveLength(800);
+    expect((await t4.req("POST", "/api/documents", { ...book(undefined), chapters: chapterList(5, true) })).status).toBe(400);
+  });
+
+  it("leaves no documents row when a chapter insert fails", async () => {
+    await seedUser("usr_t9", "teacher9", "Teach12345", { mustChange: false });
+    const user = { id: "usr_t9", orgId: "org_default", username: "teacher9", displayName: null, role: "teacher" as const, mustChangePassword: false };
+    const meta = { filename: "half.pdf", title: "Half written", sizeBytes: 1, pageCount: 6 };
+    await expect(createTextbook(e, user, meta, chapterList(25, true))).rejects.toThrow();
+    const left = await e.DB.prepare("SELECT COUNT(*) AS n FROM documents WHERE owner_id = 'usr_t9'").first<{ n: number }>();
+    expect(left?.n).toBe(0);
   });
 });

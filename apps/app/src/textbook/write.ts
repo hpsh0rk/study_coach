@@ -49,17 +49,20 @@ export async function createTextbook(
   }
   const { sha256, ...rest } = meta;
   const id = newId("doc");
+  const writes: any[] = [d.insert(documents).values({ id, orgId: user.orgId, ownerId: user.id, ...rest, fileSha256: sha256 ?? null, hasBookmarks: tree.length > 0 })];
+  // 10 rows × 9 columns stays under D1's 100 bound parameters per statement.
+  for (let i = 0; i < tree.length; i += 10) {
+    const rows = tree.slice(i, i + 10).map((ch) => ({ documentId: id, id: ch.id, parentId: ch.parentId, ord: ch.ord, level: ch.level, title: ch.title.slice(0, 300), pageStart: ch.pageStart, pageEnd: ch.pageEnd, words: ch.words }));
+    writes.push(d.insert(chapters).values(rows));
+  }
   try {
-    await d.insert(documents).values({ id, orgId: user.orgId, ownerId: user.id, ...rest, fileSha256: sha256 ?? null, hasBookmarks: tree.length > 0 });
+    // One batch is one transaction: a failed chapter insert leaves no half-written textbook behind.
+    await d.batch(writes as [any, ...any[]]);
   } catch (err) {
     // Two tabs uploading the same file: documents_owner_sha_uq lets one insert through.
     const winner = sha256 ? await activeWithHash(env, user.id, sha256) : null;
     if (winner) throw alreadyUploaded(winner.id);
     throw err;
-  }
-  for (let i = 0; i < tree.length; i += 10) {
-    const rows = tree.slice(i, i + 10).map((ch) => ({ documentId: id, id: ch.id, parentId: ch.parentId, ord: ch.ord, level: ch.level, title: ch.title.slice(0, 300), pageStart: ch.pageStart, pageEnd: ch.pageEnd, words: ch.words }));
-    await d.insert(chapters).values(rows);
   }
   return id;
 }
