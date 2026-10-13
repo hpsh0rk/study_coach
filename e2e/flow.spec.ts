@@ -637,6 +637,7 @@ test("Chinese CID-font PDF: text is extracted, scanned pages are flagged and can
   // Two tabs on the same draft: the second save is refused instead of overwriting the first.
   const other = await page.context().newPage();
   await other.goto(page.url());
+  await expect(other.getByTestId("outline-row").first().getByLabel("标题 Title")).not.toHaveValue("");
   await page.getByTestId("outline-row").first().getByLabel("标题 Title").fill("标签页 A 的标题");
   await page.getByRole("button", { name: "保存修改 Save" }).click();
   await expect(page.getByRole("button", { name: "已保存 Saved" })).toBeVisible();
