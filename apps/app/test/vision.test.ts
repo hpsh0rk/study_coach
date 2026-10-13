@@ -48,10 +48,12 @@ async function newBook(sha: string, owner = teacher): Promise<string> {
 
 const readImage = (id: string, no: number, image = IMAGE, as = teacher) => as.req("POST", `/api/documents/${id}/parse-image`, { no, image, reason: "auto" });
 
-async function setVisionModel(visionModel: string) {
-  const providers = (await admin.req("GET", "/api/admin/ai")).json.providers as { id: string }[];
-  if (providers[0]) return admin.req("PATCH", `/api/admin/ai/providers/${providers[0].id}`, { visionModel });
-  return admin.req("POST", "/api/admin/ai/providers", { kind: "custom", name: "Vision test", baseUrl: "https://vision.test/v1", apiKey: "sk-vision-test-key", model: "chat-model", visionModel });
+/** The vision provider's model; "" removes the provider. */
+async function setVisionModel(model: string) {
+  const vision = ((await admin.req("GET", "/api/admin/ai")).json.providers as { id: string; purpose: string }[]).find((p) => p.purpose === "vision");
+  if (!model) return vision && admin.req("DELETE", `/api/admin/ai/providers/${vision.id}`);
+  if (vision) return admin.req("PATCH", `/api/admin/ai/providers/${vision.id}`, { model });
+  return admin.req("POST", "/api/admin/ai/providers", { kind: "custom", name: "Vision test", baseUrl: "https://vision.test/v1", apiKey: "sk-vision-test-key", model, purpose: "vision" });
 }
 
 beforeAll(async () => {
@@ -80,7 +82,7 @@ describe("vision-model fallback (看图模型)", () => {
 
   it("a model not known to be free stays off until paid parsing is allowed", async () => {
     const asked = provider(answer("```markdown\n" + READ + "\n```"));
-    expect((await setVisionModel("qwen-vl-ocr")).status).toBe(200);
+    expect((await setVisionModel("qwen-vl-ocr"))!.status).toBe(201);
     const id = await newBook("c".repeat(64));
     expect((await teacher.req("GET", `/api/documents/${id}`)).json.visionParser).toBeNull();
     const off = await readImage(id, 2);
@@ -169,7 +171,6 @@ describe("vision-model fallback (看图模型)", () => {
     const text = await admin.req("POST", "/api/admin/ai/providers", { kind: "deepseek", name: "DeepSeek", baseUrl: "https://text.test/v1", apiKey: "sk-text-key-1234", model: "deepseek-chat" });
     const vision = await admin.req("POST", "/api/admin/ai/providers", { kind: "glm", name: "GLM", baseUrl: "https://glm.test/v4", apiKey: "glm-vision-key-5678", model: "glm-4.6v-flash", purpose: "vision" });
     expect(vision.status).toBe(201);
-    expect((await admin.req("POST", "/api/admin/ai/providers", { kind: "glm", name: "x", apiKey: "glm-vision-key-5678", model: "a", visionModel: "b", purpose: "vision" })).status).toBe(400);
 
     const view = (await admin.req("GET", "/api/admin/ai")).json;
     expect(view.providers.map((p: any) => [p.purpose, p.enabled])).toEqual([
@@ -189,7 +190,8 @@ describe("vision-model fallback (看图模型)", () => {
     expect(tested.json).toMatchObject({ ok: true });
     expect(bodies.at(-1)).toMatchObject({ model: "glm-4.6v-flash", max_tokens: 16 });
     expect(bodies.at(-1).messages[0].content[0].image_url.url).not.toMatch(/^data:/);
-    expect((await admin.req("POST", `/api/admin/ai/providers/${text.json.id}/test`, { vision: true })).status).toBe(400);
+    expect((await admin.req("POST", `/api/admin/ai/providers/${text.json.id}/test`, {})).json).toMatchObject({ ok: true });
+    expect(bodies.at(-1).messages[0].content).toEqual(expect.any(String));
 
     // Adding a second text provider leaves the vision provider enabled.
     await admin.req("POST", "/api/admin/ai/providers", { kind: "custom", name: "Other", baseUrl: "https://text.test/v2", apiKey: "sk-other-key-999", model: "m2" });

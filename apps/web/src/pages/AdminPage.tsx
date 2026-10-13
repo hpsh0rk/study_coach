@@ -20,7 +20,6 @@ interface AiProviderRow {
   baseUrl: string;
   apiKeyHint: string;
   model: string;
-  visionModel: string;
   protocol: Protocol;
   maxTokens: number | null;
   /** Header name → masked value; the values never come back. */
@@ -177,7 +176,7 @@ export function AdminPage() {
 
 interface SetupView {
   ai: { state: "live"; provider: string; model: string } | { state: "stub" | "off" };
-  vision: { state: "on" | "paid_off"; provider: string; model: string; separate: boolean } | { state: "none" };
+  vision: { state: "on" | "paid_off"; provider: string; model: string } | { state: "none" };
   external: ({ state: "on" } | { state: "off" } | { state: "unconfigured"; missing: "url" }) & { mode: "agent" | "selfhost"; stub: boolean };
   counts: { users: number; textbooks: number; lessons: number; parsedPagesToday: number; modelCallsToday: number; modelCallsPerDay: number };
 }
@@ -244,10 +243,10 @@ function setupRows(v: SetupView): { id: string; title: string; ok: boolean; badg
         };
   const vision =
     v.vision.state === "on"
-      ? { ok: true, badge: "已配置", text: `${v.vision.provider} / ${v.vision.model}${v.vision.separate ? "（单独的看图模型）" : ""}` }
+      ? { ok: true, badge: "已配置", text: `${v.vision.provider} / ${v.vision.model}` }
       : v.vision.state === "paid_off"
-        ? { ok: false, badge: "未开启", text: `${v.vision.model} 按页收费，还没有允许付费兜底：在“外部解析服务”页允许付费并设月度预算，或把它的价格设为 0。` }
-        : { ok: false, badge: "未配置", text: "扫描页、公式页读不出时不能看图识别，只能老师粘贴文字。请在“AI 模型”里给模型填“看图模型”，或配一个单独的看图模型（智谱 glm-4.6v-flash 免费）。" };
+        ? { ok: false, badge: "未开启", text: `${v.vision.model} 可能按页收费，还没有允许付费兜底：在“外部解析服务”页勾选“允许付费兜底”，或换成免费的智谱 glm-4.6v-flash。` }
+        : { ok: false, badge: "未配置", text: "扫描页、公式页读不出时不能看图识别，只能老师粘贴文字。请在“AI 模型”页的“看图模型”里配一个（智谱 glm-4.6v-flash 免费）。" };
   const e = v.external;
   const external =
     e.state === "on"
@@ -443,13 +442,12 @@ function AiPanel({ onSaved }: { onSaved: () => void }) {
   const [view, setView] = useState<AiView | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [form, setForm] = useState<{ kind: Kind; name: string; baseUrl: string; apiKey: string; model: string; visionModel: string }>({
+  const [form, setForm] = useState<{ kind: Kind; name: string; baseUrl: string; apiKey: string; model: string }>({
     kind: "deepseek",
     name: "DeepSeek",
     baseUrl: "",
     apiKey: "",
     model: "deepseek-chat",
-    visionModel: "",
   });
   const [advanced, setAdvanced] = useState<Advanced>(NO_ADVANCED);
   const [editing, setEditing] = useState<string | null>(null);
@@ -474,12 +472,11 @@ function AiPanel({ onSaved }: { onSaved: () => void }) {
   const providerName = (id: string | null) => view.providers.find((p) => p.id === id)?.name ?? id ?? "—";
   const textProviders = view.providers.filter((p) => p.purpose === "text");
   const active = textProviders.find((p) => p.enabled && p.model);
-  const test = (p: AiProviderRow, vision: boolean) =>
+  const test = (p: AiProviderRow) =>
     run(async () => {
-      const r = await api<TestResult>(`/api/admin/ai/providers/${p.id}/test`, { body: vision ? { vision: true } : {} });
-      const model = vision && p.purpose === "text" ? p.visionModel : p.model;
-      if (r.ok) setNotice(`测试连接：${p.name} / ${model} · ${r.message}`);
-      else setError(`测试连接：${p.name} / ${model} · ${r.message}`);
+      const r = await api<TestResult>(`/api/admin/ai/providers/${p.id}/test`, { body: {} });
+      if (r.ok) setNotice(`测试连接：${p.name} / ${p.model} · ${r.message}`);
+      else setError(`测试连接：${p.name} / ${p.model} · ${r.message}`);
     });
 
   return (
@@ -500,7 +497,7 @@ function AiPanel({ onSaved }: { onSaved: () => void }) {
           e.preventDefault();
           void run(async () => {
             await api("/api/admin/ai/providers", {
-              body: { kind: form.kind, name: form.name, apiKey: form.apiKey, model: form.model, visionModel: form.visionModel, ...advancedBody(advanced), ...(form.baseUrl ? { baseUrl: form.baseUrl } : {}) },
+              body: { kind: form.kind, name: form.name, apiKey: form.apiKey, model: form.model, ...advancedBody(advanced), ...(form.baseUrl ? { baseUrl: form.baseUrl } : {}) },
             });
             setForm({ ...form, apiKey: "" });
             setNotice("已保存并启用，API Key 已加密存储 · Saved and enabled; key encrypted at rest");
@@ -515,7 +512,7 @@ function AiPanel({ onSaved }: { onSaved: () => void }) {
             value={form.kind}
             onChange={(e) => {
               const kind = e.target.value as Kind;
-              setForm({ ...form, kind, name: view.presets[kind].label.split(" ")[0] ?? "", model: view.presets[kind].models[0] ?? "", visionModel: "" });
+              setForm({ ...form, kind, name: view.presets[kind].label.split(" ")[0] ?? "", model: view.presets[kind].models[0] ?? "" });
             }}
           >
             {(Object.keys(view.presets) as Kind[]).map((k) => (
@@ -550,16 +547,6 @@ function AiPanel({ onSaved }: { onSaved: () => void }) {
         </label>
         <AdvancedFields value={advanced} onChange={setAdvanced} prefix="model" />
         <label className="span2">
-          看图模型（可选）Vision model
-          <input list="vision-model-suggestions" value={form.visionModel} onChange={(e) => setForm({ ...form, visionModel: e.target.value })} placeholder={preset.visionModels[0] ?? "—"} data-testid="vision-model" />
-          <datalist id="vision-model-suggestions">
-            {preset.visionModels.map((m) => (
-              <option key={m} value={m} />
-            ))}
-          </datalist>
-          <span className="muted small">浏览器读不出的扫描页、公式页，可以把页面图片交给它识别；同一个提供方、同一个 Key；这个提供方没有看图模型（如 DeepSeek）时，在下面“单独的看图模型”里另配一个。· Reads page images the browser could not.</span>
-        </label>
-        <label className="span2">
           API Key
           <input type="password" value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} required autoComplete="off" />
         </label>
@@ -583,11 +570,6 @@ function AiPanel({ onSaved }: { onSaved: () => void }) {
                   </td>
                   <td>
                     <code>{p.model || "—"}</code>
-                    {p.visionModel && (
-                      <div className="muted small">
-                        看图 vision: <code>{p.visionModel}</code>
-                      </div>
-                    )}
                   </td>
                   <td className="muted small">
                     {p.baseUrl}
@@ -600,14 +582,9 @@ function AiPanel({ onSaved }: { onSaved: () => void }) {
                     <button className="btn ghost small" onClick={() => setEditing(editing === p.id ? null : p.id)} data-testid="advanced-toggle">
                       协议与请求头
                     </button>
-                    <button className="btn ghost small" onClick={() => test(p, false)}>
+                    <button className="btn ghost small" onClick={() => test(p)}>
                       测试连接 Test
                     </button>
-                    {p.visionModel && (
-                      <button className="btn ghost small" onClick={() => test(p, true)} data-testid="test-vision-model">
-                        测试看图模型
-                      </button>
-                    )}
                     <button
                       className="btn ghost small"
                       onClick={() =>
@@ -618,17 +595,6 @@ function AiPanel({ onSaved }: { onSaved: () => void }) {
                       }
                     >
                       改模型
-                    </button>
-                    <button
-                      className="btn ghost small"
-                      onClick={() =>
-                        run(async () => {
-                          const visionModel = prompt("看图模型（留空表示不用）Vision model (empty: none)", p.visionModel);
-                          if (visionModel !== null) await api(`/api/admin/ai/providers/${p.id}`, { method: "PATCH", body: { visionModel: visionModel.trim() } });
-                        })
-                      }
-                    >
-                      改看图模型
                     </button>
                     <button className="btn ghost small" onClick={() => run(async () => void (await api(`/api/admin/ai/providers/${p.id}`, { method: "PATCH", body: { enabled: !p.enabled } })))}>
                       {p.enabled ? "停用" : "改用这个"}
@@ -683,29 +649,26 @@ function AiPanel({ onSaved }: { onSaved: () => void }) {
   );
 }
 
-/** A provider with its own key that only reads page images, for when the text provider has no vision model (DeepSeek). */
-function VisionProviderCard({ view, run, test }: { view: AiView; run: (fn: () => Promise<void>) => Promise<void>; test: (p: AiProviderRow, vision: boolean) => Promise<void> }) {
+/** The provider that reads page images, with its own key (the text provider's key again when it is the same provider). */
+function VisionProviderCard({ view, run, test }: { view: AiView; run: (fn: () => Promise<void>) => Promise<void>; test: (p: AiProviderRow) => Promise<void> }) {
   const [form, setForm] = useState<{ kind: Kind; name: string; baseUrl: string; apiKey: string; model: string }>({ kind: "glm", name: "智谱 GLM", baseUrl: "", apiKey: "", model: "glm-4.6v-flash" });
   const [advanced, setAdvanced] = useState<Advanced>(NO_ADVANCED);
   const [editing, setEditing] = useState<string | null>(null);
   const rows = view.providers.filter((p) => p.purpose === "vision");
-  const separate = rows.find((p) => p.enabled && p.model);
-  const shared = view.providers.find((p) => p.purpose === "text" && p.enabled && p.model && p.visionModel);
+  const inUse = rows.find((p) => p.enabled && p.model);
   const preset = view.presets[form.kind];
   return (
     <div className="card stack" data-testid="vision-provider-card">
-      <h2>单独的看图模型（可选）Separate vision model</h2>
+      <h2>看图模型（可选）Vision model</h2>
       <p className="muted small">
-        浏览器读不出的扫描页、公式页，可以把页面图片交给看图模型识别。使用中的模型自己有看图模型时（比如智谱 GLM 填了 glm-4.6v-flash）不用配这里；文字用
-        DeepSeek 这类没有看图模型的提供方时，在这里单独填一个，用它自己的 Key：智谱 <code>glm-4.6v-flash</code>（免费），或阿里百炼{" "}
+        浏览器读不出的扫描页、公式页，可以把页面图片交给看图模型识别。文字和看图用同一家（比如都用智谱 GLM）时，这里再填一次同一个 Key；文字用 DeepSeek
+        这类没有看图模型的提供方时，另填一家的 Key：智谱 <code>glm-4.6v-flash</code>（免费），或阿里百炼{" "}
         <code>qwen-vl-ocr</code>（选“Custom”，Base URL 填 <code>https://dashscope.aliyuncs.com/compatible-mode/v1</code>）。· Reads page images with its own key.
       </p>
-      <div className={`alert ${separate || shared ? "info" : "warn"}`} data-testid="vision-in-use">
-        {separate
-          ? `现在读图用：${separate.name} / ${separate.model}（单独的看图模型）· In use`
-          : shared
-            ? `现在读图用：${shared.name} / ${shared.visionModel}（使用中模型的看图模型）· In use`
-            : "还没有看图模型：读不出的页只能交给外部解析服务，或老师粘贴文字。在这里填一个，或给使用中的模型填“看图模型”。· No vision model"}
+      <div className={`alert ${inUse ? "info" : "warn"}`} data-testid="vision-in-use">
+        {inUse
+          ? `现在读图用：${inUse.name} / ${inUse.model} · In use`
+          : "还没有看图模型：读不出的页只能交给外部解析服务，或老师粘贴文字。在这里填一个。· No vision model"}
       </div>
       <form
         className="form-grid"
@@ -780,7 +743,7 @@ function VisionProviderCard({ view, run, test }: { view: AiView; run: (fn: () =>
               <Fragment key={p.id}>
               <tr data-testid="vision-provider-row">
                 <td>
-                  <strong>{p.name}</strong> <span className="muted small">{p.kind}</span> {p.id === separate?.id && <span className="badge ready">使用中 active</span>}
+                  <strong>{p.name}</strong> <span className="muted small">{p.kind}</span> {p.id === inUse?.id && <span className="badge ready">使用中 active</span>}
                 </td>
                 <td>
                   <code>{p.model}</code>
@@ -796,7 +759,7 @@ function VisionProviderCard({ view, run, test }: { view: AiView; run: (fn: () =>
                   <button className="btn ghost small" onClick={() => setEditing(editing === p.id ? null : p.id)}>
                     协议与请求头
                   </button>
-                  <button className="btn ghost small" onClick={() => test(p, true)} data-testid="vision-provider-test">
+                  <button className="btn ghost small" onClick={() => test(p)} data-testid="vision-provider-test">
                     测试连接 Test
                   </button>
                   <button
@@ -1023,7 +986,7 @@ function ParsingPanel({ onSaved }: { onSaved: () => void }) {
           </p>
         ) : (
           <div className="alert info" data-testid="vision-none">
-            还没有配置看图模型：在“AI 模型”里给启用的模型填写“看图模型”，或在“单独的看图模型”里用另一个提供方的 Key，例如智谱 <code>glm-4.6v-flash</code>（免费）或百炼 <code>qwen-vl-ocr</code>（收费）。· No vision model configured.
+            还没有配置看图模型：在“AI 模型”页的“看图模型”里添加一个，例如智谱 <code>glm-4.6v-flash</code>（免费）或百炼 <code>qwen-vl-ocr</code>（收费）。· No vision model configured.
           </div>
         )}
         <label className="check-row">

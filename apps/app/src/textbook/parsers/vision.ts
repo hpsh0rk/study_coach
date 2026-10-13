@@ -67,7 +67,7 @@ export async function readPageImage(
   req: { no: number; image: string; reason: ParseReason },
 ): Promise<{ page: Saved; reused: boolean }> {
   const settings = await parserSettingsOf(env, user.orgId);
-  if (!visionModel) throw new HttpError(403, "VISION_OFF", "没有配置看图模型，请管理员在后台给模型加上“看图模型” · No vision model is configured");
+  if (!visionModel) throw new HttpError(403, "VISION_OFF", "没有配置看图模型，请管理员在后台“AI 模型”页的“看图模型”里添加一个 · No vision model is configured");
   const parser = visionParserId(visionModel);
   if (req.image.length > MAX_IMAGE_CHARS || !IMAGE.test(req.image)) throw new HttpError(400, "VALIDATION", "Expected a page image as a data: URL (JPEG, PNG or WebP)");
 

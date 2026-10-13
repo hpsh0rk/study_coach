@@ -55,8 +55,6 @@ async function sealHeaders(env: Env, headers: Record<string, string>): Promise<{
   };
 }
 
-const VisionModel = z.string().trim().max(100);
-
 function publicUser(u: typeof users.$inferSelect) {
   return { id: u.id, username: u.username, displayName: u.displayName, role: u.role, mustChangePassword: u.mustChangePassword, disabled: !!u.disabledAt, createdAt: u.createdAt };
 }
@@ -134,7 +132,7 @@ export const adminRoutes = new Hono<AppBindings>()
     const orgId = c.get("user").orgId;
     const [providers, settings, userCount, lessonCount, textbooks, usage, modelCalls] = await Promise.all([
       db(c.env)
-        .select({ purpose: aiProviders.purpose, name: aiProviders.name, model: aiProviders.model, visionModel: aiProviders.visionModel })
+        .select({ purpose: aiProviders.purpose, name: aiProviders.name, model: aiProviders.model })
         .from(aiProviders)
         .where(and(eq(aiProviders.orgId, orgId), eq(aiProviders.enabled, true), ne(aiProviders.model, ""))),
       parserSettingsOf(c.env, orgId),
@@ -146,11 +144,11 @@ export const adminRoutes = new Hono<AppBindings>()
     ]);
     const text = providers.find((p) => p.purpose === "text");
     const vision = providers.find((p) => p.purpose === "vision");
-    const visionModel = vision?.model || text?.visionModel || "";
+    const visionModel = vision?.model ?? "";
     const visionPaidOff = !!visionModel && !isFreeVisionModel(visionModel) && !settings.paidEnabled;
     return c.json({
       ai: text ? { state: "live", provider: text.name, model: text.model } : { state: c.env.AI_ALLOW_STUB === "true" ? "stub" : "off" },
-      vision: visionModel ? { state: visionPaidOff ? "paid_off" : "on", provider: (vision ?? text)!.name, model: visionModel, separate: !!vision } : { state: "none" },
+      vision: visionModel ? { state: visionPaidOff ? "paid_off" : "on", provider: vision!.name, model: visionModel } : { state: "none" },
       external: { ...externalState(c.env, settings), mode: settings.mineruMode, stub: effectiveMode(c.env, settings) === "stub" },
       counts: { users: userCount[0]?.n ?? 0, textbooks, lessons: lessonCount[0]?.n ?? 0, parsedPagesToday: usage, modelCallsToday: modelCalls, modelCallsPerDay: dailyModelCalls(c.env) },
     });
@@ -175,7 +173,6 @@ export const adminRoutes = new Hono<AppBindings>()
         baseUrl: p.baseUrl,
         apiKeyHint: p.apiKeyHint,
         model: p.model,
-        visionModel: p.visionModel,
         maxTokens: p.maxTokens,
         headerHints: JSON.parse(p.headersHint) as Record<string, string>,
         enabled: p.enabled,
@@ -192,8 +189,7 @@ export const adminRoutes = new Hono<AppBindings>()
         baseUrl: z.string().url().optional(),
         apiKey: z.string().trim().min(8),
         model: z.string().trim().min(1).max(100),
-        visionModel: VisionModel.default(""),
-        /** `vision`: a separate provider that only reads page images; `model` is its vision model. */
+        /** `vision`: a provider that only reads page images; `model` is its vision model. */
         purpose: z.enum(["text", "vision"]).default("text"),
         protocol: ProviderProtocol.default("openai"),
         maxTokens: MaxTokens.nullable().default(null),
@@ -201,7 +197,6 @@ export const adminRoutes = new Hono<AppBindings>()
         enabled: z.boolean().default(true),
       }),
     );
-    if (body.purpose === "vision" && body.visionModel) throw new HttpError(400, "VALIDATION", "A vision provider's model is its vision model · 单独的看图模型只填“模型”");
     const baseUrl = body.baseUrl || PROVIDER_PRESETS[body.kind].baseUrl;
     if (!baseUrl) throw new HttpError(400, "VALIDATION", "Custom providers need a base URL · 自定义提供方需要填写 Base URL");
     const me = c.get("user");
@@ -217,7 +212,6 @@ export const adminRoutes = new Hono<AppBindings>()
         name: body.name,
         baseUrl,
         model: body.model,
-        visionModel: body.visionModel,
         maxTokens: body.maxTokens,
         ...(await sealHeaders(c.env, body.headers)),
         apiKeySealed: await sealSecret(body.apiKey, secret(c.env, "AI_CONFIG_KEY")),
@@ -236,7 +230,6 @@ export const adminRoutes = new Hono<AppBindings>()
         baseUrl: z.string().url().optional(),
         apiKey: z.string().trim().min(8).optional(),
         model: z.string().trim().min(1).max(100).optional(),
-        visionModel: VisionModel.optional(),
         protocol: ProviderProtocol.optional(),
         maxTokens: MaxTokens.nullable().optional(),
         /** The full set of headers to keep; a blank value keeps that header's stored value. */
@@ -268,7 +261,6 @@ export const adminRoutes = new Hono<AppBindings>()
     if (body.name) patch.name = body.name;
     if (body.baseUrl) patch.baseUrl = body.baseUrl;
     if (body.model) patch.model = body.model;
-    if (body.visionModel !== undefined) patch.visionModel = body.visionModel;
     if (body.enabled !== undefined) patch.enabled = body.enabled;
     if (body.apiKey) {
       patch.apiKeySealed = await sealSecret(body.apiKey, secret(c.env, "AI_CONFIG_KEY"));
@@ -286,16 +278,13 @@ export const adminRoutes = new Hono<AppBindings>()
   })
   .post("/ai/providers/:id/test", async (c) => {
     const me = c.get("user");
-    /** `vision`: send one tiny image to the vision model instead of a text prompt to the model. */
-    const body = await parseJson(c, z.object({ model: z.string().min(1).optional(), vision: z.boolean().default(false) }).default({ vision: false }));
+    /** A vision provider gets one tiny image instead of a text prompt. */
+    const body = await parseJson(c, z.object({ model: z.string().min(1).optional() }).default({}));
     const row = (await db(c.env).select().from(aiProviders).where(and(eq(aiProviders.id, c.req.param("id")), eq(aiProviders.orgId, me.orgId))).limit(1))[0];
     if (!row) throw new HttpError(404, "NOT_FOUND", "Provider not found");
     const provider = await providerConfigOf(c.env, row);
-    const vision = body.vision || row.purpose === "vision";
-    if (!vision) return c.json(await testProvider(provider, body.model ?? row.model));
-    const model = body.model ?? (row.purpose === "vision" ? row.model : row.visionModel);
-    if (!model) throw new HttpError(400, "VALIDATION", "这个模型没有配置看图模型 · No vision model on this provider");
-    return c.json(await testVision(provider, model));
+    const model = body.model ?? row.model;
+    return c.json(row.purpose === "vision" ? await testVision(provider, model) : await testProvider(provider, model));
   })
   // ---- external parser ----
   /**

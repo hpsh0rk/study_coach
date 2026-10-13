@@ -50,7 +50,7 @@ corepack pnpm start:local      # 正式使用：生产设置启动，打开 http
 
 所有 Key 都在后台（`/admin`，管理员登录）填写，加密保存在服务器的 D1 里（用 `AI_CONFIG_KEY` 加密），不会发到浏览器（页面上只显示开头几个字）。后台顶部的“配置状态”列出 AI 模型、看图模型、外部解析服务现在能不能用，缺什么、去哪一页填；老师那边缺什么也会用中文提示“请联系管理员在后台……填写”，并退回到下一种办法（看图模型或粘贴文字）：
 
-- **AI 模型**：一个启用的提供方（DeepSeek、GLM，或任何 OpenAI 兼容接口：Base URL + Key）加一个模型名，所有生成调用都用它。可选填“看图模型”（如 GLM 的 `glm-4.6v-flash`），用来识别扫描页的图片。文字用的提供方没有看图模型时（如 DeepSeek），在同一页的“单独的看图模型”里另填一个，用它自己的 Key：智谱 `glm-4.6v-flash`（免费），或阿里百炼 `qwen-vl-ocr`（类型选 Custom，Base URL 填 `https://dashscope.aliyuncs.com/compatible-mode/v1`）。每个模型旁边都有“测试连接”（看图模型只发一张很小的白色图片，不发教材页面）。
+- **AI 模型**：一个启用的提供方（DeepSeek、GLM，或任何 OpenAI 兼容接口：Base URL + Key）加一个模型名，所有生成调用都用它。识别扫描页图片的“看图模型”在同一页的“看图模型”里另填一个（可选），带自己的 Key：和文字用同一家时（比如都用智谱 GLM）再填一次同一个 Key；文字用 DeepSeek 这类没有看图模型的提供方时，填智谱 `glm-4.6v-flash`（免费），或阿里百炼 `qwen-vl-ocr`（类型选 Custom，Base URL 填 `https://dashscope.aliyuncs.com/compatible-mode/v1`）。每个模型旁边都有“测试连接”（看图模型只发一张很小的白色图片，不发教材页面）。
 - **外部解析服务**（MinerU）：重新识别扫描页和公式页。开关默认打开：选中的接口配置好就用（只有浏览器读不全的页会切成小 PDF 发出去，整本书不出浏览器）。两种接口：
   - 免费轻量接口：不需要 Token，装好就能用（每次最多 10 页、10 MB，按 IP 限频）。
   - **MinerU 自部署**：学校自己的服务器。按 [MinerU 文档](https://github.com/opendatalab/MinerU) 安装后启动 API 服务，例如 MinerU 4 用 `mineru-kit api-server --host 0.0.0.0 --port 8000 --api-key 你的Key`（只在内网用时 `--api-key` 可不加，暴露到网络时一定要加），然后在后台填地址（如 `http://192.168.1.20:8000`，不要带 `/v1`）和 Key。需要 MinerU 4 或更新版本（`/v1/tasks` 接口）。地址必须是本站服务器访问得到的：本机开发可以用 `http://127.0.0.1:8000`，以后部署到 Cloudflare 时要用公网地址或 Cloudflare Tunnel。

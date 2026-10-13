@@ -61,15 +61,14 @@ export async function loadAiConfig(env: Env, orgId: string): Promise<AiConfig> {
   const { text, vision } = await enabledProviders(env, orgId);
   const config = (p: ProviderRow) => providerConfigOf(env, p);
   return {
-    active: text && { provider: await config(text), model: text.model, visionModel: text.visionModel || null },
+    active: text && { provider: await config(text), model: text.model },
     vision: vision && { provider: await config(vision), model: vision.model },
   };
 }
 
-/** The model that reads page images: the separate vision provider's, else the enabled text provider's vision model, else null. */
+/** The model that reads page images: the enabled vision provider's, else null. */
 export async function visionModelOf(env: Env, orgId: string): Promise<string | null> {
-  const { text, vision } = await enabledProviders(env, orgId);
-  return vision?.model || text?.visionModel || null;
+  return (await enabledProviders(env, orgId)).vision?.model || null;
 }
 
 /** Model time per HTTP request, all calls and retries together; below DRAFT_LOCK_MS so a slow model never outlives its lock. */

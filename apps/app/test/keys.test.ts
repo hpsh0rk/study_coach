@@ -65,8 +65,9 @@ describe("keys and reminders", () => {
     await admin.req("PUT", "/api/admin/parsing", { externalChoice: "auto" });
 
     // A paid vision model stays off until paid parsing is allowed; the teacher is told why.
-    await admin.req("POST", "/api/admin/ai/providers", { kind: "custom", name: "Bailian", baseUrl: "https://dashscope.test/v1", apiKey: "sk-bailian-0000", model: "qwen-plus", visionModel: "qwen-vl-ocr" });
-    expect(await status()).toMatchObject({ ai: { state: "live", provider: "Bailian", model: "qwen-plus" }, vision: { state: "paid_off", model: "qwen-vl-ocr", separate: false } });
+    await admin.req("POST", "/api/admin/ai/providers", { kind: "custom", name: "Bailian", baseUrl: "https://dashscope.test/v1", apiKey: "sk-bailian-0000", model: "qwen-plus" });
+    await admin.req("POST", "/api/admin/ai/providers", { kind: "custom", name: "Bailian VL", baseUrl: "https://dashscope.test/v1", apiKey: "sk-bailian-0000", model: "qwen-vl-ocr", purpose: "vision" });
+    expect(await status()).toMatchObject({ ai: { state: "live", provider: "Bailian", model: "qwen-plus" }, vision: { state: "paid_off", provider: "Bailian VL", model: "qwen-vl-ocr" } });
     expect((await readers(id)).vision).toContain("按页收费，管理员还没有允许付费兜底");
     await admin.req("PUT", "/api/admin/parsing", { paidEnabled: true });
     expect((await status()).vision).toMatchObject({ state: "on" });

@@ -124,11 +124,9 @@ export const aiProviders = sqliteTable("ai_providers", {
   apiKeySealed: text("api_key_sealed").notNull(),
   apiKeyHint: text("api_key_hint").notNull(),
   model: text("model").notNull().default(""),
-  /** The same provider's model for image input (reading pages the browser could not); "" when none. */
-  visionModel: text("vision_model").notNull().default(""),
   /**
-   * `text`: writes outlines and slides (`model`; may carry `visionModel`). `vision`: a separate provider with its
-   * own key that only reads page images (`model` is the vision model), e.g. DeepSeek writes and GLM reads.
+   * `text`: writes outlines and slides. `vision`: only reads page images (`model` is the vision model), e.g. DeepSeek
+   * writes and GLM reads; using one key for both means two rows with the same base URL and key.
    */
   purpose: text("purpose", { enum: ["text", "vision"] }).notNull().default("text"),
   /** `openai`: the OpenAI chat-completions dialect. `messages`: {base}/v1/messages (Anthropic Messages dialect). Both stream. */
