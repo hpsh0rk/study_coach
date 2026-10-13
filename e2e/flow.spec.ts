@@ -899,7 +899,7 @@ test("单独的看图模型 (local mock): with no vision model on the text side,
     await expect(page.locator("body")).not.toContainText("sk-vision-only-key");
 
     await card.getByTestId("vision-provider-test").click();
-    await expect(page.locator(".alert.success")).toContainText("测试连接：Local qwen mock / mock-qwen-vl 可用");
+    await expect(page.locator(".alert.success")).toContainText("测试连接：Local qwen mock / mock-qwen-vl · 连接成功");
     expect(provider.asked).toHaveLength(1);
     expect(provider.asked[0]).toMatchObject({ model: "mock-qwen-vl", auth: "Bearer sk-vision-only-key" });
     expect(provider.asked[0]!.image).toMatch(/^data:image\/png;base64,/);
@@ -996,7 +996,7 @@ test("Messages 协议 (local mock gateway): protocol, max_tokens and a custom he
     await expect(row).not.toContainText("tensorhawk");
 
     await row.getByRole("button", { name: /测试连接/ }).click();
-    await expect(page.locator(".alert.success")).toContainText("Gateway mock / glm-5.3-flash");
+    await expect(page.locator(".alert.success")).toContainText(/Gateway mock \/ glm-5\.3-flash · 连接成功 · \d+ ms · 模型 glm-5\.3-flash 回复：“\{"ok":true\}”/);
     expect(gateway.asked.at(-1)).toMatchObject({ url: "/v1/messages", auth: "Bearer sk-gateway-key", source: "tensorhawk", body: { model: "glm-5.3-flash", max_tokens: 31200, stream: true } });
 
     await row.getByTestId("advanced-toggle").click();
@@ -1008,6 +1008,14 @@ test("Messages 协议 (local mock gateway): protocol, max_tokens and a custom he
     await expect(page.locator(".alert.success")).toBeVisible();
     expect(gateway.asked.at(-1)).toMatchObject({ source: "tensorhawk", body: { max_tokens: 8000 } });
     await shotOf(row, "37-admin-messages-row");
+
+    await row.getByTestId("advanced-toggle").click();
+    await page.getByTestId("edit-headers").fill("x-source: wrong-source");
+    await page.getByTestId("advanced-save").click();
+    await expect(row.getByTestId("protocol-summary")).toContainText("x-source: wr••••");
+    await row.getByRole("button", { name: /测试连接/ }).click();
+    await expect(page.locator(".alert.error")).toContainText("Gateway mock / glm-5.3-flash · Key 不对或没有权限（HTTP 401）：请检查 API Key和自定义请求头。");
+    await shot(page, "38-admin-test-auth-error");
   } finally {
     await page.goto("/admin");
     await page.getByTestId("admin-tab-ai").click();

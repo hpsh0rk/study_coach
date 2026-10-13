@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { chatCompletion, createAiLayer, messagesUrl, ProviderError, type FetchLike, type ProviderConfig } from "../src/index.ts";
+import { chatCompletion, createAiLayer, messagesUrl, ProviderError, testProvider, testVision, type FetchLike, type ProviderConfig } from "../src/index.ts";
 
 /** An SSE response delivered in awkward 7-byte pieces, so events straddle chunk boundaries. */
 function sse(events: string[]): Response {
@@ -108,5 +108,40 @@ describe("OpenAI protocol streaming", () => {
     expect(calls[0]!.url).toBe("https://open.example.test/v4/chat/completions");
     expect(calls[0]!.headers["x-source"]).toBe("t");
     expect(calls[0]!.body).toMatchObject({ stream: true, max_tokens: 900 });
+  });
+});
+
+describe("测试连接 results", () => {
+  const answer = (status: number, body: string) => capture(() => new Response(body, { status })).fetchImpl;
+
+  it("OK: latency, model and the start of the reply", async () => {
+    const r = await testProvider(llmbox, "glm-5.3-flash", capture(() => messagesStream(['{"ok":', "true}"])).fetchImpl);
+    expect(r).toMatchObject({ ok: true, model: "glm-5.3-flash", reply: '{"ok":true}' });
+    expect(r.message).toMatch(/^连接成功 · \d+ ms · 模型 glm-5\.3-flash 回复：“\{"ok":true\}”$/);
+  });
+
+  it.each([
+    [401, '{"error":"invalid api key"}', "auth", "Key 不对或没有权限（HTTP 401）"],
+    [403, "forbidden", "auth", "HTTP 403"],
+    [404, "Not Found", "model", "找不到（HTTP 404）：模型名“m1”或 Base URL 不对"],
+    [400, '{"error":{"type":"invalid_request_error","message":"model m1 does not exist"}}', "model", "模型名不对：服务端不认识“m1”（HTTP 400）"],
+    [400, '{"error":{"code":"model_not_found"}}', "model", "模型名不对"],
+    [500, "upstream exploded", "http", "服务端返回错误（HTTP 500）：upstream exploded"],
+  ])("HTTP %i → %s", async (status, body, kind, text) => {
+    const r = await testProvider(llmbox, "m1", answer(status, body));
+    expect(r).toMatchObject({ ok: false, kind, status });
+    expect(r.message).toContain(text);
+  });
+
+  it("unreachable and empty replies", async () => {
+    const down: FetchLike = async () => {
+      throw new TypeError("fetch failed");
+    };
+    expect(await testVision(llmbox, "v", down)).toMatchObject({ ok: false, kind: "unreachable", message: expect.stringContaining("连不上：访问 http://llmbox.example.test 失败") });
+    const slow: FetchLike = async () => {
+      throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    };
+    expect((await testProvider(llmbox, "m", slow)).message).toContain("在规定时间内没有回应");
+    expect(await testProvider(llmbox, "m", capture(() => messagesStream([])).fetchImpl)).toMatchObject({ ok: false, kind: "empty" });
   });
 });
