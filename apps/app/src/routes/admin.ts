@@ -245,14 +245,24 @@ export const adminRoutes = new Hono<AppBindings>()
     );
     const me = c.get("user");
     const id = c.req.param("id");
+    const row = (
+      await db(c.env)
+        .select({ baseUrl: aiProviders.baseUrl, protocol: aiProviders.protocol, sealed: aiProviders.headersSealed })
+        .from(aiProviders)
+        .where(and(eq(aiProviders.id, id), eq(aiProviders.orgId, me.orgId)))
+        .limit(1)
+    )[0];
+    if (!row) throw new HttpError(404, "NOT_FOUND", "Provider not found");
+    // The stored key and header values only ever go where the admin first sent them: a new address or protocol
+    // needs the key typed again, and stored header values are dropped.
+    const moved = (body.baseUrl !== undefined && body.baseUrl !== row.baseUrl) || (body.protocol !== undefined && body.protocol !== row.protocol);
+    if (moved && !body.apiKey) throw new HttpError(400, "KEY_REQUIRED", "改了 Base URL 或接口协议，请重新填写 API Key · Re-enter the API key when the address or protocol changes");
     const patch: Partial<typeof aiProviders.$inferInsert> = { updatedAt: Date.now() };
     if (body.protocol) patch.protocol = body.protocol;
     if (body.maxTokens !== undefined) patch.maxTokens = body.maxTokens;
-    if (body.headers) {
-      const row = (await db(c.env).select({ sealed: aiProviders.headersSealed }).from(aiProviders).where(and(eq(aiProviders.id, id), eq(aiProviders.orgId, me.orgId))).limit(1))[0];
-      if (!row) throw new HttpError(404, "NOT_FOUND", "Provider not found");
-      const stored = row.sealed ? (JSON.parse(await openSecret(row.sealed, secret(c.env, "AI_CONFIG_KEY"))) as Record<string, string>) : {};
-      Object.assign(patch, await sealHeaders(c.env, Object.fromEntries(Object.entries(body.headers).map(([k, v]) => [k, v || stored[k] || ""]))));
+    if (body.headers || moved) {
+      const stored = row.sealed && !moved ? (JSON.parse(await openSecret(row.sealed, secret(c.env, "AI_CONFIG_KEY"))) as Record<string, string>) : {};
+      Object.assign(patch, await sealHeaders(c.env, Object.fromEntries(Object.entries(body.headers ?? {}).map(([k, v]) => [k, v || stored[k] || ""]))));
     }
     if (body.name) patch.name = body.name;
     if (body.baseUrl) patch.baseUrl = body.baseUrl;
@@ -339,6 +349,12 @@ export const adminRoutes = new Hono<AppBindings>()
       plain === undefined ? undefined : plain === null ? null : { sealed: await sealSecret(plain, key), hint: hint(plain) };
     const { token, selfhostUrl, selfhostKey, ...rest } = body;
     const url = selfhostUrl ? normalizeBaseUrl(selfhostUrl) : selfhostUrl;
+    if (url && selfhostKey === undefined) {
+      const stored = await parserSettingsOf(c.env, me.orgId);
+      if (stored.selfhostKeySealed && (!stored.selfhostUrlSealed || (await openSecret(stored.selfhostUrlSealed, key)) !== url)) {
+        throw new HttpError(400, "KEY_REQUIRED", "改了自部署地址，请重新填写 API Key（不需要 Key 就先删除已保存的 Key）· Re-enter the API key when the address changes");
+      }
+    }
     await saveParserSettings(c.env, me, {
       ...rest,
       token: await seal(token, maskSecret),
