@@ -1,5 +1,5 @@
 import { and, eq, ne } from "drizzle-orm";
-import { createAiLayer, openSecret, type AiConfig } from "@kj/ai";
+import { createAiLayer, openSecret, type AiConfig, type ProviderConfig } from "@kj/ai";
 import { db } from "./db/index.ts";
 import { aiCalls, aiProviders } from "./db/schema.ts";
 import { secret, type Env } from "./env.ts";
@@ -15,11 +15,25 @@ async function enabledProviders(env: Env, orgId: string): Promise<{ text: Provid
   return { text: rows.find((r) => r.purpose === "text") ?? null, vision: rows.find((r) => r.purpose === "vision") ?? null };
 }
 
+/** A stored provider row with its key and custom headers unsealed, ready for `@kj/ai`. Server-side only. */
+export async function providerConfigOf(env: Env, p: ProviderRow): Promise<ProviderConfig> {
+  const key = secret(env, "AI_CONFIG_KEY");
+  return {
+    id: p.id,
+    kind: p.kind,
+    name: p.name,
+    baseUrl: p.baseUrl,
+    apiKey: await openSecret(p.apiKeySealed, key),
+    protocol: p.protocol,
+    ...(p.maxTokens ? { maxTokens: p.maxTokens } : {}),
+    ...(p.headersSealed ? { headers: JSON.parse(await openSecret(p.headersSealed, key)) as Record<string, string> } : {}),
+  };
+}
+
 /** Provider, model and API key all come from the admin backend (D1), never from env vars. */
 export async function loadAiConfig(env: Env, orgId: string): Promise<AiConfig> {
   const { text, vision } = await enabledProviders(env, orgId);
-  const key = secret(env, "AI_CONFIG_KEY");
-  const config = async (p: ProviderRow) => ({ id: p.id, kind: p.kind, name: p.name, baseUrl: p.baseUrl, apiKey: await openSecret(p.apiKeySealed, key) });
+  const config = (p: ProviderRow) => providerConfigOf(env, p);
   return {
     active: text && { provider: await config(text), model: text.model, visionModel: text.visionModel || null },
     vision: vision && { provider: await config(vision), model: vision.model },

@@ -22,7 +22,7 @@
 - **课件 = 9 个固定版式 + 带内容预算的类型化槽位**。LLM 只填内容；CSS Grid 落位；浏览器实测溢出；学生要读的字不小于 48px。每个版式按硬预算填满（中 / 英，含表格、流程图、图示待补变体）都能放下，最后一步揭示后没有隐藏的元素，由 Playwright 在 CI 中验证（CI 安装 Noto CJK 字体）。
 - **生成流水线在一个包 `@kj/generation`**（大纲 + 单页），消融开关是一个带默认值的普通对象 `PipelineOptions`；评测驱动在产品代码之外的 `tools/eval`。
 - **模块单向依赖，dependency-cruiser 在 CI 中强制**；只有 `packages/ai` 能发起模型请求。
-- AI 模型在后台配置：**一个启用的提供方 + 一个模型名**服务所有调用（DeepSeek / GLM / OpenAI 兼容），未启用时本地与测试使用确定性 stub。
+- AI 模型在后台配置：**一个启用的提供方 + 一个模型名**服务所有调用（DeepSeek / GLM / OpenAI 兼容），未启用时本地与测试使用确定性 stub。每个提供方选一种接口协议：OpenAI Chat Completions（`{base}/chat/completions`）或 Messages（`{base}/v1/messages`，Anthropic Messages 兼容，`Authorization: Bearer`）；两种都用 SSE 流式（`packages/ai/src/sse.ts`），服务器不理会 `stream` 而直接回 JSON 也接受。可选 `max_tokens` 和自定义请求头（如 `x-source`），请求头的值和 Key 一样加密存在 D1，后台只显示名称和打码后的值。
 - **第 5 步只有一个主按钮**：确认大纲后自动开始生成，生成完是“放映”；演讲者视图从放映页打开。
 - **第 5 步与分享只看已确认版本**：新的未确认草稿不会挡住放映和分享；分享链接冻结一个版本，学生版不含讲稿和误区标签，账号停用即失效。
 - **学生版默认不含答案（课前预习）**：分享链接和学生版离线文件由服务端 `withoutAnswers` 剥掉所有揭示步骤会显示的答案；老师可切到“课后复习（含答案）”，同一个链接。
@@ -48,7 +48,7 @@
         │ HTTPS / JSON（x-kj-csrf 头 + httpOnly 会话 Cookie）
 Worker（Hono，apps/app）
  ├─ routes（HTTP 边界、鉴权、zod 校验、用例编排）
- ├─ generation（draftOutline / writeSlide）→ ai（唯一模型出口）→ DeepSeek / GLM / OpenAI 兼容
+ ├─ generation（draftOutline / writeSlide）→ ai（唯一模型出口）→ DeepSeek / GLM / OpenAI 兼容 / Messages 兼容网关
  ├─ textbook（教材模块：documents / pages / chapters 的唯一读写入口；index.ts 读接口、write.ts 写接口只给 routes/documents.ts、tables.ts 表定义）
  └─ store（课的 D1 仓储与读模型：快照、复用、聚合查询、lessonView、分享视图；读教材只经 textbook/index.ts）；db/index.ts（drizzle 句柄）
 D1：orgs, users, sessions, login_attempts, ai_providers, ai_calls, audit_log,

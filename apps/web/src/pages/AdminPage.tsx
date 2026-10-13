@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useState, type FormEvent } from "react";
+import { Fragment, useCallback, useEffect, useReducer, useState, type FormEvent } from "react";
 import { api, ApiError } from "../api.ts";
 import { useAuth } from "../auth.tsx";
 
@@ -21,6 +21,10 @@ interface AiProviderRow {
   apiKeyHint: string;
   model: string;
   visionModel: string;
+  protocol: Protocol;
+  maxTokens: number | null;
+  /** Header name → masked value; the values never come back. */
+  headerHints: Record<string, string>;
   enabled: boolean;
 }
 type TestResult = { ok: boolean; error?: string; latencyMs?: number };
@@ -32,6 +36,100 @@ interface AiView {
 }
 
 type Tab = "users" | "ai" | "parsing";
+
+type Protocol = "openai" | "messages";
+interface Advanced {
+  protocol: Protocol;
+  maxTokens: string;
+  headers: string;
+}
+const NO_ADVANCED: Advanced = { protocol: "openai", maxTokens: "", headers: "" };
+
+/** One "name: value" per line. On edit, a name with no value keeps the stored value. */
+function parseHeaders(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const line of text.split("\n")) {
+    const i = line.indexOf(":");
+    const name = (i < 0 ? line : line.slice(0, i)).trim();
+    if (name) out[name] = i < 0 ? "" : line.slice(i + 1).trim();
+  }
+  return out;
+}
+
+const advancedBody = (a: Advanced) => ({ protocol: a.protocol, maxTokens: a.maxTokens ? Number(a.maxTokens) : null, headers: parseHeaders(a.headers) });
+
+function protocolSummary(p: AiProviderRow): string {
+  const parts = [p.protocol === "messages" ? "Messages /v1/messages" : "OpenAI Chat Completions"];
+  if (p.maxTokens) parts.push(`max_tokens ${p.maxTokens}`);
+  const headers = Object.entries(p.headerHints);
+  if (headers.length) parts.push(`请求头 ${headers.map(([k, v]) => `${k}: ${v}`).join(", ")}`);
+  return parts.join(" · ");
+}
+
+function AdvancedFields({ value, onChange, prefix }: { value: Advanced; onChange: (a: Advanced) => void; prefix: string }) {
+  return (
+    <>
+      <label>
+        接口协议 Protocol
+        <select value={value.protocol} onChange={(e) => onChange({ ...value, protocol: e.target.value as Protocol })} data-testid={`${prefix}-protocol`}>
+          <option value="openai">OpenAI Chat Completions（OpenAI 兼容）</option>
+          <option value="messages">Messages（/v1/messages，Anthropic 兼容）</option>
+        </select>
+      </label>
+      <label>
+        max_tokens（可选）
+        <input
+          type="number"
+          min={16}
+          value={value.maxTokens}
+          onChange={(e) => onChange({ ...value, maxTokens: e.target.value })}
+          placeholder={value.protocol === "messages" ? "不填为 4096" : "不填用默认"}
+          data-testid={`${prefix}-max-tokens`}
+        />
+      </label>
+      <label className="span2">
+        自定义请求头（可选）Custom headers
+        <textarea rows={2} value={value.headers} onChange={(e) => onChange({ ...value, headers: e.target.value })} placeholder="x-source: tensorhawk" data-testid={`${prefix}-headers`} />
+        <span className="muted small">每行一个“名称: 值”，比如公司网关要求的 x-source。值和 Key 一样加密保存，浏览器里只显示开头几个字。· One per line; values are stored like the key.</span>
+      </label>
+    </>
+  );
+}
+
+/** Protocol, max_tokens and headers of a saved provider; a header left without a value keeps its stored value. */
+function AdvancedEdit({ p, run, done }: { p: AiProviderRow; run: (fn: () => Promise<void>) => Promise<void>; done: () => void }) {
+  const [value, setValue] = useState<Advanced>({
+    protocol: p.protocol,
+    maxTokens: p.maxTokens ? String(p.maxTokens) : "",
+    headers: Object.keys(p.headerHints)
+      .map((k) => `${k}:`)
+      .join("\n"),
+  });
+  return (
+    <form
+      className="form-grid"
+      data-testid="advanced-edit"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void run(async () => {
+          await api(`/api/admin/ai/providers/${p.id}`, { method: "PATCH", body: advancedBody(value) });
+          done();
+        });
+      }}
+    >
+      <AdvancedFields value={value} onChange={setValue} prefix="edit" />
+      <p className="muted small span2">已保存的请求头只列出名称；名称后面留空表示保留原来的值，删掉那一行表示不再发送。· Blank value keeps the stored one.</p>
+      <div className="form-actions">
+        <button type="button" className="btn ghost" onClick={done}>
+          取消
+        </button>
+        <button className="btn primary" data-testid="advanced-save">
+          保存 Save
+        </button>
+      </div>
+    </form>
+  );
+}
 
 export function AdminPage() {
   const [tab, setTab] = useState<Tab>("users");
@@ -290,6 +388,8 @@ function AiPanel({ onSaved }: { onSaved: () => void }) {
     model: "deepseek-chat",
     visionModel: "",
   });
+  const [advanced, setAdvanced] = useState<Advanced>(NO_ADVANCED);
+  const [editing, setEditing] = useState<string | null>(null);
   const load = useCallback(async () => setView(await api<AiView>("/api/admin/ai")), []);
   useEffect(() => {
     void load();
@@ -337,7 +437,7 @@ function AiPanel({ onSaved }: { onSaved: () => void }) {
           e.preventDefault();
           void run(async () => {
             await api("/api/admin/ai/providers", {
-              body: { kind: form.kind, name: form.name, apiKey: form.apiKey, model: form.model, visionModel: form.visionModel, ...(form.baseUrl ? { baseUrl: form.baseUrl } : {}) },
+              body: { kind: form.kind, name: form.name, apiKey: form.apiKey, model: form.model, visionModel: form.visionModel, ...advancedBody(advanced), ...(form.baseUrl ? { baseUrl: form.baseUrl } : {}) },
             });
             setForm({ ...form, apiKey: "" });
             setNotice("已保存并启用，API Key 已加密存储 · Saved and enabled; key encrypted at rest");
@@ -376,9 +476,16 @@ function AiPanel({ onSaved }: { onSaved: () => void }) {
           </datalist>
         </label>
         <label>
-          Base URL（OpenAI 兼容）
-          <input value={form.baseUrl} onChange={(e) => setForm({ ...form, baseUrl: e.target.value })} placeholder={preset.baseUrl || "https://your-endpoint/v1"} required={form.kind === "custom"} />
+          Base URL
+          <input
+            value={form.baseUrl}
+            onChange={(e) => setForm({ ...form, baseUrl: e.target.value })}
+            placeholder={advanced.protocol === "messages" ? "http://your-gateway（请求 {base}/v1/messages）" : preset.baseUrl || "https://your-endpoint/v1"}
+            required={form.kind === "custom"}
+            data-testid="model-base-url"
+          />
         </label>
+        <AdvancedFields value={advanced} onChange={setAdvanced} prefix="model" />
         <label className="span2">
           看图模型（可选）Vision model
           <input list="vision-model-suggestions" value={form.visionModel} onChange={(e) => setForm({ ...form, visionModel: e.target.value })} placeholder={preset.visionModels[0] ?? "—"} data-testid="vision-model" />
@@ -406,7 +513,8 @@ function AiPanel({ onSaved }: { onSaved: () => void }) {
           <table className="table">
             <tbody>
               {textProviders.map((p) => (
-                <tr key={p.id}>
+                <Fragment key={p.id}>
+                <tr>
                   <td>
                     <strong>{p.name}</strong> <span className="muted small">{p.kind}</span> {p.id === active?.id && <span className="badge ready">使用中 active</span>}
                   </td>
@@ -418,11 +526,17 @@ function AiPanel({ onSaved }: { onSaved: () => void }) {
                       </div>
                     )}
                   </td>
-                  <td className="muted small">{p.baseUrl}</td>
+                  <td className="muted small">
+                    {p.baseUrl}
+                    <div data-testid="protocol-summary">{protocolSummary(p)}</div>
+                  </td>
                   <td>
                     <code>{p.apiKeyHint}</code>
                   </td>
                   <td className="row end">
+                    <button className="btn ghost small" onClick={() => setEditing(editing === p.id ? null : p.id)} data-testid="advanced-toggle">
+                      协议与请求头
+                    </button>
                     <button className="btn ghost small" onClick={() => test(p, false)}>
                       测试连接 Test
                     </button>
@@ -461,6 +575,14 @@ function AiPanel({ onSaved }: { onSaved: () => void }) {
                     </button>
                   </td>
                 </tr>
+                {editing === p.id && (
+                  <tr>
+                    <td colSpan={5}>
+                      <AdvancedEdit p={p} run={run} done={() => setEditing(null)} />
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               ))}
             </tbody>
           </table>
@@ -501,6 +623,8 @@ function AiPanel({ onSaved }: { onSaved: () => void }) {
 /** A provider with its own key that only reads page images, for when the text provider has no vision model (DeepSeek). */
 function VisionProviderCard({ view, run, test }: { view: AiView; run: (fn: () => Promise<void>) => Promise<void>; test: (p: AiProviderRow, vision: boolean) => Promise<void> }) {
   const [form, setForm] = useState<{ kind: Kind; name: string; baseUrl: string; apiKey: string; model: string }>({ kind: "glm", name: "智谱 GLM", baseUrl: "", apiKey: "", model: "glm-4.6v-flash" });
+  const [advanced, setAdvanced] = useState<Advanced>(NO_ADVANCED);
+  const [editing, setEditing] = useState<string | null>(null);
   const rows = view.providers.filter((p) => p.purpose === "vision");
   const separate = rows.find((p) => p.enabled && p.model);
   const shared = view.providers.find((p) => p.purpose === "text" && p.enabled && p.model && p.visionModel);
@@ -526,7 +650,7 @@ function VisionProviderCard({ view, run, test }: { view: AiView; run: (fn: () =>
           e.preventDefault();
           void run(async () => {
             await api("/api/admin/ai/providers", {
-              body: { purpose: "vision", kind: form.kind, name: form.name, apiKey: form.apiKey, model: form.model, ...(form.baseUrl ? { baseUrl: form.baseUrl } : {}) },
+              body: { purpose: "vision", kind: form.kind, name: form.name, apiKey: form.apiKey, model: form.model, ...advancedBody(advanced), ...(form.baseUrl ? { baseUrl: form.baseUrl } : {}) },
             });
             setForm({ ...form, apiKey: "" });
           });
@@ -565,7 +689,7 @@ function VisionProviderCard({ view, run, test }: { view: AiView; run: (fn: () =>
           </datalist>
         </label>
         <label>
-          Base URL（OpenAI 兼容）
+          Base URL
           <input
             value={form.baseUrl}
             onChange={(e) => setForm({ ...form, baseUrl: e.target.value })}
@@ -574,6 +698,7 @@ function VisionProviderCard({ view, run, test }: { view: AiView; run: (fn: () =>
             data-testid="vision-provider-base-url"
           />
         </label>
+        <AdvancedFields value={advanced} onChange={setAdvanced} prefix="vision-provider" />
         <label className="span2">
           API Key
           <input type="password" value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} required autoComplete="off" data-testid="vision-provider-key" />
@@ -589,18 +714,25 @@ function VisionProviderCard({ view, run, test }: { view: AiView; run: (fn: () =>
         <table className="table">
           <tbody>
             {rows.map((p) => (
-              <tr key={p.id} data-testid="vision-provider-row">
+              <Fragment key={p.id}>
+              <tr data-testid="vision-provider-row">
                 <td>
                   <strong>{p.name}</strong> <span className="muted small">{p.kind}</span> {p.id === separate?.id && <span className="badge ready">使用中 active</span>}
                 </td>
                 <td>
                   <code>{p.model}</code>
                 </td>
-                <td className="muted small">{p.baseUrl}</td>
+                <td className="muted small">
+                  {p.baseUrl}
+                  <div>{protocolSummary(p)}</div>
+                </td>
                 <td>
                   <code>{p.apiKeyHint}</code>
                 </td>
                 <td className="row end">
+                  <button className="btn ghost small" onClick={() => setEditing(editing === p.id ? null : p.id)}>
+                    协议与请求头
+                  </button>
                   <button className="btn ghost small" onClick={() => test(p, true)} data-testid="vision-provider-test">
                     测试连接 Test
                   </button>
@@ -623,6 +755,14 @@ function VisionProviderCard({ view, run, test }: { view: AiView; run: (fn: () =>
                   </button>
                 </td>
               </tr>
+              {editing === p.id && (
+                <tr>
+                  <td colSpan={5}>
+                    <AdvancedEdit p={p} run={run} done={() => setEditing(null)} />
+                  </td>
+                </tr>
+              )}
+              </Fragment>
             ))}
           </tbody>
         </table>

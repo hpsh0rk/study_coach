@@ -1,7 +1,7 @@
 import { and, desc, eq, ne } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
-import { maskSecret, openSecret, PROVIDER_PRESETS, ProviderKind, sealSecret, testProvider, testVision } from "@kj/ai";
+import { maskSecret, openSecret, PROVIDER_PRESETS, ProviderKind, ProviderProtocol, sealSecret, testProvider, testVision } from "@kj/ai";
 import { newId } from "@kj/schema";
 import { aiCalls, aiProviders, auditLog, users } from "../db/schema.ts";
 import { secret, type AppBindings, type Env } from "../env.ts";
@@ -9,7 +9,7 @@ import { HttpError, parseJson } from "../http.ts";
 import { generatePassword, hashPassword, passwordProblem } from "../auth/password.ts";
 import { destroyUserSessions, requireAdmin, requireUser } from "../auth/session.ts";
 import { db } from "../db/index.ts";
-import { visionModelOf } from "../ai.ts";
+import { providerConfigOf, visionModelOf } from "../ai.ts";
 import {
   effectiveMode,
   externalState,
@@ -30,6 +30,30 @@ const Username = z
   .regex(/^[a-z0-9][a-z0-9._-]{2,31}$/, "3-32 chars: letters, digits, . _ -");
 
 /** "" removes it. */
+/** Custom request headers a gateway may need; the transport headers stay ours. */
+const HeaderMap = z
+  .record(
+    z
+      .string()
+      .trim()
+      .regex(/^[A-Za-z0-9-]{1,64}$/)
+      .refine((n) => !["authorization", "content-type", "content-length", "host", "accept"].includes(n.toLowerCase()), "reserved header"),
+    z.string().trim().max(500),
+  )
+  .refine((h) => Object.keys(h).length <= 10, "at most 10 headers");
+
+const MaxTokens = z.number().int().min(16).max(1_000_000);
+
+/** Sealed JSON plus a hint of two characters per value (values can be short words); an empty map stores nothing. */
+async function sealHeaders(env: Env, headers: Record<string, string>): Promise<{ headersSealed: string; headersHint: string }> {
+  const entries = Object.entries(headers).filter(([, v]) => v);
+  if (!entries.length) return { headersSealed: "", headersHint: "{}" };
+  return {
+    headersSealed: await sealSecret(JSON.stringify(Object.fromEntries(entries)), secret(env, "AI_CONFIG_KEY")),
+    headersHint: JSON.stringify(Object.fromEntries(entries.map(([k, v]) => [k, `${v.slice(0, 2)}••••`]))),
+  };
+}
+
 const VisionModel = z.string().trim().max(100);
 
 function publicUser(u: typeof users.$inferSelect) {
@@ -135,7 +159,20 @@ export const adminRoutes = new Hono<AppBindings>()
     return c.json({
       presets: PROVIDER_PRESETS,
       stubFallback: c.env.AI_ALLOW_STUB === "true",
-      providers: providers.map((p) => ({ id: p.id, purpose: p.purpose, kind: p.kind, name: p.name, baseUrl: p.baseUrl, apiKeyHint: p.apiKeyHint, model: p.model, visionModel: p.visionModel, enabled: p.enabled })),
+      providers: providers.map((p) => ({
+        id: p.id,
+        purpose: p.purpose,
+        kind: p.kind,
+        protocol: p.protocol,
+        name: p.name,
+        baseUrl: p.baseUrl,
+        apiKeyHint: p.apiKeyHint,
+        model: p.model,
+        visionModel: p.visionModel,
+        maxTokens: p.maxTokens,
+        headerHints: JSON.parse(p.headersHint) as Record<string, string>,
+        enabled: p.enabled,
+      })),
       recentCalls: recent,
     });
   })
@@ -151,6 +188,9 @@ export const adminRoutes = new Hono<AppBindings>()
         visionModel: VisionModel.default(""),
         /** `vision`: a separate provider that only reads page images; `model` is its vision model. */
         purpose: z.enum(["text", "vision"]).default("text"),
+        protocol: ProviderProtocol.default("openai"),
+        maxTokens: MaxTokens.nullable().default(null),
+        headers: HeaderMap.default({}),
         enabled: z.boolean().default(true),
       }),
     );
@@ -161,7 +201,22 @@ export const adminRoutes = new Hono<AppBindings>()
     const id = newId("aip");
     await db(c.env)
       .insert(aiProviders)
-      .values({ id, orgId: me.orgId, purpose: body.purpose, kind: body.kind, name: body.name, baseUrl, model: body.model, visionModel: body.visionModel, apiKeySealed: await sealSecret(body.apiKey, secret(c.env, "AI_CONFIG_KEY")), apiKeyHint: maskSecret(body.apiKey), enabled: body.enabled });
+      .values({
+        id,
+        orgId: me.orgId,
+        purpose: body.purpose,
+        kind: body.kind,
+        protocol: body.protocol,
+        name: body.name,
+        baseUrl,
+        model: body.model,
+        visionModel: body.visionModel,
+        maxTokens: body.maxTokens,
+        ...(await sealHeaders(c.env, body.headers)),
+        apiKeySealed: await sealSecret(body.apiKey, secret(c.env, "AI_CONFIG_KEY")),
+        apiKeyHint: maskSecret(body.apiKey),
+        enabled: body.enabled,
+      });
     if (body.enabled) await disableOthers(c.env, me.orgId, id, body.purpose);
     await db(c.env).insert(auditLog).values({ orgId: me.orgId, actorId: me.id, action: "admin.ai_provider_created", target: id });
     return c.json({ id }, 201);
@@ -175,12 +230,24 @@ export const adminRoutes = new Hono<AppBindings>()
         apiKey: z.string().trim().min(8).optional(),
         model: z.string().trim().min(1).max(100).optional(),
         visionModel: VisionModel.optional(),
+        protocol: ProviderProtocol.optional(),
+        maxTokens: MaxTokens.nullable().optional(),
+        /** The full set of headers to keep; a blank value keeps that header's stored value. */
+        headers: HeaderMap.optional(),
         enabled: z.boolean().optional(),
       }),
     );
     const me = c.get("user");
     const id = c.req.param("id");
     const patch: Partial<typeof aiProviders.$inferInsert> = { updatedAt: Date.now() };
+    if (body.protocol) patch.protocol = body.protocol;
+    if (body.maxTokens !== undefined) patch.maxTokens = body.maxTokens;
+    if (body.headers) {
+      const row = (await db(c.env).select({ sealed: aiProviders.headersSealed }).from(aiProviders).where(and(eq(aiProviders.id, id), eq(aiProviders.orgId, me.orgId))).limit(1))[0];
+      if (!row) throw new HttpError(404, "NOT_FOUND", "Provider not found");
+      const stored = row.sealed ? (JSON.parse(await openSecret(row.sealed, secret(c.env, "AI_CONFIG_KEY"))) as Record<string, string>) : {};
+      Object.assign(patch, await sealHeaders(c.env, Object.fromEntries(Object.entries(body.headers).map(([k, v]) => [k, v || stored[k] || ""]))));
+    }
     if (body.name) patch.name = body.name;
     if (body.baseUrl) patch.baseUrl = body.baseUrl;
     if (body.model) patch.model = body.model;
@@ -206,7 +273,7 @@ export const adminRoutes = new Hono<AppBindings>()
     const body = await parseJson(c, z.object({ model: z.string().min(1).optional(), vision: z.boolean().default(false) }).default({ vision: false }));
     const row = (await db(c.env).select().from(aiProviders).where(and(eq(aiProviders.id, c.req.param("id")), eq(aiProviders.orgId, me.orgId))).limit(1))[0];
     if (!row) throw new HttpError(404, "NOT_FOUND", "Provider not found");
-    const provider = { id: row.id, kind: row.kind, name: row.name, baseUrl: row.baseUrl, apiKey: await openSecret(row.apiKeySealed, secret(c.env, "AI_CONFIG_KEY")) };
+    const provider = await providerConfigOf(c.env, row);
     const vision = body.vision || row.purpose === "vision";
     if (!vision) return c.json(await testProvider(provider, body.model ?? row.model));
     const model = body.model ?? (row.purpose === "vision" ? row.model : row.visionModel);

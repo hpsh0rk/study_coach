@@ -87,8 +87,9 @@ describe("keys and reminders", () => {
       token: "mineru-token-5c1d9e7a3b8f2e6d",
       url: "http://10.20.30.40:8123",
       selfKey: "selfhost-key-8e2c6a4f1d9b7e3c",
+      header: "hdr-value-4d7b1e9c6a2f",
     };
-    await admin.req("POST", "/api/admin/ai/providers", { kind: "deepseek", name: "DeepSeek", apiKey: secrets.text, model: "deepseek-chat" });
+    await admin.req("POST", "/api/admin/ai/providers", { kind: "deepseek", name: "DeepSeek", apiKey: secrets.text, model: "deepseek-chat", headers: { "x-source": secrets.header } });
     await admin.req("POST", "/api/admin/ai/providers", { kind: "glm", name: "GLM", apiKey: secrets.vision, model: "glm-4.6v-flash", purpose: "vision" });
     expect((await admin.req("PUT", "/api/admin/parsing", { mineruMode: "token", token: secrets.token })).status).toBe(200);
     expect((await admin.req("PUT", "/api/admin/parsing", { selfhostUrl: secrets.url, selfhostKey: secrets.selfKey })).status).toBe(200);
@@ -110,5 +111,32 @@ describe("keys and reminders", () => {
     for (const value of [...Object.values(secrets), "10.20.30.40"]) expect(all).not.toContain(value);
     expect(all).toContain("mineru-selfhost/1");
     expect(all).toContain("http://10.2…:8123");
+  });
+
+  it("a Messages provider keeps protocol, max_tokens and custom headers server-side and sends them on 测试连接", async () => {
+    const body = { kind: "custom", name: "llmbox", baseUrl: "http://llmbox.test", apiKey: "sk-llmbox-1234", model: "glm-5.3-flash", protocol: "messages", maxTokens: 31200, headers: { "x-source": "tensorhawk" } };
+    const created = await admin.req("POST", "/api/admin/ai/providers", body);
+    expect(created.status).toBe(201);
+    const id = (created.json as { id: string }).id;
+    const row = () => admin.req("GET", "/api/admin/ai").then((r) => (r.json as { providers: Record<string, unknown>[] }).providers.find((p) => p.id === id)!);
+    expect(await row()).toMatchObject({ protocol: "messages", maxTokens: 31200, headerHints: { "x-source": expect.not.stringContaining("tensorhawk") } });
+
+    expect((await admin.req("PATCH", `/api/admin/ai/providers/${id}`, { headers: { "x-source": "", "x-extra": "two" } })).status).toBe(200);
+    expect(Object.keys((await row()).headerHints as object)).toEqual(["x-source", "x-extra"]);
+    expect((await admin.req("POST", "/api/admin/ai/providers", { ...body, headers: { Authorization: "x" } })).status).toBe(400);
+
+    const sent: { url: string; headers: Record<string, string>; body: Record<string, unknown> }[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      sent.push({ url: String(url), headers: init!.headers as Record<string, string>, body: JSON.parse(String(init!.body)) });
+      const events = [
+        { type: "message_start", message: { model: "glm-5.3-flash", usage: { input_tokens: 3 } } },
+        { type: "content_block_delta", delta: { type: "text_delta", text: '{"ok":true}' } },
+        { type: "message_stop" },
+      ];
+      return new Response(events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
+    });
+    const test = await admin.req("POST", `/api/admin/ai/providers/${id}/test`, {});
+    expect(test.json).toMatchObject({ ok: true, model: "glm-5.3-flash" });
+    expect(sent[0]).toMatchObject({ url: "http://llmbox.test/v1/messages", headers: { authorization: "Bearer sk-llmbox-1234", "x-source": "tensorhawk", "x-extra": "two" }, body: { max_tokens: 31200, stream: true } });
   });
 });

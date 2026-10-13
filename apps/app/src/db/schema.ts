@@ -131,6 +131,14 @@ export const aiProviders = sqliteTable("ai_providers", {
    * own key that only reads page images (`model` is the vision model), e.g. DeepSeek writes and GLM reads.
    */
   purpose: text("purpose", { enum: ["text", "vision"] }).notNull().default("text"),
+  /** `openai`: the OpenAI chat-completions dialect. `messages`: {base}/v1/messages (Anthropic Messages dialect). Both stream. */
+  protocol: text("protocol", { enum: ["openai", "messages"] }).notNull().default("openai"),
+  /** Default max_tokens for this provider's calls; null leaves it to the call (Messages then uses 4096). */
+  maxTokens: integer("max_tokens"),
+  /** Extra request headers (e.g. `x-source`) as sealed JSON; "" when none. Values are secrets like the key. */
+  headersSealed: text("headers_sealed").notNull().default(""),
+  /** `{name: maskedValue}` JSON for the admin page. */
+  headersHint: text("headers_hint").notNull().default("{}"),
   /** At most one provider per org and purpose is enabled: every call of that kind uses it. */
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
   createdAt: integer("created_at").notNull().$defaultFn(now),
