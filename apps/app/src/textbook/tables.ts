@@ -66,3 +66,47 @@ export const chapters = sqliteTable(
   },
   (t) => [primaryKey({ columns: [t.documentId, t.id] })],
 );
+
+/** The admin switch "外部解析服务" per organisation. No row means off: pages leave the browser only after an admin turns it on. */
+export const parserSettings = sqliteTable("parser_settings", {
+  orgId: text("org_id").primaryKey().references(() => orgs.id),
+  externalEnabled: integer("external_enabled", { mode: "boolean" }).notNull().default(false),
+  /** `agent`: MinerU's token-free API (≤ 20 pages, 10 MB per file). `token`: the precise API with a MinerU token. */
+  mineruMode: text("mineru_mode", { enum: ["agent", "token"] }).notNull().default("agent"),
+  /** Sealed with AI_CONFIG_KEY like ai_providers.api_key_sealed; falls back to the MINERU_API_TOKEN secret. */
+  mineruTokenSealed: text("mineru_token_sealed"),
+  mineruTokenHint: text("mineru_token_hint"),
+  updatedAt: integer("updated_at").notNull().$defaultFn(now),
+  updatedBy: text("updated_by").references(() => users.id),
+});
+
+/**
+ * One row per sub-PDF sent to an external parser: the job's state, and the usage the guardrails count
+ * (pages per book, per teacher per day, site-wide per day; cost). Pages reused from a copy of the same
+ * file are not sent and not counted.
+ */
+export const parseUsage = sqliteTable(
+  "parse_usage",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id").notNull().references(() => orgs.id),
+    userId: text("user_id").notNull().references(() => users.id),
+    documentId: text("document_id").notNull().references(() => documents.id, { onDelete: "cascade" }),
+    parser: text("parser").notNull(),
+    /** `auto`: must-fix pages, sent without asking. `refine`: pages the teacher asked to re-read ("精修本章"). */
+    reason: text("reason", { enum: ["auto", "refine"] }).notNull(),
+    pages: text("pages", { mode: "json" }).$type<number[]>().notNull(),
+    pageCount: integer("page_count").notNull(),
+    costFen: integer("cost_fen").notNull().default(0),
+    state: text("state", { enum: ["submitted", "uploaded", "parsed", "done", "failed"] }).notNull().default("submitted"),
+    taskId: text("task_id").notNull(),
+    /** The parser's signed upload URL: the Worker streams the sub-PDF to it; never sent to the browser. */
+    uploadUrl: text("upload_url").notNull(),
+    resultUrl: text("result_url"),
+    error: text("error"),
+    /** Calendar day in China (UTC+8), for the daily limits. */
+    day: text("day").notNull(),
+    createdAt: integer("created_at").notNull().$defaultFn(now),
+  },
+  (t) => [index("parse_usage_day_idx").on(t.day, t.userId), index("parse_usage_document_idx").on(t.documentId)],
+);

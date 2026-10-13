@@ -64,6 +64,13 @@
       "when": 1791857152372,
       "tag": "0008_textbook_page_kind",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1791858576585,
+      "tag": "0009_textbook_parsers",
+      "breakpoints": true
     }
   ]
 }

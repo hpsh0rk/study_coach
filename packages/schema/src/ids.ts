@@ -1,6 +1,6 @@
 const ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
-export type IdPrefix = "usr" | "org" | "doc" | "ch" | "les" | "ov" | "sp" | "sl" | "shr" | "ai" | "aip" | "unit";
+export type IdPrefix = "usr" | "org" | "doc" | "ch" | "les" | "ov" | "sp" | "sl" | "shr" | "ai" | "aip" | "unit" | "pjob";
 
 /** Server-side id allocation. Model output never carries ids. */
 export function newId(prefix: IdPrefix, size = 12): string {

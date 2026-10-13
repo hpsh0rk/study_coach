@@ -5,6 +5,9 @@ export interface Env {
   ENVIRONMENT: string;
   AI_ALLOW_STUB?: string;
   AI_CONFIG_KEY?: string;
+  /** Default MinerU API for the "外部解析服务" setting: `agent` (token-free) or `token`; `stub` replays a recorded response (tests and E2E only). */
+  PARSER_MINERU_MODE?: string;
+  MINERU_API_TOKEN?: string;
 }
 
 export interface SessionUser {

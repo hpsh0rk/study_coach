@@ -19,6 +19,11 @@ export class Client {
     const text = await res.text();
     return { status: res.status, json: text ? (JSON.parse(text) as any) : null };
   }
+
+  /** A non-JSON request; the response is returned as is. */
+  async raw(method: string, path: string, body?: BodyInit, headers: Record<string, string> = {}): Promise<Response> {
+    return worker.fetch(`${BASE}${path}`, { method, headers: { "x-kj-csrf": "1", ...(this.cookie ? { cookie: this.cookie } : {}), ...headers }, ...(body !== undefined ? { body } : {}) });
+  }
 }
 
 /** Inserts a user directly (cheap PBKDF2 cost keeps tests fast; the cost is read from the stored hash). */
