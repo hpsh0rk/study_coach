@@ -1,5 +1,5 @@
 import { and, eq, inArray, ne } from "drizzle-orm";
-import { isMustFix, PDFJS_PARSER, pageFacts, REFINE_KINDS, type PageFacts } from "@kj/textbook";
+import { isMustFix, MINERU_SELFHOST_PARSER, PDFJS_PARSER, pageFacts, REFINE_KINDS, type PageFacts } from "@kj/textbook";
 import { newId } from "@kj/schema";
 import { db } from "../../db/index.ts";
 import type { Env, SessionUser } from "../../env.ts";
@@ -7,7 +7,7 @@ import { HttpError } from "../../http.ts";
 import type { TextbookRow } from "../index.ts";
 import { documents, pages, parseUsage } from "../tables.ts";
 import type { ExternalParser } from "./mineru.ts";
-import { chinaDay, externalParserFor, parseAllowance, parserSettingsOf, parseUsed, refusalMessage } from "./settings.ts";
+import { chinaDay, externalParserFor, externalState, parseAllowance, parserSettingsOf, parseUsed, refusalMessage, type ExternalState } from "./settings.ts";
 
 export type ParseReason = "auto" | "refine";
 export type JobRow = typeof parseUsage.$inferSelect;
@@ -23,20 +23,28 @@ export interface ExternalParserInfo {
 const info = (p: ExternalParser): ExternalParserInfo => ({ parser: p.id, maxPagesPerJob: p.maxPagesPerJob, maxBytes: p.maxBytes, format: p.format });
 
 export async function externalParserInfo(env: Env, orgId: string): Promise<ExternalParserInfo | null> {
-  const settings = await parserSettingsOf(env, orgId);
-  if (!settings.externalEnabled) return null;
   try {
-    const parser = await externalParserFor(env, settings);
+    const parser = await externalParserFor(env, await parserSettingsOf(env, orgId));
     return parser && info(parser);
   } catch {
     return null;
   }
 }
 
+/** Why there is no external parser, in words a teacher can act on (ask the admin). */
+export function externalOffMessage(state: Exclude<ExternalState, { state: "on" }>): string {
+  if (state.state === "off") return "管理员关闭了外部解析服务 · External parsing is off";
+  return state.missing === "url"
+    ? "外部解析未配置：请联系管理员在后台“外部解析服务”里填写自部署 MinerU 的地址 · External parser not configured"
+    : "外部解析未配置：请联系管理员在后台“外部解析服务”里填写 MinerU Token · External parser not configured";
+}
+
 async function parserOf(env: Env, user: SessionUser): Promise<ExternalParser> {
-  const parser = await externalParserFor(env, await parserSettingsOf(env, user.orgId));
-  if (!parser) throw new HttpError(403, "PARSER_OFF", "管理员还没有开启外部解析服务 · External parsing is off");
-  return parser;
+  const settings = await parserSettingsOf(env, user.orgId);
+  const parser = await externalParserFor(env, settings);
+  if (parser) return parser;
+  const state = externalState(env, settings);
+  throw new HttpError(403, state.state === "off" ? "PARSER_OFF" : "PARSER_NOT_CONFIGURED", externalOffMessage(state as Exclude<ExternalState, { state: "on" }>));
 }
 
 /** Must-fix pages still holding pdf.js text go without asking; refine-kind pages only when the teacher asks. */
@@ -96,7 +104,7 @@ export async function createParseJob(
   if (!send.length) return { reused, job: null, parser: info(parser) };
 
   const cost = send.length * parser.costMicroYuanPerPage;
-  const refusal = parseAllowance(await parseUsed(env, user, doc.id), { pages: send.length, reason: req.reason, costMicroYuan: cost, mineru: true }, await parserSettingsOf(env, user.orgId));
+  const refusal = parseAllowance(await parseUsed(env, user, doc.id), { pages: send.length, reason: req.reason, costMicroYuan: cost, mineru: parser.id !== MINERU_SELFHOST_PARSER }, await parserSettingsOf(env, user.orgId));
   if (refusal) throw new HttpError(refusal.status, refusal.code, refusalMessage(refusal, "外部解析"), { scope: refusal.scope, remaining: refusal.remaining });
 
   const task = await parser.submit({ ocr: req.ocr });
@@ -137,13 +145,14 @@ export async function uploadJobFile(env: Env, user: SessionUser, doc: TextbookRo
   const parser = await parserOf(env, user);
   if (!body || !Number.isFinite(length) || length < 5) throw new HttpError(400, "VALIDATION", "Missing PDF body");
   if (length > parser.maxBytes) throw new HttpError(413, "TOO_LARGE", `这几页切出来超过 ${Math.round(parser.maxBytes / 1048576)} MB，请少选几页 · Sub-PDF too large`);
+  let taskId: string | void;
   try {
-    await parser.upload(job.uploadUrl, body, length);
+    taskId = await parser.upload(job.uploadUrl, body, length);
   } catch (err) {
     await setJob(env, id, { state: "failed", error: "upload" });
     throw err;
   }
-  await setJob(env, id, { state: "uploaded" });
+  await setJob(env, id, { state: "uploaded", ...(taskId ? { taskId } : {}) });
 }
 
 export async function pollJob(env: Env, user: SessionUser, doc: TextbookRow, id: string): Promise<{ state: "running" | "ready" | "done" | "failed"; error?: string }> {

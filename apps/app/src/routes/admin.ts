@@ -9,7 +9,18 @@ import { HttpError, parseJson } from "../http.ts";
 import { generatePassword, hashPassword, passwordProblem } from "../auth/password.ts";
 import { destroyUserSessions, requireAdmin, requireUser } from "../auth/session.ts";
 import { db } from "../db/index.ts";
-import { effectiveMode, PARSE_LIMITS, parserSettingsOf, parseUsageToday, saveParserSettings, visionPriceOf } from "../textbook/parsers/settings.ts";
+import {
+  effectiveMode,
+  externalState,
+  maskUrl,
+  normalizeBaseUrl,
+  PARSE_LIMITS,
+  parserSettingsOf,
+  parseUsageToday,
+  saveParserSettings,
+  testExternalConnection,
+  visionPriceOf,
+} from "../textbook/parsers/settings.ts";
 
 const Username = z
   .string()
@@ -175,7 +186,8 @@ export const adminRoutes = new Hono<AppBindings>()
   // ---- external parser ----
   /**
    * "外部解析服务": whether pages the browser could not read (scans, formulas drawn as outlines, garbled text)
-   * may be sent to MinerU. Off until an admin turns it on.
+   * go to MinerU (online API or the school's own server). `auto` turns it on once the chosen API is configured.
+   * Secrets (token, self-host URL and key) come back as hints only.
    */
   .get("/parsing", async (c) => {
     const orgId = c.get("user").orgId;
@@ -186,10 +198,13 @@ export const adminRoutes = new Hono<AppBindings>()
     ]);
     const visionModel = provider[0]?.visionModel || null;
     return c.json({
-      externalEnabled: settings.externalEnabled,
+      externalChoice: settings.externalChoice,
+      external: externalState(c.env, settings),
       mineruMode: settings.mineruMode,
       tokenHint: settings.mineruTokenHint,
       envToken: !!c.env.MINERU_API_TOKEN,
+      selfhostUrlHint: settings.selfhostUrlHint,
+      selfhostKeyHint: settings.selfhostKeyHint,
       stub: effectiveMode(c.env, settings) === "stub",
       limits: PARSE_LIMITS,
       today,
@@ -198,27 +213,60 @@ export const adminRoutes = new Hono<AppBindings>()
       vision: visionModel ? { model: visionModel, ...visionPriceOf(visionModel, settings) } : null,
     });
   })
-  /** Money in micro-yuan (1 元 = 1,000,000). */
+  /** Money in micro-yuan (1 元 = 1,000,000). Secrets: a string to store, null to remove, absent to keep. */
   .put("/parsing", async (c) => {
     const body = await parseJson(
       c,
       z.object({
-        externalEnabled: z.boolean().optional(),
-        mineruMode: z.enum(["agent", "token"]).optional(),
+        externalChoice: z.enum(["auto", "on", "off"]).optional(),
+        mineruMode: z.enum(["agent", "token", "selfhost"]).optional(),
         token: z.string().trim().min(8).max(4000).nullable().optional(),
+        selfhostUrl: z
+          .string()
+          .trim()
+          .url()
+          .max(500)
+          .refine((u) => /^https?:\/\//i.test(u), "http(s) URL")
+          .nullable()
+          .optional(),
+        selfhostKey: z.string().trim().min(1).max(4000).nullable().optional(),
         paidEnabled: z.boolean().optional(),
         monthlyBudgetMicroYuan: z.number().int().min(0).max(10_000 * 1_000_000).optional(),
         visionPriceMicroYuan: z.number().int().min(0).max(1_000_000).nullable().optional(),
       }),
     );
     const me = c.get("user");
-    const { token: plain, ...rest } = body;
-    const token = plain === undefined ? undefined : plain === null ? null : { sealed: await sealSecret(plain, secret(c.env, "AI_CONFIG_KEY")), hint: maskSecret(plain) };
-    await saveParserSettings(c.env, me, { ...rest, token });
+    const key = secret(c.env, "AI_CONFIG_KEY");
+    const seal = async (plain: string | null | undefined, hint: (s: string) => string) =>
+      plain === undefined ? undefined : plain === null ? null : { sealed: await sealSecret(plain, key), hint: hint(plain) };
+    const { token, selfhostUrl, selfhostKey, ...rest } = body;
+    const url = selfhostUrl ? normalizeBaseUrl(selfhostUrl) : selfhostUrl;
+    await saveParserSettings(c.env, me, {
+      ...rest,
+      token: await seal(token, maskSecret),
+      selfhostUrl: await seal(url, maskUrl),
+      selfhostKey: await seal(selfhostKey, maskSecret),
+    });
     const target =
-      body.externalEnabled !== undefined ? (body.externalEnabled ? "external_on" : "external_off") : body.paidEnabled !== undefined ? (body.paidEnabled ? "paid_on" : "paid_off") : "settings";
+      body.externalChoice !== undefined
+        ? `external_${body.externalChoice}`
+        : body.mineruMode !== undefined
+          ? `mode_${body.mineruMode}`
+          : body.paidEnabled !== undefined
+            ? body.paidEnabled
+              ? "paid_on"
+              : "paid_off"
+            : selfhostUrl !== undefined || selfhostKey !== undefined
+              ? "selfhost"
+              : token !== undefined
+                ? "token"
+                : "settings";
     await db(c.env).insert(auditLog).values({ orgId: me.orgId, actorId: me.id, action: "admin.parser_settings", target });
     return c.json({ ok: true });
+  })
+  /** "测试连接" for the chosen MinerU API, whether or not the switch is on. Sends no page. */
+  .post("/parsing/test", async (c) => {
+    return c.json(await testExternalConnection(c.env, await parserSettingsOf(c.env, c.get("user").orgId)));
   });
 
 async function disableOthers(env: Env, orgId: string, keepId: string): Promise<void> {

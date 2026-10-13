@@ -2,9 +2,11 @@ import { eq, sql } from "drizzle-orm";
 import { openSecret } from "@kj/ai";
 import { db } from "../../db/index.ts";
 import { secret, type Env, type SessionUser } from "../../env.ts";
-import { HttpError } from "../../http.ts";
 import { parserSettings, parseUsage } from "../tables.ts";
-import { agentParser, stubParser, tokenParser, type ExternalParser, type MineruMode } from "./mineru.ts";
+import { MINERU_AGENT_PARSER, MINERU_PARSER } from "@kj/textbook";
+import { agentParser, checkConnection, selfhostParser, stubParser, tokenParser, type ExternalParser, type MineruMode } from "./mineru.ts";
+
+export { maskUrl, normalizeBaseUrl } from "./mineru.ts";
 
 /** Guardrails on pages sent to external parsers and vision models (pdf-parsing research §7.6). Money in micro-yuan. */
 export const PARSE_LIMITS = { bookAutoPages: 300, userDayPages: 300, siteDayPages: 900, bookCostMicroYuan: 5_000_000 } as const;
@@ -21,39 +23,53 @@ export const VISION_PRICES: Readonly<Record<string, number>> = {
 /** A model not in the list is priced like the dearest one: paid, so it stays off until an admin allows paid parsing or enters its price. */
 export const UNKNOWN_VISION_PRICE = 11_000;
 
+export type ExternalChoice = "auto" | "on" | "off";
+export type MineruApi = "agent" | "token" | "selfhost";
+type Sealed = { sealed: string; hint: string };
+
 export interface ParserSettings {
-  externalEnabled: boolean;
-  mineruMode: "agent" | "token";
+  externalChoice: ExternalChoice;
+  mineruMode: MineruApi;
   mineruTokenSealed: string | null;
   mineruTokenHint: string | null;
+  selfhostUrlSealed: string | null;
+  selfhostUrlHint: string | null;
+  selfhostKeySealed: string | null;
+  selfhostKeyHint: string | null;
   paidEnabled: boolean;
   monthlyBudgetMicroYuan: number;
   visionPriceMicroYuan: number | null;
 }
 
+/** Sealed values: an object to store, null to remove, undefined to keep. */
 export interface SettingsPatch {
-  externalEnabled?: boolean;
-  mineruMode?: "agent" | "token";
-  /** A sealed token to store, null to remove it, undefined to keep it. */
-  token?: { sealed: string; hint: string } | null;
+  externalChoice?: ExternalChoice;
+  mineruMode?: MineruApi;
+  token?: Sealed | null;
+  selfhostUrl?: Sealed | null;
+  selfhostKey?: Sealed | null;
   paidEnabled?: boolean;
   monthlyBudgetMicroYuan?: number;
   /** null: back to the list price. */
   visionPriceMicroYuan?: number | null;
 }
 
-function defaultMode(env: Env): "agent" | "token" {
-  return env.PARSER_MINERU_MODE === "token" ? "token" : "agent";
+function defaultMode(env: Env): MineruApi {
+  return env.PARSER_MINERU_MODE === "token" || env.PARSER_MINERU_MODE === "selfhost" ? env.PARSER_MINERU_MODE : "agent";
 }
 
 export async function parserSettingsOf(env: Env, orgId: string): Promise<ParserSettings> {
   const row = (await db(env).select().from(parserSettings).where(eq(parserSettings.orgId, orgId)).limit(1))[0];
   return (
     row ?? {
-      externalEnabled: false,
+      externalChoice: "auto",
       mineruMode: defaultMode(env),
       mineruTokenSealed: null,
       mineruTokenHint: null,
+      selfhostUrlSealed: null,
+      selfhostUrlHint: null,
+      selfhostKeySealed: null,
+      selfhostKeyHint: null,
       paidEnabled: false,
       monthlyBudgetMicroYuan: 0,
       visionPriceMicroYuan: null,
@@ -61,13 +77,23 @@ export async function parserSettingsOf(env: Env, orgId: string): Promise<ParserS
   );
 }
 
+const keep = (patch: Sealed | null | undefined, sealed: string | null, hint: string | null): [string | null, string | null] =>
+  patch === undefined ? [sealed, hint] : patch === null ? [null, null] : [patch.sealed, patch.hint];
+
 export async function saveParserSettings(env: Env, user: SessionUser, patch: SettingsPatch): Promise<void> {
   const current = await parserSettingsOf(env, user.orgId);
+  const [mineruTokenSealed, mineruTokenHint] = keep(patch.token, current.mineruTokenSealed, current.mineruTokenHint);
+  const [selfhostUrlSealed, selfhostUrlHint] = keep(patch.selfhostUrl, current.selfhostUrlSealed, current.selfhostUrlHint);
+  const [selfhostKeySealed, selfhostKeyHint] = keep(patch.selfhostKey, current.selfhostKeySealed, current.selfhostKeyHint);
   const next = {
-    externalEnabled: patch.externalEnabled ?? current.externalEnabled,
+    externalChoice: patch.externalChoice ?? current.externalChoice,
     mineruMode: patch.mineruMode ?? current.mineruMode,
-    mineruTokenSealed: patch.token === undefined ? current.mineruTokenSealed : (patch.token?.sealed ?? null),
-    mineruTokenHint: patch.token === undefined ? current.mineruTokenHint : (patch.token?.hint ?? null),
+    mineruTokenSealed,
+    mineruTokenHint,
+    selfhostUrlSealed,
+    selfhostUrlHint,
+    selfhostKeySealed,
+    selfhostKeyHint,
     paidEnabled: patch.paidEnabled ?? current.paidEnabled,
     monthlyBudgetMicroYuan: patch.monthlyBudgetMicroYuan ?? current.monthlyBudgetMicroYuan,
     visionPriceMicroYuan: patch.visionPriceMicroYuan === undefined ? current.visionPriceMicroYuan : patch.visionPriceMicroYuan,
@@ -80,23 +106,68 @@ export async function saveParserSettings(env: Env, user: SessionUser, patch: Set
     .onConflictDoUpdate({ target: parserSettings.orgId, set: next });
 }
 
+/**
+ * `stub` (tests and E2E) replaces MinerU's online APIs only: a self-hosted server is whatever URL the admin
+ * entered, which in tests is a local mock.
+ */
 export function effectiveMode(env: Env, settings: ParserSettings): MineruMode {
-  if (env.PARSER_MINERU_MODE === "stub") {
+  if (env.PARSER_MINERU_MODE === "stub" && settings.mineruMode !== "selfhost") {
     if (env.ENVIRONMENT === "production") throw new Error("PARSER_MINERU_MODE=stub is for tests only");
     return "stub";
   }
   return settings.mineruMode;
 }
 
-/** The external parser pages may go to, or null while the admin switch is off. */
-export async function externalParserFor(env: Env, settings: ParserSettings, f: typeof fetch = fetch): Promise<ExternalParser | null> {
-  if (!settings.externalEnabled) return null;
+/** What the chosen API still lacks: `token` (precise API), `url` (self-hosted), or null when it can run. */
+export function missingConfig(env: Env, settings: ParserSettings): "token" | "url" | null {
   const mode = effectiveMode(env, settings);
+  if (mode === "token" && !settings.mineruTokenSealed && !env.MINERU_API_TOKEN) return "token";
+  if (mode === "selfhost" && !settings.selfhostUrlSealed) return "url";
+  return null;
+}
+
+/**
+ * Whether pages may go to the external parser: `off` when the admin turned it off, `unconfigured` when the
+ * chosen API lacks its token or URL, else `on` (`auto` means on once configured).
+ */
+export type ExternalState = { state: "on" } | { state: "off" } | { state: "unconfigured"; missing: "token" | "url" };
+
+export function externalState(env: Env, settings: ParserSettings): ExternalState {
+  if (settings.externalChoice === "off") return { state: "off" };
+  const missing = missingConfig(env, settings);
+  return missing ? { state: "unconfigured", missing } : { state: "on" };
+}
+
+/** The parser for the chosen API, ignoring the on/off choice (the admin's connection test uses it too); null while unconfigured. */
+export async function configuredParser(env: Env, settings: ParserSettings, f: typeof fetch = fetch): Promise<ExternalParser | null> {
+  if (missingConfig(env, settings)) return null;
+  const mode = effectiveMode(env, settings);
+  const key = secret(env, "AI_CONFIG_KEY");
   if (mode === "stub") return stubParser();
   if (mode === "agent") return agentParser(f);
-  const token = settings.mineruTokenSealed ? await openSecret(settings.mineruTokenSealed, secret(env, "AI_CONFIG_KEY")) : env.MINERU_API_TOKEN;
-  if (!token) throw new HttpError(503, "PARSER_NOT_CONFIGURED", "外部解析服务选了精准接口但没有 Token，请管理员在后台填写 · The precise API needs a MinerU token");
-  return tokenParser(token, f);
+  if (mode === "selfhost") {
+    const url = await openSecret(settings.selfhostUrlSealed!, key);
+    return selfhostParser(url, settings.selfhostKeySealed ? await openSecret(settings.selfhostKeySealed, key) : null, f);
+  }
+  return tokenParser(settings.mineruTokenSealed ? await openSecret(settings.mineruTokenSealed, key) : env.MINERU_API_TOKEN!, f);
+}
+
+/** "测试连接" for the chosen API, whether or not the switch is on. Sends no page. */
+export async function testExternalConnection(env: Env, settings: ParserSettings, f: typeof fetch = fetch): Promise<{ ok: boolean; message: string }> {
+  const missing = missingConfig(env, settings);
+  if (missing) {
+    return { ok: false, message: missing === "url" ? "还没有填写自部署 MinerU 的地址 · No self-hosted URL yet" : "还没有填写 MinerU Token · No token yet" };
+  }
+  const parser = (await configuredParser(env, settings, f))!;
+  const mode = effectiveMode(env, settings);
+  const token =
+    mode === "token" ? (settings.mineruTokenSealed ? await openSecret(settings.mineruTokenSealed, secret(env, "AI_CONFIG_KEY")) : (env.MINERU_API_TOKEN ?? null)) : null;
+  return checkConnection(mode, parser, token, f);
+}
+
+/** The external parser pages may go to, or null while it is off or not configured. */
+export async function externalParserFor(env: Env, settings: ParserSettings, f: typeof fetch = fetch): Promise<ExternalParser | null> {
+  return externalState(env, settings).state === "on" ? configuredParser(env, settings, f) : null;
 }
 
 export interface VisionPrice {
@@ -115,8 +186,8 @@ export function visionPriceOf(model: string, settings: ParserSettings): VisionPr
 export const chinaDay = (ms = Date.now()) => new Date(ms + 8 * 3600_000).toISOString().slice(0, 10);
 const monthStart = (day: string) => `${day.slice(0, 7)}-01`;
 
-/** MinerU's free daily allowance is what the site-wide limit protects; vision pages do not use it. */
-const isMineruRow = sql`${parseUsage.parser} like 'mineru%'`;
+/** MinerU's free daily allowance (online APIs) is what the site-wide limit protects; vision pages and a self-hosted server do not use it. */
+const isMineruRow = sql`${parseUsage.parser} in (${MINERU_AGENT_PARSER}, ${MINERU_PARSER})`;
 
 export interface ParseUsed {
   bookAutoPages: number;

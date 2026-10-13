@@ -61,18 +61,22 @@ beforeAll(async () => {
 });
 
 describe("external parser switch (外部解析服务)", () => {
-  it("is off by default: nothing can be sent, and only admins can turn it on", async () => {
+  it("follows the configuration by default (the agent API needs no key, so it is on); admins choose auto / on / off, teachers cannot", async () => {
     const id = await newBook(t7, "1".repeat(64));
+    expect((await t7.req("GET", `/api/documents/${id}`)).json.externalParser).toMatchObject({ parser: MINERU_AGENT_PARSER });
+    expect((await admin.req("GET", "/api/admin/parsing")).json).toMatchObject({ externalChoice: "auto", external: { state: "on" }, mineruMode: "agent", stub: true, limits: PARSE_LIMITS });
+    expect((await t7.req("PUT", "/api/admin/parsing", { externalChoice: "off" })).status).toBe(403);
+
+    expect((await admin.req("PUT", "/api/admin/parsing", { externalChoice: "off" })).status).toBe(200);
     expect((await t7.req("GET", `/api/documents/${id}`)).json.externalParser).toBeNull();
     const refused = await t7.req("POST", `/api/documents/${id}/parse`, { pages: [2], reason: "auto" });
     expect(refused.status).toBe(403);
     expect(refused.json.error.code).toBe("PARSER_OFF");
-    expect((await admin.req("GET", "/api/admin/parsing")).json).toMatchObject({ externalEnabled: false, mineruMode: "agent", stub: true, limits: PARSE_LIMITS });
-    expect((await t7.req("PUT", "/api/admin/parsing", { externalEnabled: true })).status).toBe(403);
+    expect((await admin.req("GET", "/api/admin/parsing")).json).toMatchObject({ externalChoice: "off", external: { state: "off" } });
   });
 
   it("when on: must-fix pages go through the stubbed MinerU and come back as text by page", async () => {
-    expect((await admin.req("PUT", "/api/admin/parsing", { externalEnabled: true })).status).toBe(200);
+    expect((await admin.req("PUT", "/api/admin/parsing", { externalChoice: "on" })).status).toBe(200);
     const id = await newBook(t7, "2".repeat(64));
     expect((await t7.req("GET", `/api/documents/${id}`)).json.externalParser).toEqual({ parser: MINERU_AGENT_PARSER, maxPagesPerJob: 10, maxBytes: 10 * 1024 * 1024, format: "markdown" });
 
@@ -159,12 +163,12 @@ describe("external parser switch (外部解析服务)", () => {
   it("turning it off stops new jobs and jobs already started", async () => {
     const id = await newBook(t7, "a".repeat(64));
     const job = (await t7.req("POST", `/api/documents/${id}/parse`, { pages: [2], reason: "auto" })).json.job;
-    await admin.req("PUT", "/api/admin/parsing", { externalEnabled: false });
+    await admin.req("PUT", "/api/admin/parsing", { externalChoice: "off" });
     expect((await t7.raw("PUT", `/api/documents/${id}/parse/${job.id}/file`, PDF)).status).toBe(403);
     expect((await t7.req("POST", `/api/documents/${id}/parse`, { pages: [4], reason: "auto" })).status).toBe(403);
     expect((await t7.req("GET", `/api/documents/${id}`)).json.externalParser).toBeNull();
     const audit = await e.DB.prepare("SELECT target FROM audit_log WHERE action = 'admin.parser_settings' ORDER BY id").all<{ target: string }>();
-    expect(audit.results.map((r) => r.target)).toEqual(["external_on", "external_off"]);
+    expect(audit.results.map((r) => r.target)).toEqual(["external_off", "external_on", "external_off"]);
   });
 });
 
