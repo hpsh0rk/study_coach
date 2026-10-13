@@ -4,9 +4,9 @@ import { ChapterNode, PageText } from "@kj/schema";
 import type { AppBindings } from "../env.ts";
 import { HttpError, parseJson } from "../http.ts";
 import { requireUser } from "../auth/session.ts";
-import { lessonsUsing } from "../store.ts";
-import { chapterTree, lookupTextbook, ownedTextbook, page, pageMeta, textbookList } from "../textbook/index.ts";
-import { createTextbook, PAGE_BATCH, pastePages, putPages, setTextbookArchived } from "../textbook/write.ts";
+import { lessonCountsByDocument, lessonsUsing } from "../store.ts";
+import { chapterTree, lookupTextbook, ownedTextbook, page, pageMeta, textbookLibrary, textbookList } from "../textbook/index.ts";
+import { createTextbook, PAGE_BATCH, pastePages, purgeTextbook, putPages, renameTextbook, setTextbookArchived } from "../textbook/write.ts";
 import { makeAi, visionModelOf } from "../ai.ts";
 import { createParseJob, externalNote, externalParserInfo, jobResult, pollJob, saveJobPages, uploadJobFile } from "../textbook/parsers/jobs.ts";
 import { parserSettingsOf } from "../textbook/parsers/settings.ts";
@@ -29,6 +29,12 @@ const CreateDocument = z.object({
 export const documentRoutes = new Hono<AppBindings>()
   .use(requireUser())
   .get("/", async (c) => c.json({ documents: await textbookList(c.env, c.get("user")) }))
+  /** 教材管理: every textbook of the teacher, archived ones too, with flagged pages and how many lessons use it. */
+  .get("/library", async (c) => {
+    const rows = await textbookLibrary(c.env, c.get("user"));
+    const used = await lessonCountsByDocument(c.env, rows.map((r) => r.id));
+    return c.json({ textbooks: rows.map((r) => ({ ...r, lessons: used[r.id]!.live, lessonsAll: used[r.id]!.all })) });
+  })
   /** Before parsing: the browser asks whether this file (by sha256) is already here, so a book is parsed and uploaded once. */
   .post("/lookup", async (c) => {
     const body = await parseJson(c, z.object({ sha256: Sha256 }));
@@ -139,6 +145,28 @@ export const documentRoutes = new Hono<AppBindings>()
     const doc = await ownedTextbook(c.env, u, c.req.param("id"));
     await setTextbookArchived(c.env, u, doc, true);
     return c.json({ ok: true, lessons: await lessonsUsing(c.env, doc.id) });
+  })
+  .patch("/:id", async (c) => {
+    const body = await parseJson(c, z.object({ title: z.string().trim().min(1).max(300) }));
+    const u = c.get("user");
+    const doc = await ownedTextbook(c.env, u, c.req.param("id"), { archived: true });
+    await renameTextbook(c.env, u, doc, body.title);
+    return c.json({ ok: true });
+  })
+  .post("/:id/archive", async (c) => {
+    const u = c.get("user");
+    const doc = await ownedTextbook(c.env, u, c.req.param("id"));
+    await setTextbookArchived(c.env, u, doc, true);
+    return c.json({ ok: true, lessons: await lessonsUsing(c.env, doc.id) });
+  })
+  /** Delete for good: only when no lesson, archived or not, was made from it. */
+  .delete("/:id/permanent", async (c) => {
+    const u = c.get("user");
+    const doc = await ownedTextbook(c.env, u, c.req.param("id"), { archived: true });
+    const { all } = (await lessonCountsByDocument(c.env, [doc.id]))[doc.id]!;
+    if (all > 0) throw new HttpError(409, "IN_USE", `这本教材还有 ${all} 节课在用（包括已删除的课），不能彻底删除；可以先归档。· Used by ${all} lesson(s); archive it instead.`);
+    await purgeTextbook(c.env, u, doc);
+    return c.json({ ok: true });
   })
   .post("/:id/restore", async (c) => {
     const u = c.get("user");

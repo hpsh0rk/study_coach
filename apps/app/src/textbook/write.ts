@@ -101,6 +101,30 @@ export async function pastePages(env: Env, doc: TextbookRow, start: number, end:
   return filled.map(({ no, words, chars, flags, parser }) => ({ no, words, chars, flags, parser }));
 }
 
+/** 教材管理 rename; lessons keep their own titles. */
+export async function renameTextbook(env: Env, user: SessionUser, doc: TextbookRow, title: string): Promise<void> {
+  const d = db(env);
+  await d.batch([
+    d.update(documents).set({ title }).where(eq(documents.id, doc.id)),
+    d.insert(auditLog).values({ orgId: doc.orgId, actorId: user.id, action: "document.renamed", target: doc.id }),
+  ]);
+}
+
+/**
+ * Delete for good, only for a textbook no lesson points at (the caller checks): its pages and chapters go;
+ * the row stays, without its file hash, so today's parse usage still counts.
+ */
+export async function purgeTextbook(env: Env, user: SessionUser, doc: TextbookRow): Promise<void> {
+  const d = db(env);
+  const at = Date.now();
+  await d.batch([
+    d.delete(pages).where(eq(pages.documentId, doc.id)),
+    d.delete(chapters).where(eq(chapters.documentId, doc.id)),
+    d.update(documents).set({ purgedAt: at, archivedAt: doc.archivedAt ?? at, fileSha256: null }).where(eq(documents.id, doc.id)),
+    d.insert(auditLog).values({ orgId: doc.orgId, actorId: user.id, action: "document.purged", target: doc.id }),
+  ]);
+}
+
 /** Soft delete or restore, with an audit record in the same batch. A restore never makes a second live copy of the same file. */
 export async function setTextbookArchived(env: Env, user: SessionUser, doc: TextbookRow, archived: boolean): Promise<void> {
   const d = db(env);

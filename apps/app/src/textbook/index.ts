@@ -2,8 +2,8 @@
  * The textbook module's read interface: the only way lesson, generation and share code reaches a
  * textbook's pages, chapters and labels. It knows nothing about lessons (see .dependency-cruiser.cjs).
  */
-import { and, asc, between, count, desc, eq, gte, inArray, isNotNull, isNull, lte, or } from "drizzle-orm";
-import { chapterRunsOf, isEmptyPage, MIN_PAGE_WORDS, missingRanges, PDFJS_PARSER, type PageFlag, normalizeRanges, pagesInRanges, rangesForChapters, sourceCut, type ChapterRun } from "@kj/textbook";
+import { and, asc, between, count, desc, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
+import { chapterRunsOf, isEmptyPage, MIN_PAGE_WORDS, missingRanges, MUST_FIX_KINDS, PDFJS_PARSER, type PageFlag, normalizeRanges, pagesInRanges, rangesForChapters, sourceCut, type ChapterRun } from "@kj/textbook";
 import type { ChapterNode, LessonScope, PageKind, PageRange, PageText } from "@kj/schema";
 import { db } from "../db/index.ts";
 import type { Env, SessionUser } from "../env.ts";
@@ -18,7 +18,7 @@ export type TextbookRow = typeof documents.$inferSelect;
  */
 export async function ownedTextbook(env: Env, user: SessionUser, id: string, opts: { archived?: boolean } = {}): Promise<TextbookRow> {
   const row = (await db(env).select().from(documents).where(and(eq(documents.id, id), eq(documents.orgId, user.orgId), eq(documents.ownerId, user.id))).limit(1))[0];
-  if (!row || (row.archivedAt !== null && !opts.archived)) throw new HttpError(404, "NOT_FOUND", "Document not found · 找不到该文档");
+  if (!row || row.purgedAt !== null || (row.archivedAt !== null && !opts.archived)) throw new HttpError(404, "NOT_FOUND", "Document not found · 找不到该文档");
   return row;
 }
 
@@ -30,6 +30,39 @@ export async function textbookList(env: Env, user: SessionUser): Promise<Textboo
     .where(and(eq(documents.orgId, user.orgId), eq(documents.ownerId, user.id), isNull(documents.archivedAt)))
     .orderBy(desc(documents.createdAt))
     .limit(100);
+}
+
+export interface LibraryRow {
+  id: string;
+  title: string;
+  filename: string;
+  pageCount: number;
+  pagesReceived: number;
+  /** Pages still without usable text: almost empty (not blank by design), or a must-fix kind still holding the pdf.js text. */
+  flaggedPages: number;
+  createdAt: number;
+  archivedAt: number | null;
+}
+
+/** 教材管理: the teacher's textbooks including archived ones (not those deleted for good), newest first. */
+export async function textbookLibrary(env: Env, user: SessionUser): Promise<LibraryRow[]> {
+  return db(env)
+    .select({
+      id: documents.id,
+      title: documents.title,
+      filename: documents.filename,
+      pageCount: documents.pageCount,
+      pagesReceived: documents.pagesReceived,
+      flaggedPages: sql<number>`(select count(*) from ${pages} where ${pages.documentId} = ${documents.id} and (
+        (${pages.kind} in (${sql.join(MUST_FIX_KINDS.map((k) => sql`${k}`), sql`, `)}) and ${pages.parser} = ${PDFJS_PARSER})
+        or (${pages.words} < ${MIN_PAGE_WORDS} and coalesce(${pages.kind}, '') <> 'blank')))`,
+      createdAt: documents.createdAt,
+      archivedAt: documents.archivedAt,
+    })
+    .from(documents)
+    .where(and(eq(documents.orgId, user.orgId), eq(documents.ownerId, user.id), isNull(documents.purgedAt)))
+    .orderBy(desc(documents.createdAt))
+    .limit(200);
 }
 
 /** Textbooks in the org that are not deleted, for the 后台 overview. */
