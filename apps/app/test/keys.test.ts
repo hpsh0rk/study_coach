@@ -48,7 +48,7 @@ describe("keys and reminders", () => {
       ai: { state: "stub" },
       vision: { state: "none" },
       external: { state: "on", mode: "agent", stub: true },
-      counts: { users: expect.any(Number), textbooks: expect.any(Number), lessons: expect.any(Number), parsedPagesToday: 0 },
+      counts: { users: expect.any(Number), textbooks: expect.any(Number), lessons: expect.any(Number), parsedPagesToday: 0, modelCallsToday: 0, modelCallsPerDay: 400 },
     });
     const { counts } = (await status()) as { counts: { users: number; textbooks: number } };
     expect(counts.users).toBeGreaterThanOrEqual(2);
