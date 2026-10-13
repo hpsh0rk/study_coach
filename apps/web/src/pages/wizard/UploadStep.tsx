@@ -1,15 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
-import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { buildChapterTree } from "@kj/pdf-structure";
-import { GlobalWorkerOptions, parsePdf } from "@kj/pdf-structure/browser";
-import { api, ApiError } from "../../api.ts";
-import { documentApi, type DocumentRow } from "../../lessonApi.ts";
+import { ApiError } from "../../api.ts";
+import { documentApi, type DocumentRow } from "../../textbook/api.ts";
+import { fileProblem, ingestPdf, MAX_MB } from "../../textbook/ingest.ts";
+import { parsePdf } from "../../textbook/pdf.ts";
 import { Stepper, StepIntro } from "./Stepper.tsx";
-
-GlobalWorkerOptions.workerSrc = workerUrl;
-
-const MAX_MB = 200;
 
 type Phase = { kind: "idle" } | { kind: "parsing"; done: number; total: number } | { kind: "uploading"; done: number; total: number } | { kind: "error"; message: string };
 
@@ -55,19 +50,10 @@ export function UploadStep() {
   }
 
   async function handle(file: File) {
-    if (!/\.pdf$/i.test(file.name) && file.type !== "application/pdf") return setPhase({ kind: "error", message: "请选择 PDF 文件 · Please choose a PDF file" });
-    if (file.size > MAX_MB * 1024 * 1024) return setPhase({ kind: "error", message: `文件超过 ${MAX_MB} MB · File is larger than ${MAX_MB} MB` });
+    const problem = fileProblem(file);
+    if (problem) return setPhase({ kind: "error", message: problem });
     try {
-      setPhase({ kind: "parsing", done: 0, total: 1 });
-      const parsed = await parsePdf(await file.arrayBuffer(), file.name.replace(/\.pdf$/i, ""), { onProgress: (done, total) => setPhase({ kind: "parsing", done, total }) });
-      const chapters = buildChapterTree(parsed.toc, parsed.pageCount, parsed.pages);
-      const { id, pageBatch } = await api<{ id: string; pageBatch: number }>("/api/documents", {
-        body: { filename: file.name, title: parsed.title, sizeBytes: file.size, pageCount: parsed.pageCount, chapters },
-      });
-      for (let i = 0; i < parsed.pages.length; i += pageBatch) {
-        setPhase({ kind: "uploading", done: i, total: parsed.pages.length });
-        await api(`/api/documents/${id}/pages`, { body: { pages: parsed.pages.slice(i, i + pageBatch) } });
-      }
+      const id = await ingestPdf(file, { parse: (data, title, onProgress) => parsePdf(data, title, { onProgress }), create: documentApi.create, putPages: documentApi.putPages }, setPhase);
       nav(`/new/${id}`);
     } catch (err) {
       setPhase({ kind: "error", message: err instanceof ApiError ? err.message : `无法读取这个 PDF · Could not read this PDF (${(err as Error).message})` });

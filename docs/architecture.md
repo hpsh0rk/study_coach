@@ -34,7 +34,8 @@
 
 ```
 老师浏览器（React SPA，apps/web）
- ├─ pdf.js 解析目录、每页文本、印刷页码（getPageLabels）→ 分批上传（每批 40 页）
+ ├─ 教材摄取（src/textbook：ingest.ts 编排、pdf.ts 是唯一加载 pdf.js 的地方、api.ts 教材接口）：
+ │   pdf.js 解析目录、每页文本、印刷页码（getPageLabels）→ 建树 → 分批上传（每批 40 页）
  │   CMap 与标准字体随 SPA 发布在 /pdfjs/（中文 CID 字体的 PDF 没有它们就抽不出字）
  ├─ 向导：上传 → 章节（树 / 按书上页码输入，首尾页预览，字数估时与拆课提示）
  │        → 课堂设置 → 大纲（时间条、密度灯、未覆盖、术语表；规则与服务端同一份代码）
@@ -87,6 +88,7 @@ D1：orgs, users, sessions, login_attempts, ai_providers, ai_calls, audit_log,
 | `packages-never-import-apps` | `packages/*` 永不依赖 `apps/*` |
 | `server-code-is-dom-free` | `apps/app`、`ai`、`generation`、`pedagogy`、`schema`，以及 `templates`/`widgets`/`pdf-structure` 的核心入口，不得导入渲染入口、player、pdf.js、ECharts、KaTeX、React |
 | `model-calls-stay-on-the-server` | `apps/web`、`player` 不得导入 `ai`、`generation` |
+| `only-textbook-ingest-loads-pdfjs` | `apps/web` 里只有 `src/textbook/` 能导入 pdf.js 或 `pdf-structure/browser` |
 | `only-the-server-and-evals-orchestrate` | 其他 `packages/*` 不得导入 `generation`（只有 Worker 路由与 `tools/eval` 调用它） |
 | `product-code-never-imports-tools` | `apps/*`、`packages/*` 不得导入 `tools/*` |
 | `ai-layer-is-generic` | `ai` 只依赖 `schema`，不认识课、版式、教学规则 |
@@ -114,7 +116,7 @@ D1：orgs, users, sessions, login_attempts, ai_providers, ai_calls, audit_log,
 | `generation` | 源文本 + 参数 → 时间预算大纲；大纲 + 规格 → 单页内容；一页的复用键 | `draftOutline(ai, DraftInput) → {outline, warnings}`、`normalizeOutline`（含 `checkSourcePages`、`enforceCheckCadence`）、`rebalanceMinutes`、`writeSlide(ai, outline, specId, WriteInput) → {content, notes, sources, warnings, unverified}`、`slideKey(spec, {level, language})`、`sourceUnverified(spec)`、`workedSpecFor`、`stubOutline` / `stubSlide`、`problemsOf` / `truncateLists` / `clipToBudgets` / `sanitizeWidgets` / `applyGlossary`、`SlideInvalidError`、`PipelineOptions` / `DEFAULT_OPTIONS` / `optionsOf`、`OUTLINE_PROMPT_VERSION`、`SLIDE_PROMPT_VERSION`；`neutralizeSource`（源文本里的 `<` `>` 换成全角，学生教材里的文字关不掉 `<source>`）、`suspiciousContent`（网址、邮箱、可下载文件、像指令的文字） |
 | `player` | 放映壳：16:9 缩放、翻页、分步、全屏、黑屏、讲稿；双窗口同步 | `new Player(host, {slides, theme, showNotes, badge, onSourceClick, pageLabels, language, start, onChange, onBlank, onTally, onInk, onEscape})`（按键监听在 document 上，翻页器在任何焦点下都有效；投票人数框是文本输入，焦点在里面时 PageUp/PageDown/方向键照常翻页、不改数值，回车或停顿 1 秒后失焦）、`setBlank`、`setTally(index, counts)`、`setInk("pen"|"eraser"|null)`、`setStrokes(index, strokes)`、`renderThumb`；每次缩放、翻页、开关画笔后用 `fitSources` 让出处页码避开底部控制条（学生链接、投影、离线文件共用）；`InkLayer`（逻辑 1920×1080 坐标的笔画，按页保存）；`presenterSync(lessonId, {onPosition, onBlank, onHello, onTally, onInk}) → {position, blank, tally, ink, close}`（`ink` 发送一页的全部笔画，收到时校验颜色和坐标）、`answerKey(content)`；纯函数 `keyAction` / `nextPosition` / `prevPosition` |
 | `apps/app` | HTTP 边界 + 用例编排 + 持久化 | 路由见 §6（复用在 `routes/reuse.ts`；路由之间不互相导入）；`store.ts`（快照、复用、聚合列表、导出、`lessonView`、`lessonsUsing`、分享视图与 `shareToken`）；`textbook/`（教材模块：`index.ts` 读接口 `ownedTextbook`、`textbookList`、`chapterTree`、`pageMeta`、`pageLabels`、`page`、`pageTexts`、`selectionPages`、`scopeStats(…, {sourceBudget})`、`chapterRuns`、`resolveScope`；`write.ts` 写接口 `createTextbook`、`putPages`、`pastePages`、`setTextbookArchived`；`tables.ts`）；`db/accounts.ts`（`orgs`、`users`）；`db/index.ts`（`db(env)`）；`auth/*`（PBKDF2 + 会话 + 登录限速） |
-| `apps/web` | 老师界面 | 登录 / 改密 / 后台 / 我的课（单元成组、“复制到新学期”、删除与撤销）/ 五步向导（章节步显示内容量条，内容偏多时可预览并“整单元规划”）/ 槽位编辑器（按版式生成表单：实时字数、中文报错、图示无需 JSON、A/B/C/D 选答案、先投票开关、实验结果、排序 / 配对卡片、实时预览）/ 放映 / 演讲者窗口 / 离线导出（`src/offline/*`：上课用 + 学生版）/ 分享；后台的“最近操作”（审计日志最新 20 条）；`/dev/gallery`、`/dev/render`、`/dev/player` 只在 `vite dev` 和 `KJ_DEV_PAGES=1` 构建里（E2E、评测用），生产包不含 |
+| `apps/web` | 老师界面 | `src/textbook/`（教材摄取：`ingestPdf(file, {parse, create, putPages}, onProgress)`、`fileProblem`、`documentApi`；`apps/web/test/ingest.test.ts`）/ 登录 / 改密 / 后台 / 我的课（单元成组、“复制到新学期”、删除与撤销）/ 五步向导（章节步显示内容量条，内容偏多时可预览并“整单元规划”）/ 槽位编辑器（按版式生成表单：实时字数、中文报错、图示无需 JSON、A/B/C/D 选答案、先投票开关、实验结果、排序 / 配对卡片、实时预览）/ 放映 / 演讲者窗口 / 离线导出（`src/offline/*`：上课用 + 学生版）/ 分享；后台的“最近操作”（审计日志最新 20 条）；`/dev/gallery`、`/dev/render`、`/dev/player` 只在 `vite dev` 和 `KJ_DEV_PAGES=1` 构建里（E2E、评测用），生产包不含 |
 | `pptx` | 兼容导出：课件 → 可编辑 .pptx（HTML 课件仍是主格式） | `planSlide(slide, {theme, pageLabels}) → {items, notes, degraded}`（9 个版式 → 原生文本框 / 形状 / 表格 / 图表，逻辑 1920×1080 坐标，56px = 28pt；`fitFont` 按 56→48px 降档）、`exportPptx(deck, {chartImage?}) → {data, filename, degraded, overflow}`、`PPTX_FONT`（PingFang SC，macOS 自带，不嵌入字体）、`texToText`；`scripts/render-check.ts`（LibreOffice headless：自增高探针比对每个文本框的实际高度、PDF 每个词都在页内、导出 PNG） |
 | `tools/eval` | 消融评测（不属于产品） | `pnpm eval:run`（manifest 场景 → 流水线 → 每场景 × 次数一个 deck JSON）、`pnpm eval:render`（Chromium 渲染，写回 `slides[].overflow`）；`pnpm eval:run --noise` / `pnpm eval:faults`（注入故障，量每道防线的拦截率与干净数据上的误报率）；`AblationFlags = PipelineOptions + {scope, outline, renderMode, autoConfirm}` |
 
