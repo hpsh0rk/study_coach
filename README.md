@@ -2,7 +2,7 @@
 
 老师上传教材 PDF，选章节，设课时，确认按时间分配好的大纲，得到一套可以编辑、放映、分享给学生的 HTML 课件。架构和决策见 [`docs/architecture.md`](docs/architecture.md)。
 
-技术栈：pnpm monorepo · Cloudflare Workers + Hono · D1（Drizzle）· 静态资源 · React 19 + Vite。PDF 在浏览器里用 pdf.js 解析，只上传页面文字。全部可以用 `wrangler dev` 在本机运行，符合 Workers 免费版的限制。
+技术栈：pnpm monorepo · Cloudflare Workers + Hono · D1（Drizzle）· 静态资源 · React 19 + Vite。PDF 在浏览器里用 pdf.js 解析，只上传页面文字。目前部署在本机（`wrangler dev`），代码保持和 Cloudflare Workers 兼容。
 
 ## 本地运行（从零开始）
 
@@ -13,16 +13,27 @@ git clone https://github.com/hpsh0rk/study_coach.git
 cd study_coach
 corepack pnpm install          # 安装依赖
 corepack pnpm setup:local      # 本地 D1 建表（迁移）+ 创建管理员账号 admin / Admin12345
-corepack pnpm dev              # 构建前端并启动，打开 http://127.0.0.1:8787
+corepack pnpm start:local      # 正式使用：生产设置启动，打开 http://127.0.0.1:8787
 ```
+
+`pnpm start:local` 和开发用的 `pnpm dev` 每次启动都会：构建前端、执行还没执行的数据库迁移（拉取新版本后不用另外操作）、启动服务。两者用同一份本地数据，区别是：
+
+| | `pnpm start:local`（正式使用） | `pnpm dev`（开发） |
+|---|---|---|
+| 环境 | `ENVIRONMENT=production` | `development` |
+| 没配置 AI 模型时 | 生成时提示“请在后台配置模型”，不会假装是 AI | 用演示模式（stub）跑通流程 |
+| 演示模式 | 只有明确加 `--stub` 才打开：`pnpm start:local --stub` | 默认打开 |
+
 
 - 运行过 `corepack enable` 之后可以省掉前面的 `corepack`，直接写 `pnpm …`；下文都这样简写。
 - 如果配置了 npm 镜像，安装时某些包（例如 `rolldown`）返回 404，说明镜像还没同步到，改用官方源：`corepack pnpm install --registry=https://registry.npmjs.org/`。
 - 默认管理员：用户名 `admin`，密码 `Admin12345`。**首次登录后必须改密码**，之后用新密码登录。
 - `pnpm setup:local` 可以重复运行：已经有 `admin` 账号时不会改它的密码。
 - 管理员密码怎么交给你：`pnpm admin:create` 直接写数据库，并在终端打印一次用户名和密码，不发邮件、不存明文，只有数据库里的哈希。这个密码只用于第一次登录，登录后会立即要求改密码。本地默认是 `Admin12345`，也可以用 `--password '你的密码'` 指定。加 `--remote`（线上 D1）时不用默认密码，而是生成随机的一次性密码打印出来，请当场记下并转交管理员。忘了密码时再运行 `pnpm admin:create --username admin` 就会重置，同样要求首次登录改密码；给老师的账号由管理员在后台创建，初始密码只在创建时显示一次。
-- 本地数据（D1、会话）在 `apps/app/.wrangler/`，删掉这个目录再运行 `pnpm setup:local` 就是全新的库。
-- 本地密钥可选：把 `apps/app/.dev.vars.example` 复制为 `apps/app/.dev.vars`。不复制也能运行，本地会用仅供开发的默认密钥加密后台填写的 Key。
+- 本地数据（D1、会话）在 `apps/app/.wrangler/state/`，删掉 `apps/app/.wrangler/` 再运行 `pnpm setup:local` 就是全新的库。
+- 本地密钥：第一次启动时自动生成随机的 `AI_CONFIG_KEY`，保存在 `apps/app/.wrangler/kj-local.env`（只有你能读，不进 git），用来加密后台填写的 Key 和签名分享链接。**不要单独删它**：删了以后后台的 Key 要重新填，已发出的分享链接失效。备份时把整个 `apps/app/.wrangler/` 一起备份。
+- 从旧版本升级：以前本地用的是公开的开发默认密钥。第一次用新版本启动时，会把已保存的 Key 自动改用新密钥加密（终端会打印“Re-sealed … key(s)”），Key 不用重填；旧的分享链接会失效，需要重新生成。
+- 直接运行 `wrangler dev` 是生产设置但没有密钥：用到密钥时会报错提示，不会悄悄用默认密钥。请用上面两个命令启动。
 - 只改前端时可以运行 `pnpm --filter @kj/web dev`（Vite 在 :5173，接口代理到 :8787，需要同时开着 `pnpm dev`）。
 
 ### 没有任何 Key 时（演示模式）
@@ -31,7 +42,7 @@ corepack pnpm dev              # 构建前端并启动，打开 http://127.0.0.1
 
 - 大纲和幻灯片由内置模板生成（确定性的 stub，**不是 AI**）。每个页面顶部都有黄色横幅“演示模式：还没有配置 AI 模型……不是 AI 写的”，后台“AI 模型”页也会提示。
 - 扫描页、画成图形的公式等浏览器读不到的页面，选章节时会标出来，老师可以粘贴文字补上。
-- 这只在本地开发时打开（`apps/app/wrangler.jsonc` 里的 `AI_ALLOW_STUB=true`）；生产环境应设为 `false`。
+- 这只在 `pnpm dev` 或 `pnpm start:local --stub` 时打开（`AI_ALLOW_STUB=true`）；`apps/app/wrangler.jsonc` 里默认是生产值 `false`。
 
 ### 配置真实的 Key
 

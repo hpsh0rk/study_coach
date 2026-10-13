@@ -21,12 +21,12 @@ export interface SessionUser {
 
 export type AppBindings = { Bindings: Env; Variables: { user: SessionUser } };
 
-const DEV_FALLBACK = "kj-local-development-only";
+const TEST_FALLBACK = "kj-vitest-only";
 
-/** Local dev works without .dev.vars; anything else must set real secrets. */
+/** Only the vitest pool may run without the secret; local runs get a generated one from scripts/local.mjs. */
 export function secret(env: Env, name: "AI_CONFIG_KEY"): string {
   const value = env[name];
   if (value) return value;
-  if (env.ENVIRONMENT === "development" || env.ENVIRONMENT === "test") return `${DEV_FALLBACK}:${name}`;
-  throw new Error(`${name} secret is not set (wrangler secret put ${name})`);
+  if (env.ENVIRONMENT === "test") return `${TEST_FALLBACK}:${name}`;
+  throw new Error(`${name} secret is not set: start locally with pnpm dev / pnpm start:local, or run wrangler secret put ${name}`);
 }

@@ -56,7 +56,7 @@ D1：orgs, users, sessions, login_attempts, ai_providers, ai_calls, audit_log,
 静态资源：SPA、字体（Arimo、Noto Sans SC）、KaTeX、内置实验 /sims/*.html
 ```
 
-本地运行（README“本地运行”）：`corepack pnpm install` → `pnpm setup:local`（本地 D1 迁移 + `scripts/create-admin.mjs --keep`：本地默认管理员 admin / Admin12345、首次登录必须改密码，已有账号不动；`--remote` 总是随机密码）→ `pnpm dev`（:8787）。没有任何 Key 时 `AI_ALLOW_STUB=true` 用确定性 stub 跑通全流程，每页黄色“演示模式”横幅标明不是 AI。
+本地运行（README“本地运行”）：`corepack pnpm install` → `pnpm setup:local`（本地 D1 迁移 + `scripts/create-admin.mjs --keep`：本地默认管理员 admin / Admin12345、首次登录必须改密码，已有账号不动；`--remote` 总是随机密码）→ `pnpm start:local`（正式使用，生产设置）或 `pnpm dev`（开发），都在 :8787。两者都由 `scripts/local.mjs` 启动：构建前端、执行未执行的本地迁移、第一次运行时生成随机 `AI_CONFIG_KEY` 存到 `apps/app/.wrangler/kj-local.env`（和数据放在一起，权限 600）并把旧版用公开开发密钥加密的 Key 重新加密，然后 `wrangler dev --env-file` 读入密钥（因此不会读到零散的 `.dev.vars`）。`wrangler.jsonc` 的 vars 是生产值（`ENVIRONMENT=production`、`AI_ALLOW_STUB=false`）；`pnpm dev` 用 `--var` 改成 development 并打开 stub，`start:local` 只有加 `--stub` 才打开。`secret()` 只在 vitest（`ENVIRONMENT=test`）里有后备值，别的情况缺密钥就报错，开发默认密钥不可能被意外用上。E2E（`scripts/e2e-server.sh`）每次用随机密钥。没有任何 Key 且打开 stub 时用确定性 stub 跑通全流程，每页黄色“演示模式”横幅标明不是 AI。
 
 关闭标签页会中断逐页生成；重新打开后“继续生成”只补缺失的页。需要后台生成时再引入 Workflows，`writeSlide()` 原样作为 step 主体。
 

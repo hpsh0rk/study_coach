@@ -1,3 +1,0 @@
-# Copy to .dev.vars for local secrets (never commit .dev.vars).
-# Encrypts AI provider API keys stored in D1. Any long random string.
-AI_CONFIG_KEY=change-me-to-a-long-random-string

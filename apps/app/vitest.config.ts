@@ -8,7 +8,7 @@ export default defineConfig(async () => {
       cloudflareTest({
         main: "./src/index.ts",
         wrangler: { configPath: "./wrangler.jsonc" },
-        miniflare: { bindings: { ENVIRONMENT: "test", PARSER_MINERU_MODE: "stub", TEST_MIGRATIONS: migrations } },
+        miniflare: { bindings: { ENVIRONMENT: "test", AI_ALLOW_STUB: "true", PARSER_MINERU_MODE: "stub", TEST_MIGRATIONS: migrations } },
       }),
     ],
     test: { setupFiles: ["./test/apply-migrations.ts"], testTimeout: 30_000 },
