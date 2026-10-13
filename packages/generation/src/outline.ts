@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { jsonSchemaOf, type AiLayer } from "@kj/ai";
-import { formatPages, sourceForRanges } from "@kj/pdf-structure";
+import { formatPages, sourceForRanges } from "@kj/textbook";
 import { type GlossaryEntry, Outline, PageType, SlideSpec, VisualKind, type LessonParams, type PageText } from "@kj/schema";
 import { checkOutline, OUTLINE_SOURCE_CHARS, outlineTiming, PAGE_TYPES, planBudget, type Violation } from "@kj/pedagogy";
 import { layoutForPageType, LAYOUTS, PAGE_TYPE_VISUALS } from "@kj/templates";

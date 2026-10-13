@@ -15,7 +15,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { createAiLayer, PROVIDER_PRESETS, type AiCallRecord, type AiConfig, type ProviderKind } from "@kj/ai";
 import { draftOutline, OUTLINE_PROMPT_VERSION, OUTLINE_SOURCE_CHARS, SLIDE_PROMPT_VERSION, sourcePagesFor, stubOutline, stubSlide, workedSpecFor, writeSlide, type DraftInput, type PlannerSection } from "@kj/generation";
-import { pagesInRanges, sourceForRanges } from "@kj/pdf-structure";
+import { pagesInRanges, sourceForRanges } from "@kj/textbook";
 import { LessonParams, Outline, type PageRange, type PageText, type SlideSpec } from "@kj/schema";
 import { layoutForPageType } from "@kj/templates";
 import { parseArgs, readJson, writeJson } from "./common.ts";

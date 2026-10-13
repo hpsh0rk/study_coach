@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { visionParserId } from "@kj/pdf-structure";
+import { visionParserId } from "@kj/textbook";
 import { e, loggedIn, seedUser, type Client } from "./client.ts";
 
 const TEXT = "Waves carry energy from one place to another without moving matter. The wave speed equals frequency times wavelength.";

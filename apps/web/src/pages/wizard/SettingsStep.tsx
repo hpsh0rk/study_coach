@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import { useNavigate } from "react-router";
-import { countPages } from "@kj/pdf-structure";
+import { countPages } from "@kj/textbook";
 import { LANGUAGE_LABEL, LESSON_TYPE_LABEL, LEVEL_LABEL, planBudget, scopeAdvice, type ScopeAdvice } from "@kj/pedagogy";
 import type { LessonParams, ThemeId } from "@kj/schema";
 import { THEMES } from "@kj/templates/render";

@@ -1,5 +1,5 @@
 import { and, eq, inArray, ne } from "drizzle-orm";
-import { isMustFix, PDFJS_PARSER, pageFacts, REFINE_KINDS, type PageFacts } from "@kj/pdf-structure";
+import { isMustFix, PDFJS_PARSER, pageFacts, REFINE_KINDS, type PageFacts } from "@kj/textbook";
 import { newId } from "@kj/schema";
 import { db } from "../../db/index.ts";
 import type { Env, SessionUser } from "../../env.ts";

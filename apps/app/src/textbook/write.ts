@@ -3,7 +3,7 @@
  * upserts pages, and a paste only fills pages that have no text.
  */
 import { and, asc, between, count, eq, isNull, sql } from "drizzle-orm";
-import { distributeText, needsText, PASTE_PARSER, PDFJS_PARSER, pageFacts, type PageFacts } from "@kj/pdf-structure";
+import { distributeText, needsText, PASTE_PARSER, PDFJS_PARSER, pageFacts, type PageFacts } from "@kj/textbook";
 import { newId, type ChapterNode, type PageText } from "@kj/schema";
 import { db } from "../db/index.ts";
 import { auditLog } from "../db/schema.ts";

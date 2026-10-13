@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
-import type { PageFlag } from "@kj/pdf-structure";
+import type { PageFlag } from "@kj/textbook";
 import type { PageKind } from "@kj/schema";
 import { now, orgs, users } from "../db/accounts.ts";
 
@@ -39,13 +39,13 @@ export const pages = sqliteTable(
     /** Printed page label when it differs from the page index. */
     label: text("label"),
     words: integer("words").notNull().default(0),
-    /** Facts about the stored text (pdf-structure `pageFacts`), so reads that only need sizes never load the text. */
+    /** Facts about the stored text (textbook `pageFacts`), so reads that only need sizes never load the text. */
     chars: integer("chars").notNull().default(0),
-    /** Where the text came from: `pdfjs/1` or `paste` (see pdf-structure PDFJS_PARSER / PASTE_PARSER). */
+    /** Where the text came from: `pdfjs/1` or `paste` (see textbook PDFJS_PARSER / PASTE_PARSER). */
     parser: text("parser").notNull().default("pdfjs/1"),
     /** Kinds of suspicious text on the page (`instruction`, `link`, `email`, `file`); `[]` for pages stored before migration 0007. */
     flags: text("flags", { mode: "json" }).$type<PageFlag[]>().notNull().default([]),
-    /** What the browser's probe saw on the PDF page (pdf-structure `classifyPage`); null for pages stored before migration 0008. Stays when the text is later pasted: `parser` says whether it was fixed. */
+    /** What the browser's probe saw on the PDF page (textbook `classifyPage`); null for pages stored before migration 0008. Stays when the text is later pasted: `parser` says whether it was fixed. */
     kind: text("kind").$type<PageKind>(),
   },
   (t) => [primaryKey({ columns: [t.documentId, t.no] })],

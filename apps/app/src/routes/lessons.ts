@@ -2,7 +2,7 @@ import { and, eq, isNull, lt, or } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { checkSourcePages, draftOutline, problemsOf, slideKey, SlideInvalidError, SpecNotFoundError, workedSpecFor, writeSlide, type PlannerSection } from "@kj/generation";
-import { leafSections } from "@kj/pdf-structure";
+import { leafSections } from "@kj/textbook";
 import { outlineTiming } from "@kj/pedagogy";
 import { DEFAULT_PARAMS, LessonParams, newId, Outline, PageRange, sha256Hex, SlideContent, ThemeId, type ChapterNode, type LessonScope } from "@kj/schema";
 import { layoutForPageType, SLOT_SCHEMAS } from "@kj/templates";

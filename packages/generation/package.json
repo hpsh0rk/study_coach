@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@kj/ai": "workspace:*",
-    "@kj/pdf-structure": "workspace:*",
+    "@kj/textbook": "workspace:*",
     "@kj/pedagogy": "workspace:*",
     "@kj/schema": "workspace:*",
     "@kj/templates": "workspace:*",

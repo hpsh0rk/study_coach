@@ -1,4 +1,4 @@
-import { MINERU_AGENT_PARSER, MINERU_PARSER, separatorText } from "@kj/pdf-structure";
+import { MINERU_AGENT_PARSER, MINERU_PARSER, separatorText } from "@kj/textbook";
 import { HttpError } from "../../http.ts";
 import recorded from "./mineru-recorded.json";
 
