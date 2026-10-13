@@ -48,7 +48,11 @@ describe("keys and reminders", () => {
       ai: { state: "stub" },
       vision: { state: "none" },
       external: { state: "on", mode: "agent", stub: true },
+      counts: { users: expect.any(Number), textbooks: expect.any(Number), lessons: expect.any(Number), parsedPagesToday: 0 },
     });
+    const { counts } = (await status()) as { counts: { users: number; textbooks: number } };
+    expect(counts.users).toBeGreaterThanOrEqual(2);
+    expect(counts.textbooks).toBeGreaterThanOrEqual(1);
     expect(await readers(id)).toEqual({ external: null, vision: expect.stringContaining("看图模型未配置：请联系管理员在后台“AI 模型”里填写看图模型") });
     expect((await teacher.req("GET", "/api/admin/status")).status).toBe(403);
 

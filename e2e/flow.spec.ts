@@ -946,6 +946,24 @@ test("单独的看图模型 (local mock): with no vision model on the text side,
  * A self-hosted MinerU 4 server (`mineru-kit api-server --api-key …`) on this machine: /v1/health, then /v1/tasks
  * with the raw sub-PDF, its status and its JSON result. Every content page comes back with the same Markdown.
  */
+test("后台概览: the overview tab comes first with counts and the setup status; other tabs only carry the demo-mode banner", async ({ page }) => {
+  await login(page);
+  await page.goto("/admin");
+  await expect(page.getByTestId("admin-tab-overview")).toHaveClass(/active/);
+  for (const id of ["users", "textbooks", "lessons", "parsed"]) await expect(page.getByTestId(`count-${id}`).locator(".stat-value")).toHaveText(/^\d+$/);
+  expect(Number(await page.getByTestId("count-users").locator(".stat-value").innerText())).toBeGreaterThanOrEqual(1);
+  await expect(page.getByTestId("setup-status").getByTestId("setup-ai")).toContainText("演示模式");
+  await shot(page, "39-admin-overview");
+  await page.getByTestId("admin-tab-users").click();
+  await expect(page.getByTestId("setup-status")).toHaveCount(0);
+  await expect(page.getByTestId("critical-banner")).toContainText("演示模式");
+  await page.getByTestId("admin-tab-parsing").click();
+  await expect(page.getByTestId("setup-status")).toHaveCount(0);
+  await page.getByTestId("critical-banner").getByRole("button", { name: "去填写" }).click();
+  await expect(page.getByTestId("add-model-form")).toBeVisible();
+  await expect(page.getByTestId("critical-banner")).toHaveCount(0);
+});
+
 /** A Messages-dialect gateway (POST /v1/messages, SSE) that only answers with the right Bearer key and x-source header. */
 async function mockMessagesGateway() {
   const asked: { url: string; auth?: string; source?: string; body: Record<string, unknown> }[] = [];
@@ -1077,6 +1095,8 @@ test("MinerU 自部署 (local mock server): unconfigured until the URL is saved,
     await expect(page.getByTestId("parsing-missing")).toContainText("自部署 MinerU 的地址");
     await expect(page.getByTestId("parsing-test")).toBeDisabled();
     await shot(page, "29-admin-selfhost-missing");
+    await expect(page.getByTestId("setup-status")).toHaveCount(0);
+    await page.getByTestId("admin-tab-overview").click();
     const setup = page.getByTestId("setup-status");
     await expect(setup.getByTestId("setup-ai")).toContainText("演示模式");
     await expect(setup.getByTestId("setup-vision")).toHaveAttribute("data-ok", "false");
@@ -1103,7 +1123,9 @@ test("MinerU 自部署 (local mock server): unconfigured until the URL is saved,
     await page.getByTestId("selfhost-save").click();
     await expect(page.getByTestId("parsing-state")).toHaveText(/已开启/);
     await expect(page.getByTestId("selfhost-url")).toHaveAttribute("placeholder", /^已保存：http:\/\/127\.…:\d+$/);
+    await page.getByTestId("admin-tab-overview").click();
     await expect(setup.getByTestId("setup-external")).toHaveAttribute("data-ok", "true");
+    await page.getByTestId("admin-tab-parsing").click();
     await page.getByTestId("parsing-test").click();
     await expect(page.getByTestId("parsing-error")).toContainText("API Key");
     await page.getByTestId("selfhost-key").fill(KEY);

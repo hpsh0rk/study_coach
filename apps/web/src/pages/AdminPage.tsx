@@ -36,7 +36,7 @@ interface AiView {
   recentCalls: { id: string; capability: string; providerId: string; model: string; status: string; latencyMs: number; inputTokens: number; outputTokens: number; createdAt: number; error: string | null }[];
 }
 
-type Tab = "users" | "ai" | "parsing";
+type Tab = "overview" | "users" | "ai" | "parsing";
 
 type Protocol = "openai" | "messages";
 interface Advanced {
@@ -133,14 +133,17 @@ function AdvancedEdit({ p, run, done }: { p: AiProviderRow; run: (fn: () => Prom
 }
 
 export function AdminPage() {
-  const [tab, setTab] = useState<Tab>("users");
+  const [tab, setTab] = useState<Tab>("overview");
   const [saved, bump] = useReducer((n: number) => n + 1, 0);
   return (
     <div className="stack">
       <div className="row between">
         <h1>后台管理 Admin</h1>
         <div className="tabs">
-          <button className={tab === "users" ? "active" : ""} onClick={() => setTab("users")}>
+          <button className={tab === "overview" ? "active" : ""} onClick={() => setTab("overview")} data-testid="admin-tab-overview">
+            概览 Overview
+          </button>
+          <button className={tab === "users" ? "active" : ""} onClick={() => setTab("users")} data-testid="admin-tab-users">
             白名单账号 Users
           </button>
           <button className={tab === "ai" ? "active" : ""} onClick={() => setTab("ai")} data-testid="admin-tab-ai">
@@ -151,8 +154,14 @@ export function AdminPage() {
           </button>
         </div>
       </div>
-      <SetupStatus saved={saved} open={setTab} />
-      {tab === "users" ? <UsersPanel /> : tab === "ai" ? <AiPanel onSaved={bump} /> : <ParsingPanel onSaved={bump} />}
+      {tab === "overview" ? (
+        <Overview saved={saved} open={setTab} />
+      ) : (
+        <>
+          {tab !== "ai" && <CriticalBanner saved={saved} open={setTab} />}
+          {tab === "users" ? <UsersPanel /> : tab === "ai" ? <AiPanel onSaved={bump} /> : <ParsingPanel onSaved={bump} />}
+        </>
+      )}
     </div>
   );
 }
@@ -161,6 +170,54 @@ interface SetupView {
   ai: { state: "live"; provider: string; model: string } | { state: "stub" | "off" };
   vision: { state: "on" | "paid_off"; provider: string; model: string; separate: boolean } | { state: "none" };
   external: ({ state: "on" } | { state: "off" } | { state: "unconfigured"; missing: "token" | "url" }) & { mode: "agent" | "token" | "selfhost"; stub: boolean };
+  counts: { users: number; textbooks: number; lessons: number; parsedPagesToday: number };
+}
+
+function useSetupView(saved: number): SetupView | null {
+  const [view, setView] = useState<SetupView | null>(null);
+  useEffect(() => {
+    void api<SetupView>("/api/admin/status").then(setView, () => undefined);
+  }, [saved]);
+  return view;
+}
+
+/** The default tab: a few counts and what each key-backed feature does now. */
+function Overview({ saved, open }: { saved: number; open: (tab: Tab) => void }) {
+  const view = useSetupView(saved);
+  if (!view) return <p className="muted">Loading…</p>;
+  const counts = [
+    { id: "users", label: "账号 Accounts", value: view.counts.users },
+    { id: "textbooks", label: "教材 Textbooks", value: view.counts.textbooks },
+    { id: "lessons", label: "课 Lessons", value: view.counts.lessons },
+    { id: "parsed", label: "今天外部解析 Pages parsed today", value: view.counts.parsedPagesToday },
+  ];
+  return (
+    <>
+      <div className="stat-grid" data-testid="admin-counts">
+        {counts.map((c) => (
+          <div key={c.id} className="card stat" data-testid={`count-${c.id}`}>
+            <div className="stat-value">{c.value}</div>
+            <div className="muted small">{c.label}</div>
+          </div>
+        ))}
+      </div>
+      <SetupStatus view={view} open={open} />
+    </>
+  );
+}
+
+/** Outside the overview, only a missing AI model is worth a line: without it lessons are written from templates or not at all. */
+function CriticalBanner({ saved, open }: { saved: number; open: (tab: Tab) => void }) {
+  const view = useSetupView(saved);
+  if (!view || view.ai.state === "live") return null;
+  return (
+    <div className="alert warn row between" data-testid="critical-banner">
+      <span>{view.ai.state === "stub" ? "还没有配置 AI 模型：现在是演示模式，大纲和幻灯片由内置模板生成。" : "还没有配置 AI 模型：老师现在无法生成大纲和幻灯片。"}</span>
+      <button className="btn small" onClick={() => open("ai")}>
+        去填写
+      </button>
+    </div>
+  );
 }
 
 const MODE_LABEL = { agent: "MinerU 免费轻量接口", token: "MinerU 精准接口", selfhost: "学校自部署的 MinerU" } as const;
@@ -199,12 +256,7 @@ function setupRows(v: SetupView): { id: string; title: string; ok: boolean; badg
   ];
 }
 
-function SetupStatus({ saved, open }: { saved: number; open: (tab: Tab) => void }) {
-  const [view, setView] = useState<SetupView | null>(null);
-  useEffect(() => {
-    void api<SetupView>("/api/admin/status").then(setView, () => undefined);
-  }, [saved]);
-  if (!view) return null;
+function SetupStatus({ view, open }: { view: SetupView; open: (tab: Tab) => void }) {
   const rows = setupRows(view);
   return (
     <div className="card setup-status" data-testid="setup-status">

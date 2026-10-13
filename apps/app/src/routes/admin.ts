@@ -1,15 +1,16 @@
-import { and, desc, eq, ne } from "drizzle-orm";
+import { and, count, desc, eq, isNull, ne } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { maskSecret, openSecret, PROVIDER_PRESETS, ProviderKind, ProviderProtocol, sealSecret, testProvider, testVision } from "@kj/ai";
 import { newId } from "@kj/schema";
-import { aiCalls, aiProviders, auditLog, users } from "../db/schema.ts";
+import { aiCalls, aiProviders, auditLog, lessons, users } from "../db/schema.ts";
 import { secret, type AppBindings, type Env } from "../env.ts";
 import { HttpError, parseJson } from "../http.ts";
 import { generatePassword, hashPassword, passwordProblem } from "../auth/password.ts";
 import { destroyUserSessions, requireAdmin, requireUser } from "../auth/session.ts";
 import { db } from "../db/index.ts";
 import { providerConfigOf, visionModelOf } from "../ai.ts";
+import { textbookCount } from "../textbook/index.ts";
 import {
   effectiveMode,
   externalState,
@@ -128,15 +129,19 @@ export const adminRoutes = new Hono<AppBindings>()
     return c.json({ ok: true });
   })
 
-  /** "配置状态": what each key-backed feature does now and what it still lacks. Names and model ids only, no secret or URL. */
+  /** "概览": what each key-backed feature does now and what it still lacks, plus a few counts. Names and model ids only, no secret or URL. */
   .get("/status", async (c) => {
     const orgId = c.get("user").orgId;
-    const [providers, settings] = await Promise.all([
+    const [providers, settings, userCount, lessonCount, textbooks, usage] = await Promise.all([
       db(c.env)
         .select({ purpose: aiProviders.purpose, name: aiProviders.name, model: aiProviders.model, visionModel: aiProviders.visionModel })
         .from(aiProviders)
         .where(and(eq(aiProviders.orgId, orgId), eq(aiProviders.enabled, true), ne(aiProviders.model, ""))),
       parserSettingsOf(c.env, orgId),
+      db(c.env).select({ n: count() }).from(users).where(and(eq(users.orgId, orgId), isNull(users.disabledAt))),
+      db(c.env).select({ n: count() }).from(lessons).where(and(eq(lessons.orgId, orgId), isNull(lessons.archivedAt))),
+      textbookCount(c.env, orgId),
+      parseUsageToday(c.env, orgId),
     ]);
     const text = providers.find((p) => p.purpose === "text");
     const vision = providers.find((p) => p.purpose === "vision");
@@ -146,6 +151,7 @@ export const adminRoutes = new Hono<AppBindings>()
       ai: text ? { state: "live", provider: text.name, model: text.model } : { state: c.env.AI_ALLOW_STUB === "true" ? "stub" : "off" },
       vision: visionModel ? { state: visionPaidOff ? "paid_off" : "on", provider: (vision ?? text)!.name, model: visionModel, separate: !!vision } : { state: "none" },
       external: { ...externalState(c.env, settings), mode: settings.mineruMode, stub: effectiveMode(c.env, settings) === "stub" },
+      counts: { users: userCount[0]?.n ?? 0, textbooks, lessons: lessonCount[0]?.n ?? 0, parsedPagesToday: usage.org },
     });
   })
 
