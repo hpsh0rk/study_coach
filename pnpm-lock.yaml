@@ -47,9 +47,6 @@ importers:
       '@kj/generation':
         specifier: workspace:*
         version: link:../../packages/generation
-      '@kj/pdf-structure':
-        specifier: workspace:*
-        version: link:../../packages/pdf-structure
       '@kj/pedagogy':
         specifier: workspace:*
         version: link:../../packages/pedagogy
@@ -59,6 +56,9 @@ importers:
       '@kj/templates':
         specifier: workspace:*
         version: link:../../packages/templates
+      '@kj/textbook':
+        specifier: workspace:*
+        version: link:../../packages/textbook
       drizzle-orm:
         specifier: ^0.45.0
         version: 0.45.4(@cloudflare/workers-types@5.20261012.1)
@@ -93,9 +93,6 @@ importers:
       '@fontsource/noto-sans-sc':
         specifier: ^5.2.0
         version: 5.3.1
-      '@kj/pdf-structure':
-        specifier: workspace:*
-        version: link:../../packages/pdf-structure
       '@kj/pedagogy':
         specifier: workspace:*
         version: link:../../packages/pedagogy
@@ -111,6 +108,9 @@ importers:
       '@kj/templates':
         specifier: workspace:*
         version: link:../../packages/templates
+      '@kj/textbook':
+        specifier: workspace:*
+        version: link:../../packages/textbook
       '@kj/widgets':
         specifier: workspace:*
         version: link:../../packages/widgets
@@ -170,9 +170,6 @@ importers:
       '@kj/ai':
         specifier: workspace:*
         version: link:../ai
-      '@kj/pdf-structure':
-        specifier: workspace:*
-        version: link:../pdf-structure
       '@kj/pedagogy':
         specifier: workspace:*
         version: link:../pedagogy
@@ -182,25 +179,15 @@ importers:
       '@kj/templates':
         specifier: workspace:*
         version: link:../templates
+      '@kj/textbook':
+        specifier: workspace:*
+        version: link:../textbook
       '@kj/widgets':
         specifier: workspace:*
         version: link:../widgets
       zod:
         specifier: ^4.4.3
         version: 4.6.6
-    devDependencies:
-      vitest:
-        specifier: ~4.1.11
-        version: 4.1.11(@types/node@26.6.5)(happy-dom@20.14.6)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(tsx@4.23.15))
-
-  packages/pdf-structure:
-    dependencies:
-      '@kj/schema':
-        specifier: workspace:*
-        version: link:../schema
-      pdfjs-dist:
-        specifier: ^6.4.299
-        version: 6.4.299
     devDependencies:
       vitest:
         specifier: ~4.1.11
@@ -283,6 +270,19 @@ importers:
         specifier: ~4.1.11
         version: 4.1.11(@types/node@26.6.5)(happy-dom@20.14.6)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(tsx@4.23.15))
 
+  packages/textbook:
+    dependencies:
+      '@kj/schema':
+        specifier: workspace:*
+        version: link:../schema
+      pdfjs-dist:
+        specifier: ^6.4.299
+        version: 6.4.299
+    devDependencies:
+      vitest:
+        specifier: ~4.1.11
+        version: 4.1.11(@types/node@26.6.5)(happy-dom@20.14.6)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(tsx@4.23.15))
+
   packages/widgets:
     dependencies:
       '@kj/schema':
@@ -307,9 +307,6 @@ importers:
       '@kj/generation':
         specifier: workspace:*
         version: link:../../packages/generation
-      '@kj/pdf-structure':
-        specifier: workspace:*
-        version: link:../../packages/pdf-structure
       '@kj/pedagogy':
         specifier: workspace:*
         version: link:../../packages/pedagogy
@@ -319,6 +316,9 @@ importers:
       '@kj/templates':
         specifier: workspace:*
         version: link:../../packages/templates
+      '@kj/textbook':
+        specifier: workspace:*
+        version: link:../../packages/textbook
       '@kj/widgets':
         specifier: workspace:*
         version: link:../../packages/widgets

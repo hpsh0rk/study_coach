@@ -16,7 +16,7 @@ export const TocEntry: z.ZodType<TocEntry> = z.lazy(() =>
 );
 
 /**
- * What a page needs from a parser, judged from cheap pdf.js signals (pdf-structure `classifyPage`).
+ * What a page needs from a parser, judged from cheap pdf.js signals (textbook `classifyPage`).
  * `scanned`, `garbled` and `formula-lost` are must-fix: the text layer misses or mangles content.
  * `formula-text` and `table` read fine but a better parser could keep their structure.
  */

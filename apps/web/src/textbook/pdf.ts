@@ -1,5 +1,5 @@
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { GlobalWorkerOptions, pageRenderer, parsePdf } from "@kj/pdf-structure/browser";
+import { GlobalWorkerOptions, pageRenderer, parsePdf } from "@kj/textbook/browser";
 
 GlobalWorkerOptions.workerSrc = workerUrl;
 

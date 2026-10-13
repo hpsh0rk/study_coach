@@ -1,5 +1,5 @@
 import type { ChapterNode, PageKind, PageRange, PageText } from "@kj/schema";
-import type { PageFlag } from "@kj/pdf-structure";
+import type { PageFlag } from "@kj/textbook";
 import { api } from "../api.ts";
 
 export interface DocumentRow {

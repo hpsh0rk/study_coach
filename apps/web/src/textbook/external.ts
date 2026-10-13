@@ -1,5 +1,5 @@
 import type { PDFDocument } from "pdf-lib";
-import { separatorText, splitSeparated } from "@kj/pdf-structure";
+import { separatorText, splitSeparated } from "@kj/textbook";
 import type { PageKind } from "@kj/schema";
 import { ApiError } from "../api.ts";
 import type { ExternalParserInfo, PastedPage } from "./api.ts";

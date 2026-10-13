@@ -18,7 +18,7 @@ import {
   sourceCut,
   subtreeIds,
   type PageFlag,
-} from "@kj/pdf-structure";
+} from "@kj/textbook";
 import { OUTLINE_SOURCE_CHARS, scopeAdvice } from "@kj/pedagogy";
 import type { ChapterNode, PageKind, PageRange } from "@kj/schema";
 import { ApiError } from "../../api.ts";

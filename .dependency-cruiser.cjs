@@ -1,5 +1,5 @@
 /** Module boundaries for the core slice (docs/architecture.md). Run with `pnpm lint:deps`. */
-const BROWSER_ONLY = "^(packages/(templates|widgets)/src/render|packages/player|packages/pdf-structure/src/browser\\.ts|apps/web)|node_modules/(react|react-dom|react-router|echarts|zrender|katex|pdfjs-dist)/";
+const BROWSER_ONLY = "^(packages/(templates|widgets)/src/render|packages/player|packages/textbook/src/browser\\.ts|apps/web)|node_modules/(react|react-dom|react-router|echarts|zrender|katex|pdfjs-dist)/";
 const GENERATION = "^packages/generation/";
 
 module.exports = {
@@ -30,7 +30,7 @@ module.exports = {
       name: "server-code-is-dom-free",
       comment: "The Worker, model callers and rules must not pull in DOM renderers, the player, pdf.js or React.",
       severity: "error",
-      from: { path: "^(apps/app|packages/(ai|generation|pedagogy|schema)|packages/(templates|widgets|pdf-structure)/src/(?!render|browser))" },
+      from: { path: "^(apps/app|packages/(ai|generation|pedagogy|schema)|packages/(templates|widgets|textbook)/src/(?!render|browser))" },
       to: { path: BROWSER_ONLY },
     },
     {
@@ -66,14 +66,14 @@ module.exports = {
       comment: "packages/pptx maps slide content to PPTX objects: schema, template budgets and widget data only — no app, DOM renderers, player or model calls.",
       severity: "error",
       from: { path: "^packages/pptx/" },
-      to: { path: ["^packages/(ai|generation|player|pedagogy|pdf-structure)/", BROWSER_ONLY] },
+      to: { path: ["^packages/(ai|generation|player|pedagogy|textbook)/", BROWSER_ONLY] },
     },
     {
       name: "textbook-core-is-a-low-layer",
       comment: "The textbook core (chapter tree, ranges, labels, source text) depends on @kj/schema only: it knows no lessons, rules, templates or models.",
       severity: "error",
-      from: { path: "^packages/pdf-structure/" },
-      to: { path: "^(packages|apps)/|^@kj/", pathNot: "^packages/(pdf-structure|schema)/|^@kj/schema$" },
+      from: { path: "^packages/textbook/" },
+      to: { path: "^(packages|apps)/|^@kj/", pathNot: "^packages/(textbook|schema)/|^@kj/schema$" },
     },
     {
       name: "textbook-tables-are-private",
@@ -122,7 +122,7 @@ module.exports = {
       comment: "In the web app only the textbook ingest (apps/web/src/textbook) loads pdf.js.",
       severity: "error",
       from: { path: "^apps/web/src/", pathNot: "^apps/web/src/textbook/" },
-      to: { path: "^packages/pdf-structure/src/browser\\.ts$|node_modules/pdfjs-dist/|^pdfjs-dist" },
+      to: { path: "^packages/textbook/src/browser\\.ts$|node_modules/pdfjs-dist/|^pdfjs-dist" },
     },
     {
       name: "only-textbook-ingest-cuts-pdfs",
@@ -135,7 +135,7 @@ module.exports = {
       name: "pedagogy-has-no-io",
       severity: "error",
       from: { path: "^packages/pedagogy/" },
-      to: { path: "^packages/(ai|generation|player|pdf-structure)/" },
+      to: { path: "^packages/(ai|generation|player|textbook)/" },
     },
   ],
   options: {

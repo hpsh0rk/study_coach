@@ -1,4 +1,4 @@
-import { isVisionParser, MINERU_AGENT_PARSER, MINERU_PARSER, PASTE_PARSER, PDFJS_PARSER } from "@kj/pdf-structure";
+import { isVisionParser, MINERU_AGENT_PARSER, MINERU_PARSER, PASTE_PARSER, PDFJS_PARSER } from "@kj/textbook";
 import type { TextbookPage } from "./api.ts";
 
 const ORIGIN: Record<string, string> = {

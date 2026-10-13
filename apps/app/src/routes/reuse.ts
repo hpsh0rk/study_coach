@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
-import { normalizeRanges, pagesInRanges } from "@kj/pdf-structure";
+import { normalizeRanges, pagesInRanges } from "@kj/textbook";
 import { planBudget, planUnit, unitGroupLabel, unitGroupMinutes } from "@kj/pedagogy";
 import { DEFAULT_PARAMS, LessonParams, newId, PageRange, type LessonScope } from "@kj/schema";
 import { requireUser } from "../auth/session.ts";

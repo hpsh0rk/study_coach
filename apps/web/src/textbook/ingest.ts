@@ -1,4 +1,4 @@
-import { buildChapterTree, pagesInRanges } from "@kj/pdf-structure";
+import { buildChapterTree, pagesInRanges } from "@kj/textbook";
 import type { PageRange, ParsedPdf } from "@kj/schema";
 import type { CreateTextbook, DocumentRow, TextbookLookup } from "./api.ts";
 

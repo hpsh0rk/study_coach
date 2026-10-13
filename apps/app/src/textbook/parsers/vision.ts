@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import { ProviderError, type AiLayer } from "@kj/ai";
-import { cleanVisionText, pageFacts, visionParserId } from "@kj/pdf-structure";
+import { cleanVisionText, pageFacts, visionParserId } from "@kj/textbook";
 import { newId } from "@kj/schema";
 import { db } from "../../db/index.ts";
 import type { Env, SessionUser } from "../../env.ts";

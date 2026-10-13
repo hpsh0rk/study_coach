@@ -3,7 +3,7 @@
  * textbook's pages, chapters and labels. It knows nothing about lessons (see .dependency-cruiser.cjs).
  */
 import { and, asc, between, desc, eq, gte, inArray, isNotNull, isNull, lte, or } from "drizzle-orm";
-import { chapterRunsOf, isEmptyPage, MIN_PAGE_WORDS, missingRanges, PDFJS_PARSER, type PageFlag, normalizeRanges, pagesInRanges, rangesForChapters, sourceCut, type ChapterRun } from "@kj/pdf-structure";
+import { chapterRunsOf, isEmptyPage, MIN_PAGE_WORDS, missingRanges, PDFJS_PARSER, type PageFlag, normalizeRanges, pagesInRanges, rangesForChapters, sourceCut, type ChapterRun } from "@kj/textbook";
 import type { ChapterNode, LessonScope, PageKind, PageRange, PageText } from "@kj/schema";
 import { db } from "../db/index.ts";
 import type { Env, SessionUser } from "../env.ts";

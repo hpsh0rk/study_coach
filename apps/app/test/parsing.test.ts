@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { MINERU_AGENT_PARSER, MINERU_PARSER } from "@kj/pdf-structure";
+import { MINERU_AGENT_PARSER, MINERU_PARSER } from "@kj/textbook";
 import recorded from "../src/textbook/parsers/mineru-recorded.json";
 import { agentParser, isMineruHost, tokenParser } from "../src/textbook/parsers/mineru.ts";
 import { chinaDay, PARSE_LIMITS, parseAllowance } from "../src/textbook/parsers/settings.ts";

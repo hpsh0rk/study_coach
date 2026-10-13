@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { strToU8, zipSync } from "fflate";
 import { PDFDocument, StandardFonts } from "pdf-lib";
-import { separatorText } from "@kj/pdf-structure";
+import { separatorText } from "@kj/textbook";
 import { ApiError } from "../src/api.ts";
 import { parseExternally, pdfCutter, readResult, type ExternalDeps } from "../src/textbook/external.ts";
 
