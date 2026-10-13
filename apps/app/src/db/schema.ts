@@ -1,29 +1,9 @@
-import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { documents } from "../textbook/tables.ts";
+import { now, orgs, users } from "./accounts.ts";
 
-const now = () => Date.now();
-
-export const orgs = sqliteTable("orgs", {
-  id: text("id").primaryKey(),
-  name: text("name").notNull(),
-  createdAt: integer("created_at").notNull().$defaultFn(now),
-});
-
-export const users = sqliteTable(
-  "users",
-  {
-    id: text("id").primaryKey(),
-    orgId: text("org_id").notNull().references(() => orgs.id),
-    username: text("username").notNull(),
-    displayName: text("display_name"),
-    passwordHash: text("password_hash").notNull(),
-    role: text("role", { enum: ["admin", "teacher"] }).notNull(),
-    mustChangePassword: integer("must_change_password", { mode: "boolean" }).notNull().default(true),
-    disabledAt: integer("disabled_at"),
-    createdAt: integer("created_at").notNull().$defaultFn(now),
-    updatedAt: integer("updated_at").notNull().$defaultFn(now),
-  },
-  (t) => [uniqueIndex("users_username_uq").on(t.username)],
-);
+/** Textbook tables (documents, pages, chapters) live in ../textbook/tables.ts and are not re-exported here. */
+export { orgs, users };
 
 export const sessions = sqliteTable(
   "sessions",
@@ -43,55 +23,6 @@ export const loginAttempts = sqliteTable("login_attempts", {
   windowStart: integer("window_start").notNull(),
   failures: integer("failures").notNull(),
 });
-
-export const documents = sqliteTable(
-  "documents",
-  {
-    id: text("id").primaryKey(),
-    orgId: text("org_id").notNull().references(() => orgs.id),
-    ownerId: text("owner_id").notNull().references(() => users.id),
-    filename: text("filename").notNull(),
-    title: text("title").notNull(),
-    sizeBytes: integer("size_bytes").notNull(),
-    pageCount: integer("page_count").notNull(),
-    /** Pages received so far; the document is usable once it equals page_count. */
-    pagesReceived: integer("pages_received").notNull().default(0),
-    hasBookmarks: integer("has_bookmarks", { mode: "boolean" }).notNull(),
-    createdAt: integer("created_at").notNull().$defaultFn(now),
-    /** Soft delete, like lessons.archived_at: hidden from lists and new lessons; lessons made from it keep working. */
-    archivedAt: integer("archived_at"),
-  },
-  (t) => [index("documents_owner_idx").on(t.orgId, t.ownerId)],
-);
-
-export const pages = sqliteTable(
-  "pages",
-  {
-    documentId: text("document_id").notNull().references(() => documents.id, { onDelete: "cascade" }),
-    no: integer("no").notNull(),
-    text: text("text").notNull(),
-    /** Printed page label when it differs from the page index. */
-    label: text("label"),
-    words: integer("words").notNull().default(0),
-  },
-  (t) => [primaryKey({ columns: [t.documentId, t.no] })],
-);
-
-export const chapters = sqliteTable(
-  "chapters",
-  {
-    documentId: text("document_id").notNull().references(() => documents.id, { onDelete: "cascade" }),
-    id: text("id").notNull(),
-    parentId: text("parent_id"),
-    ord: integer("ord").notNull(),
-    level: integer("level").notNull(),
-    title: text("title").notNull(),
-    pageStart: integer("page_start").notNull(),
-    pageEnd: integer("page_end").notNull(),
-    words: integer("words").notNull(),
-  },
-  (t) => [primaryKey({ columns: [t.documentId, t.id] })],
-);
 
 export const lessons = sqliteTable(
   "lessons",

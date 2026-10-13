@@ -200,6 +200,43 @@ export function childrenOf(tree: ChapterNode[], parentId: string | null): Chapte
   return tree.filter((c) => c.parentId === parentId).sort((a, b) => a.ord - b.ord);
 }
 
+/** Selected chapters with no selected child, in reading order: the planner's sections and the owners of pages in a unit split. */
+export function leafSections(tree: ChapterNode[], chapterIds: string[]): ChapterNode[] {
+  const ids = new Set(chapterIds);
+  return tree.filter((c) => ids.has(c.id) && !tree.some((k) => k.parentId === c.id && ids.has(k.id)));
+}
+
+/** Consecutive selected pages owned by one chapter (or by none), with their word counts. */
+export interface ChapterRun {
+  title: string;
+  chapterId?: string;
+  pages: { no: number; words: number }[];
+}
+
+/**
+ * The selection cut into runs of pages owned by the same leaf chapter. A parent's intro pages (before its
+ * first selected child) belong to the parent; pages outside every selected chapter are titled by their range.
+ */
+export function chapterRunsOf(tree: ChapterNode[], scope: { chapterIds: string[]; ranges: PageRange[] }, words: Map<number, number>): ChapterRun[] {
+  const leaves = leafSections(tree, scope.chapterIds);
+  const selected = tree.filter((c) => scope.chapterIds.includes(c.id)).sort((a, b) => b.level - a.level);
+  const covers = (c: ChapterNode, no: number) => c.pageStart <= no && no <= c.pageEnd;
+  const ownerOf = (no: number) => leaves.find((c) => covers(c, no)) ?? selected.find((c) => covers(c, no));
+  const out: ChapterRun[] = [];
+  for (const no of pagesInRanges(scope.ranges)) {
+    const owner = ownerOf(no);
+    const last = out[out.length - 1];
+    const page = { no, words: words.get(no) ?? 0 };
+    if (last && last.chapterId === owner?.id && last.pages[last.pages.length - 1]!.no === no - 1) last.pages.push(page);
+    else out.push({ title: owner?.title ?? "", ...(owner ? { chapterId: owner.id } : {}), pages: [page] });
+  }
+  for (const r of out) {
+    const [first, last] = [r.pages[0]!.no, r.pages[r.pages.length - 1]!.no];
+    if (!r.title) r.title = first === last ? `p. ${first}` : `pp. ${first}–${last}`;
+  }
+  return out;
+}
+
 /** All descendant ids (inclusive), used when ticking a parent selects its sections. */
 export function subtreeIds(tree: ChapterNode[], id: string): string[] {
   const out = [id];
