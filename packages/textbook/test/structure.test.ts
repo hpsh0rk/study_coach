@@ -251,10 +251,10 @@ describe("external parser results", () => {
     expect([PDFJS_PARSER, PASTE_PARSER, MINERU_AGENT_PARSER, visionParserId("m")].map(isExternalParser)).toEqual([false, false, true, false]);
   });
 
-  it("the teacher may paste over pdf.js and vision text on must-fix pages, not over MinerU's or their own", () => {
+  it("the teacher may paste over any parser's text on must-fix pages, never over readable pages or their own paste", () => {
     const page = (parser: string, kind: "formula-lost" | "text" = "formula-lost") => ({ words: 40, kind, parser });
-    expect([PDFJS_PARSER, visionParserId("m"), MINERU_AGENT_PARSER, PASTE_PARSER].map((p) => needsText(page(p)))).toEqual([true, true, false, false]);
+    expect([PDFJS_PARSER, visionParserId("m"), MINERU_AGENT_PARSER, PASTE_PARSER].map((p) => needsText(page(p)))).toEqual([true, true, true, false]);
     expect(needsText(page(visionParserId("m"), "text"))).toBe(false);
-    expect(needsText({ words: 0, parser: MINERU_AGENT_PARSER })).toBe(true);
+    expect(needsText({ words: 0 })).toBe(true);
   });
 });

@@ -62,7 +62,7 @@ export function eligible(reason: ParseReason, p: { kind: string | null; parser: 
 
 export type Saved = { no: number; parser: string } & PageFacts;
 
-/** Pages another copy of the same file (same organisation) already got from this parser: copied, not sent again. */
+/** Pages another copy of the same file by the same teacher already got from this parser: copied, not sent again. */
 export async function reuseParsed(env: Env, doc: TextbookRow, parser: string, nos: number[]): Promise<Saved[]> {
   if (!doc.fileSha256 || !nos.length) return [];
   const d = db(env);
@@ -70,7 +70,7 @@ export async function reuseParsed(env: Env, doc: TextbookRow, parser: string, no
     .selectDistinct({ no: pages.no, text: pages.text })
     .from(pages)
     .innerJoin(documents, eq(documents.id, pages.documentId))
-    .where(and(eq(documents.orgId, doc.orgId), eq(documents.fileSha256, doc.fileSha256), ne(documents.id, doc.id), eq(pages.parser, parser), inArray(pages.no, nos)));
+    .where(and(eq(documents.orgId, doc.orgId), eq(documents.ownerId, doc.ownerId), eq(documents.fileSha256, doc.fileSha256), ne(documents.id, doc.id), eq(pages.parser, parser), inArray(pages.no, nos)));
   const byNo = new Map(found.map((r) => [r.no, r.text]));
   const saved = [...byNo].map(([no, text]) => ({ no, ...pageFacts(text), parser }));
   if (saved.length) await writeParsed(env, doc.id, saved.map((s) => ({ ...s, text: byNo.get(s.no)! })));

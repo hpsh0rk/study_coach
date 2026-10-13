@@ -30,12 +30,11 @@ export const REFINE_KINDS: readonly PageKind[] = ["formula-text", "table"];
 export const isMustFix = (kind: PageKind | null | undefined) => !!kind && MUST_FIX_KINDS.includes(kind);
 
 /**
- * A page whose text a teacher may paste: no usable text, a must-fix page still holding the pdf.js text, or one
- * a vision model read (it may have misread digits; the teacher's text wins).
+ * A page whose text a teacher may paste: no usable text, or a must-fix page (scanned, garbled, formula-lost)
+ * not pasted yet, whichever parser read it. A parser may misread digits or formulas; the teacher's text wins.
  */
 export function needsText(p: { words: number; kind?: PageKind | null; parser?: string }): boolean {
-  const parser = p.parser ?? PDFJS_PARSER;
-  return isEmptyPage(p.words) || (isMustFix(p.kind) && (parser === PDFJS_PARSER || isVisionParser(parser)));
+  return isEmptyPage(p.words) || (isMustFix(p.kind) && p.parser !== PASTE_PARSER);
 }
 
 const MATH_CHARS = /[∑∏∫∮√∛∞∂∆∇±∓×÷·≤≥≈≠≡∝∈∉⊂⊃⊆∪∩∀∃→←↔⇒⇔⊥∥°′″αβγδεζηθικλμνξπρστυφχψωΓΔΘΛΞΠΣΦΨΩ⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼₀₁₂₃₄₅₆₇₈₉₊₋]/g;

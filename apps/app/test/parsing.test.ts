@@ -89,15 +89,15 @@ describe("external parser switch (外部解析服务)", () => {
     expect(saved.json.pages).toEqual([expect.objectContaining({ no: 2, parser: MINERU_AGENT_PARSER }), expect.objectContaining({ no: 4, parser: MINERU_AGENT_PARSER })]);
   });
 
-  it("stores the parser's text; the page is then fixed: no paste, no second job", async () => {
+  it("stores the parser's text; no second job; the teacher's paste still wins", async () => {
     const id = await newBook(t7, "4".repeat(64));
     const { job } = await runJob(t7, id, [2]);
     const doc = (await t7.req("GET", `/api/documents/${id}`)).json;
     expect(doc.pageParsers).toEqual({ 2: MINERU_AGENT_PARSER });
     expect(doc.pageKinds).toEqual({ 2: "formula-lost", 3: "table", 4: "formula-lost" });
     expect((await t7.req("GET", `/api/documents/${id}/pages/2`)).json.text).toContain("\\mathsf { s } = \\mathrm { u t }");
-    expect((await t7.req("POST", `/api/documents/${id}/pages/paste`, { start: 2, end: 2, text: "again" })).status).toBe(409);
     expect((await t7.req("POST", `/api/documents/${id}/parse`, { pages: [2], reason: "auto" })).status).toBe(409);
+    expect((await t7.req("POST", `/api/documents/${id}/pages/paste`, { start: 2, end: 2, text: "v = u + at" })).json.pages).toEqual([expect.objectContaining({ no: 2, parser: "paste" })]);
     // A finished job cannot be replayed, and nobody else can touch it.
     expect((await t7.req("POST", `/api/documents/${id}/parse/${job.id}/pages`, { pages: [{ no: 2, text: "x" }] })).status).toBe(409);
     expect((await t8.req("GET", `/api/documents/${id}/parse/${job.id}`)).status).toBe(404);
@@ -113,15 +113,20 @@ describe("external parser switch (外部解析服务)", () => {
     expect((await t7.req("GET", `/api/documents/${id}/pages/1`)).json.parser).toBe("pdfjs/1");
   });
 
-  it("reuses pages another copy of the same file already got (same organisation), without sending them", async () => {
+  it("reuses pages another copy of the same file by the same teacher already got, never another teacher's", async () => {
     const sha = "6".repeat(64);
-    await runJob(t7, await newBook(t7, sha), [2]);
-    const other = await newBook(t8, sha);
-    const res = await t8.req("POST", `/api/documents/${other}/parse`, { pages: [2], reason: "auto" });
+    const first = await newBook(t7, sha);
+    await runJob(t7, first, [2]);
+    const stranger = await newBook(t8, sha);
+    expect((await t8.req("POST", `/api/documents/${stranger}/parse`, { pages: [2], reason: "auto" })).json.reused ?? []).toEqual([]);
+
+    expect((await t7.req("POST", `/api/documents/${first}/archive`)).status).toBe(200);
+    const again = await newBook(t7, sha);
+    const res = await t7.req("POST", `/api/documents/${again}/parse`, { pages: [2], reason: "auto" });
     expect(res.json.job).toBeNull();
     expect(res.json.reused).toEqual([expect.objectContaining({ no: 2, parser: MINERU_AGENT_PARSER })]);
-    expect((await t8.req("GET", `/api/documents/${other}/pages/2`)).json.text).toContain("\\mathtt { v }");
-    const sent = await e.DB.prepare("SELECT COUNT(*) AS n FROM parse_usage WHERE document_id = ?").bind(other).first<{ n: number }>();
+    expect((await t7.req("GET", `/api/documents/${again}/pages/2`)).json.text).toContain("\\mathtt { v }");
+    const sent = await e.DB.prepare("SELECT COUNT(*) AS n FROM parse_usage WHERE document_id = ?").bind(again).first<{ n: number }>();
     expect(sent!.n).toBe(0);
   });
 
