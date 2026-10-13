@@ -3,10 +3,11 @@
  * Stored as "pbkdf2-sha256$<iterations>$<salt b64>$<hash b64>" so the cost can change without a migration;
  * logins rehash any other cost to the current one.
  *
- * 15k iterations ≈ 3 ms CPU (`node scripts/bench-pbkdf2.mjs`), so changing a password (verify + hash)
- * stays inside the Workers free plan's 10 ms. That is far below OWASP's 600k: see docs/architecture.md.
+ * 300k iterations ≈ 35 ms CPU locally. Cloudflare's hosted WebCrypto rejects more than 100k per call, so
+ * counts above that run as a chain of ≤ 100k calls, each one's output the next one's password (see derive).
  */
-export const PBKDF2_ITERATIONS = 15_000;
+export const PBKDF2_ITERATIONS = 300_000;
+const PBKDF2_CALL_MAX = 100_000;
 
 /** Same cost as a real hash, so an unknown username takes as long as a wrong password. Never matches. */
 export const DUMMY_HASH = `pbkdf2-sha256$${PBKDF2_ITERATIONS}$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA`;
@@ -27,9 +28,13 @@ function unb64(text: string): Uint8Array {
 }
 
 async function derive(password: string, salt: Uint8Array, iterations: number, bytes: number): Promise<Uint8Array> {
-  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
-  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: salt as BufferSource, iterations }, key, bytes * 8);
-  return new Uint8Array(bits);
+  let input: Uint8Array = new TextEncoder().encode(password);
+  for (let left = iterations; left > 0; left -= PBKDF2_CALL_MAX) {
+    const key = await crypto.subtle.importKey("raw", input as BufferSource, "PBKDF2", false, ["deriveBits"]);
+    const round = Math.min(left, PBKDF2_CALL_MAX);
+    input = new Uint8Array(await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: salt as BufferSource, iterations: round }, key, (left > PBKDF2_CALL_MAX ? 32 : bytes) * 8));
+  }
+  return input;
 }
 
 export async function hashPassword(password: string, iterations = PBKDF2_ITERATIONS): Promise<string> {

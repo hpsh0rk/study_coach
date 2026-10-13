@@ -17,6 +17,13 @@ describe("PBKDF2 passwords", () => {
     expect(await verifyPassword("dummy-password-1", DUMMY_HASH)).toBe(false);
   });
 
+  it("runs counts above 100k as chained calls, the same as scripts/create-admin.mjs (Node pbkdf2Sync)", async () => {
+    expect(PBKDF2_ITERATIONS).toBeGreaterThanOrEqual(200_000);
+    const fromScript = "pbkdf2-sha256$300000$BwcHBwcHBwcHBwcHBwcHBw$brywJUhxYOq+d476HdV5VuegKJ2Jqb3wh/NOLyvgXa0";
+    expect(await verifyPassword("Admin12345", fromScript)).toBe(true);
+    expect(await verifyPassword("Admin12346", fromScript)).toBe(false);
+  });
+
   it("rehashes other costs to the current one on login", async () => {
     await seedUser("usr_old", "oldcost", "Secret123", { mustChange: false });
     const before = await e.DB.prepare("SELECT password_hash AS h FROM users WHERE id = 'usr_old'").first<string>("h");

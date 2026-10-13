@@ -48,11 +48,13 @@ if (values.keep) {
   }
 }
 
-// Must match apps/app/src/auth/password.ts.
-const ITERATIONS = 15_000;
+// Must match apps/app/src/auth/password.ts: chained calls of at most 100k iterations.
+const ITERATIONS = 300_000;
+const CALL_MAX = 100_000;
 const b64 = (u8) => Buffer.from(u8).toString("base64").replace(/=+$/, "");
 const salt = randomBytes(16);
-const hash = pbkdf2Sync(password, salt, ITERATIONS, 32, "sha256");
+let hash = Buffer.from(password);
+for (let left = ITERATIONS; left > 0; left -= CALL_MAX) hash = pbkdf2Sync(hash, salt, Math.min(left, CALL_MAX), 32, "sha256");
 const encoded = `pbkdf2-sha256$${ITERATIONS}$${b64(salt)}$${b64(hash)}`;
 
 const id = `usr_${randomBytes(9).toString("base64url").replace(/[-_]/g, "x")}`;
