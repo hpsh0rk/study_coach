@@ -20,7 +20,7 @@ interface AiView {
 }
 
 export function AdminPage() {
-  const [tab, setTab] = useState<"users" | "ai">("users");
+  const [tab, setTab] = useState<"users" | "ai" | "parsing">("users");
   return (
     <div className="stack">
       <div className="row between">
@@ -32,9 +32,12 @@ export function AdminPage() {
           <button className={tab === "ai" ? "active" : ""} onClick={() => setTab("ai")}>
             AI 模型 Models
           </button>
+          <button className={tab === "parsing" ? "active" : ""} onClick={() => setTab("parsing")} data-testid="admin-tab-parsing">
+            外部解析服务 Parsing
+          </button>
         </div>
       </div>
-      {tab === "users" ? <UsersPanel /> : <AiPanel />}
+      {tab === "users" ? <UsersPanel /> : tab === "ai" ? <AiPanel /> : <ParsingPanel />}
     </div>
   );
 }
@@ -352,6 +355,106 @@ function AiPanel() {
             ))}
           </tbody>
         </table>
+      </div>
+    </>
+  );
+}
+
+interface ParsingView {
+  externalEnabled: boolean;
+  mineruMode: "agent" | "token";
+  tokenHint: string | null;
+  envToken: boolean;
+  stub: boolean;
+  limits: { bookAutoPages: number; userDayPages: number; siteDayPages: number };
+  today: { site: number; org: number };
+}
+
+/** "外部解析服务": whether pages the browser could not read may be sent to MinerU. Off by default. */
+function ParsingPanel() {
+  const [view, setView] = useState<ParsingView | null>(null);
+  const [token, setToken] = useState("");
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const load = useCallback(async () => setView(await api<ParsingView>("/api/admin/parsing")), []);
+  useEffect(() => {
+    void load();
+  }, [load]);
+  const save = async (body: Record<string, unknown>, done: string) => {
+    setError("");
+    setNotice("");
+    try {
+      await api("/api/admin/parsing", { method: "PUT", body });
+      await load();
+      setNotice(done);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+    }
+  };
+  if (!view) return <p className="muted">Loading…</p>;
+  const noToken = view.mineruMode === "token" && !view.tokenHint && !view.envToken;
+
+  return (
+    <>
+      {error && <div className="alert error">{error}</div>}
+      {notice && <div className="alert success">{notice}</div>}
+      <div className="card stack" data-testid="parsing-panel">
+        <div className="row between">
+          <h2>外部解析服务 External parser</h2>
+          <span className={`badge ${view.externalEnabled ? "note" : "warn"}`} data-testid="parsing-state">
+            {view.externalEnabled ? "已开启 On" : "已关闭 Off"}
+          </span>
+        </div>
+        <p className="small">
+          浏览器读 PDF 时，扫描页、画成图形的公式和乱码字体读不出来。开启后，这些页会被单独切成一个小 PDF，经本站服务器转发给 <b>MinerU</b>（上海人工智能实验室 OpenDataLab 的在线服务）重新识别，识别出的文字存回这本教材；整本书不会发出去。老师也可以对表格、公式多的章节点“精修本章”。关闭时，老师可以把这些页的文字粘贴进来。
+        </p>
+        <p className="muted small">
+          When on, pages the browser could not read are cut into a small PDF and sent through this server to MinerU (OpenDataLab); the rest of the book never leaves the browser. Off by default.
+        </p>
+        <label className="row">
+          <input
+            type="checkbox"
+            checked={view.externalEnabled}
+            onChange={(e) => void save({ externalEnabled: e.target.checked }, e.target.checked ? "已开启外部解析服务 · External parser on" : "已关闭外部解析服务 · External parser off")}
+            data-testid="parsing-enabled"
+          />
+          <span>允许把读不全的页发送给 MinerU 识别 · Allow sending unreadable pages to MinerU</span>
+        </label>
+        <fieldset className="stack">
+          <legend className="small">接口 API</legend>
+          <label className="row">
+            <input type="radio" name="mineru-mode" checked={view.mineruMode === "agent"} onChange={() => void save({ mineruMode: "agent" }, "已切换到免费轻量接口 · Using the token-free API")} />
+            <span>免费轻量接口：不需要 Token，每次最多 10 页、10 MB，按 IP 限频 · Token-free agent API</span>
+          </label>
+          <label className="row">
+            <input type="radio" name="mineru-mode" checked={view.mineruMode === "token"} onChange={() => void save({ mineruMode: "token" }, "已切换到精准接口 · Using the precise API")} />
+            <span>精准接口（vlm 模型，更准）：需要 MinerU Token · Precise API (needs a token)</span>
+          </label>
+        </fieldset>
+        {view.mineruMode === "token" && (
+          <form
+            className="row wrap"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void save({ token }, "Token 已加密保存 · Token saved (encrypted)").then(() => setToken(""));
+            }}
+          >
+            <input type="password" placeholder={view.tokenHint ?? (view.envToken ? "使用服务器上的 MINERU_API_TOKEN" : "MinerU API Token")} value={token} onChange={(e) => setToken(e.target.value)} autoComplete="off" />
+            <button className="btn small" disabled={token.trim().length < 8}>
+              保存 Token
+            </button>
+            {view.tokenHint && (
+              <button type="button" className="btn small ghost" onClick={() => void save({ token: null }, "Token 已删除 · Token removed")}>
+                删除 Remove
+              </button>
+            )}
+          </form>
+        )}
+        {noToken && <div className="alert warn">精准接口需要 Token，填好之前老师用不了外部解析服务 · The precise API needs a token</div>}
+        {view.stub && <div className="alert info">开发 / 测试环境：外部解析服务用录制好的 MinerU 返回结果，不会真正发出页面 · Stubbed (recorded response)</div>}
+        <p className="muted small" data-testid="parsing-usage">
+          今天已送出 {view.today.org} 页（全站 {view.today.site} / {view.limits.siteDayPages}）· 每位老师每天最多 {view.limits.userDayPages} 页 · 每本书自动送出最多 {view.limits.bookAutoPages} 页
+        </p>
       </div>
     </>
   );

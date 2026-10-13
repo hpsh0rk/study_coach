@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { ApiError } from "../../api.ts";
 import { documentApi, type DocumentRow } from "../../textbook/api.ts";
+import { rememberFile } from "../../textbook/external.ts";
 import { fileProblem, ingestPdf, MAX_MB, sha256Hex } from "../../textbook/ingest.ts";
 import { parsePdf } from "../../textbook/pdf.ts";
 import { Stepper, StepIntro } from "./Stepper.tsx";
@@ -66,6 +67,7 @@ export function UploadStep() {
         },
         setPhase,
       );
+      rememberFile(id, file);
       nav(`/new/${id}`, { state: { textbook: outcome } });
     } catch (err) {
       setPhase({ kind: "error", message: err instanceof ApiError ? err.message : `无法读取这个 PDF · Could not read this PDF (${(err as Error).message})` });

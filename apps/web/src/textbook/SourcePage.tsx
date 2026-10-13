@@ -1,8 +1,10 @@
-import { PASTE_PARSER, PDFJS_PARSER } from "@kj/pdf-structure";
+import { MINERU_AGENT_PARSER, MINERU_PARSER, PASTE_PARSER, PDFJS_PARSER } from "@kj/pdf-structure";
 import type { TextbookPage } from "./api.ts";
 
 const ORIGIN: Record<string, string> = {
-  [PASTE_PARSER]: "这一页是扫描图，文字由老师粘贴 · Text pasted by the teacher (scanned page)",
+  [PASTE_PARSER]: "这一页的文字由老师粘贴 · Text pasted by the teacher",
+  [MINERU_AGENT_PARSER]: "浏览器读不全这一页，文字由外部解析服务（MinerU）重新识别 · Re-read by the external parser (MinerU)",
+  [MINERU_PARSER]: "浏览器读不全这一页，文字由外部解析服务（MinerU）重新识别 · Re-read by the external parser (MinerU)",
 };
 
 /** A cited textbook page, opened from a slide's source chip. */
