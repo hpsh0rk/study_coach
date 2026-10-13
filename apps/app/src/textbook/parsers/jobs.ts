@@ -7,7 +7,7 @@ import { HttpError } from "../../http.ts";
 import type { TextbookRow } from "../index.ts";
 import { documents, pages, parseUsage } from "../tables.ts";
 import type { ExternalParser } from "./mineru.ts";
-import { chinaDay, externalParserFor, externalState, parseAllowance, parserSettingsOf, parseUsed, refusalMessage, type ExternalState } from "./settings.ts";
+import { chinaDay, externalParserFor, externalState, parseAllowance, parserSettingsOf, parseUsed, refusalMessage, type ExternalState, type ParserSettings } from "./settings.ts";
 
 export type ParseReason = "auto" | "refine";
 export type JobRow = typeof parseUsage.$inferSelect;
@@ -37,6 +37,12 @@ export function externalOffMessage(state: Exclude<ExternalState, { state: "on" }
   return state.missing === "url"
     ? "外部解析未配置：请联系管理员在后台“外部解析服务”里填写自部署 MinerU 的地址 · External parser not configured"
     : "外部解析未配置：请联系管理员在后台“外部解析服务”里填写 MinerU Token · External parser not configured";
+}
+
+/** For the chapters step: why the external parser cannot take pages right now, or null when it can. Holds no secret. */
+export function externalNote(env: Env, settings: ParserSettings): string | null {
+  const state = externalState(env, settings);
+  return state.state === "on" ? null : externalOffMessage(state);
 }
 
 async function parserOf(env: Env, user: SessionUser): Promise<ExternalParser> {

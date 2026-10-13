@@ -58,6 +58,12 @@ export type TextbookLookup =
   | { status: "incomplete"; document: DocumentRow; missing: PageRange[]; pageBatch: number }
   | { status: "archived"; document: DocumentRow; pageBatch: number };
 
+/** Why the external parser / vision model cannot read pages right now (plain Chinese, says whom to ask), null when it can. */
+export interface ReaderNotes {
+  external: string | null;
+  vision: string | null;
+}
+
 export const documentApi = {
   list: () => api<{ documents: DocumentRow[] }>("/api/documents"),
   lookup: (sha256: string) => api<TextbookLookup>("/api/documents/lookup", { body: { sha256 } }),
@@ -75,6 +81,7 @@ export const documentApi = {
       pageKinds: Record<number, PageKind>;
       externalParser: ExternalParserInfo | null;
       visionParser: VisionParserInfo | null;
+      readers: ReaderNotes;
     }>(`/api/documents/${id}`),
   page: (id: string, no: number) => api<TextbookPage>(`/api/documents/${id}/pages/${no}`),
   paste: (id: string, start: number, end: number, text: string) => api<{ pages: PastedPage[] }>(`/api/documents/${id}/pages/paste`, { body: { start, end, text } }),

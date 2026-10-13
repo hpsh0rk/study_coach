@@ -104,6 +104,27 @@ export const adminRoutes = new Hono<AppBindings>()
     return c.json({ ok: true });
   })
 
+  /** "配置状态": what each key-backed feature does now and what it still lacks. Names and model ids only, no secret or URL. */
+  .get("/status", async (c) => {
+    const orgId = c.get("user").orgId;
+    const [providers, settings] = await Promise.all([
+      db(c.env)
+        .select({ purpose: aiProviders.purpose, name: aiProviders.name, model: aiProviders.model, visionModel: aiProviders.visionModel })
+        .from(aiProviders)
+        .where(and(eq(aiProviders.orgId, orgId), eq(aiProviders.enabled, true), ne(aiProviders.model, ""))),
+      parserSettingsOf(c.env, orgId),
+    ]);
+    const text = providers.find((p) => p.purpose === "text");
+    const vision = providers.find((p) => p.purpose === "vision");
+    const visionModel = vision?.model || text?.visionModel || "";
+    const visionPaidOff = !!visionModel && visionPriceOf(visionModel, settings).microYuanPerPage > 0 && !settings.paidEnabled;
+    return c.json({
+      ai: text ? { state: "live", provider: text.name, model: text.model } : { state: c.env.AI_ALLOW_STUB === "true" ? "stub" : "off" },
+      vision: visionModel ? { state: visionPaidOff ? "paid_off" : "on", provider: (vision ?? text)!.name, model: visionModel, separate: !!vision } : { state: "none" },
+      external: { ...externalState(c.env, settings), mode: settings.mineruMode, stub: effectiveMode(c.env, settings) === "stub" },
+    });
+  })
+
   // ---- AI provider (owner decision: configured here, not in env). One enabled provider + model serves every call. ----
   .get("/ai", async (c) => {
     const orgId = c.get("user").orgId;

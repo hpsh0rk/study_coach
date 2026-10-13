@@ -29,6 +29,13 @@ export function visionParserInfo(settings: ParserSettings, visionModel: string |
   return { parser: visionParserId(visionModel), model: visionModel, microYuanPerPage: price.microYuanPerPage };
 }
 
+/** For the chapters step: why the vision model cannot read pages right now, in words a teacher can act on, or null when it can. */
+export function visionNote(settings: ParserSettings, visionModel: string | null): string | null {
+  if (!visionModel) return "看图模型未配置：请联系管理员在后台“AI 模型”里填写看图模型（例如智谱 glm-4.6v-flash，免费）· No vision model configured";
+  if (visionParserInfo(settings, visionModel)) return null;
+  return `看图模型 ${visionModel} 按页收费，管理员还没有允许付费兜底：请联系管理员在后台“外部解析服务”里允许付费，或把价格设为 0 · The vision model is paid and paid parsing is off`;
+}
+
 /** About 1600 px on the long side at JPEG quality 0.8 is 200–400 KB; anything far beyond is not a page render. */
 export const MAX_IMAGE_CHARS = 4_000_000;
 /** Only the prefix is checked: scanning the whole base64 would cost CPU (10 ms per request), and the provider rejects bad data anyway. */

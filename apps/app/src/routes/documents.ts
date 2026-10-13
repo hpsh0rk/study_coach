@@ -8,9 +8,9 @@ import { lessonsUsing } from "../store.ts";
 import { chapterTree, lookupTextbook, ownedTextbook, page, pageMeta, textbookList } from "../textbook/index.ts";
 import { createTextbook, PAGE_BATCH, pastePages, putPages, setTextbookArchived } from "../textbook/write.ts";
 import { makeAi, visionModelOf } from "../ai.ts";
-import { createParseJob, externalParserInfo, jobResult, pollJob, saveJobPages, uploadJobFile } from "../textbook/parsers/jobs.ts";
+import { createParseJob, externalNote, externalParserInfo, jobResult, pollJob, saveJobPages, uploadJobFile } from "../textbook/parsers/jobs.ts";
 import { parserSettingsOf } from "../textbook/parsers/settings.ts";
-import { MAX_IMAGE_CHARS, readPageImage, visionParserInfo } from "../textbook/parsers/vision.ts";
+import { MAX_IMAGE_CHARS, readPageImage, visionNote, visionParserInfo } from "../textbook/parsers/vision.ts";
 
 export const MAX_PAGES = 600;
 export { PAGE_BATCH };
@@ -81,6 +81,8 @@ export const documentRoutes = new Hono<AppBindings>()
       pageKinds: meta.kinds,
       externalParser,
       visionParser: visionParserInfo(settings, visionModel),
+      /** Why each reader is unavailable (plain Chinese for the teacher), null when it can run. */
+      readers: { external: externalNote(c.env, settings), vision: visionNote(settings, visionModel) },
     });
   })
   /**
