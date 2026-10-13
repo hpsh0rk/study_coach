@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TocEntry } from "@kj/schema";
-import { buildChapterTree, countPages, distributeText, formatPages, isEmptyPage, normalizeRanges, pageForLabel, rangesForChapters, sourceCut, sourceForRanges, subtreeIds } from "../src/index.ts";
+import { buildChapterTree, chapterRunsOf, countPages, distributeText, formatPages, isEmptyPage, leafSections, normalizeRanges, pageForLabel, rangesForChapters, sourceCut, sourceForRanges, subtreeIds } from "../src/index.ts";
 
 const toc: TocEntry[] = [
   {
@@ -129,5 +129,39 @@ describe("distributeText", () => {
   it("handles Chinese and more pages than sentences", () => {
     expect(distributeText("牛顿第一定律。惯性是物体的属性。", 2)).toEqual(["牛顿第一定律。", "惯性是物体的属性。"]);
     expect(distributeText("短。", 3)).toEqual(["短。", "", ""]);
+  });
+});
+
+describe("leaf sections and chapter runs", () => {
+  const tree = buildChapterTree(toc, 8, pages);
+  const words = new Map(pages.map((p) => [p.no, p.no * 10]));
+
+  it("keeps only selected chapters without a selected child, in reading order", () => {
+    expect(leafSections(tree, [tree[0]!.id, tree[1]!.id, tree[2]!.id]).map((c) => c.title)).toEqual(["1.1 Describing waves", "1.2 Wave speed"]);
+    expect(leafSections(tree, [tree[4]!.id]).map((c) => c.title)).toEqual(["Chapter 2 Sound"]);
+    expect(leafSections(tree, [])).toEqual([]);
+  });
+
+  it("gives a parent's intro pages to the parent and splits the selection at chapter boundaries", () => {
+    const ids = [tree[0]!.id, tree[1]!.id, tree[2]!.id, tree[3]!.id];
+    const runs = chapterRunsOf(tree, { chapterIds: ids, ranges: [{ start: 1, end: 5 }] }, words);
+    expect(runs.map((r) => [r.title, r.pages.map((p) => p.no)])).toEqual([
+      ["Chapter 1 Waves", [1]],
+      ["1.1 Describing waves", [2]],
+      ["1.2 Wave speed", [3, 4]],
+      ["1.3 EM spectrum", [5]],
+    ]);
+    expect(runs[2]!.pages).toEqual([
+      { no: 3, words: 30 },
+      { no: 4, words: 40 },
+    ]);
+  });
+
+  it("titles loose pages by their range and breaks runs at gaps", () => {
+    const runs = chapterRunsOf(tree, { chapterIds: [tree[5]!.id], ranges: [{ start: 1, end: 2 }, { start: 7, end: 8 }] }, words);
+    expect(runs.map((r) => [r.title, r.chapterId ?? null, r.pages.map((p) => p.no)])).toEqual([
+      ["pp. 1–2", null, [1, 2]],
+      ["2.1 Sound waves", tree[5]!.id, [7, 8]],
+    ]);
   });
 });

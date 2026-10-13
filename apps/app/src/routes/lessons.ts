@@ -2,6 +2,7 @@ import { and, eq, isNull, lt, or } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { checkSourcePages, draftOutline, problemsOf, slideKey, SlideInvalidError, SpecNotFoundError, workedSpecFor, writeSlide, type PlannerSection } from "@kj/generation";
+import { leafSections } from "@kj/pdf-structure";
 import { outlineTiming } from "@kj/pedagogy";
 import { DEFAULT_PARAMS, LessonParams, newId, Outline, PageRange, sha256Hex, SlideContent, ThemeId, type ChapterNode, type LessonScope } from "@kj/schema";
 import { layoutForPageType, SLOT_SCHEMAS } from "@kj/templates";
@@ -27,16 +28,12 @@ import {
   lessonScope,
   outlineOf,
   ownedLesson,
-  pageLabels,
-  scopeFor,
-  scopePages,
   shareableVersion,
   shareToken,
   shareView,
   slideFromRow,
   unverifiedFor,
   slidesOf,
-  treeOf,
   versionOf,
   versionParams,
   versionScope,
@@ -45,14 +42,13 @@ import {
   type SlideRow,
   type VersionRow,
 } from "../store.ts";
+import { chapterTree, pageLabels, resolveScope, selectionPages } from "../textbook/index.ts";
 
 const AnswerMode = z.enum(["hidden", "shown"]);
 
 /** Deepest selected chapters in reading order become the planner's sections. */
 function sectionsOf(tree: ChapterNode[], scope: LessonScope): PlannerSection[] {
-  const ids = new Set(scope.chapterIds);
-  const leaves = tree.filter((c) => ids.has(c.id) && !tree.some((k) => k.parentId === c.id && ids.has(k.id)));
-  return leaves.map((c) => ({ title: c.title, pageStart: c.pageStart, pageEnd: c.pageEnd }));
+  return leafSections(tree, scope.chapterIds).map((c) => ({ title: c.title, pageStart: c.pageStart, pageEnd: c.pageEnd }));
 }
 
 /** Teacher edits may change page types; layouts always follow the page type, ids stay unique. */
@@ -77,7 +73,7 @@ async function recheckSources(env: Env, lesson: LessonRow, v: VersionRow, outlin
   const before = new Map(outlineOf(v).slides.map((s) => [s.id, s]));
   const same = (a: number[], b: number[]) => a.length === b.length && a.every((p, i) => p === b[i]);
   const changed = outline.slides.some((s) => !before.has(s.id) || !same(before.get(s.id)!.sourcePages, s.sourcePages));
-  const pageTexts = changed ? await scopePages(env, lesson.documentId, versionScope(v)) : [];
+  const pageTexts = changed ? await selectionPages(env, lesson.documentId, versionScope(v).ranges) : [];
   const checked = changed ? checkSourcePages(outline.slides.map((s) => ({ ...s, sourceIssue: undefined })), pageTexts.map((p) => p.no), pageTexts) : outline.slides;
   return {
     ...outline,
@@ -118,7 +114,7 @@ export const lessonRoutes = new Hono<AppBindings>()
   .post("/", async (c) => {
     const body = await parseJson(c, z.object({ documentId: z.string(), chapterIds: z.array(z.string()).max(200).default([]), ranges: z.array(PageRange).max(50).default([]), title: z.string().trim().max(200).optional() }));
     const u = c.get("user");
-    const { scope, title } = await scopeFor(c.env, u, body.documentId, body.chapterIds, body.ranges);
+    const { scope, title } = await resolveScope(c.env, u, body.documentId, body.chapterIds, body.ranges);
     const id = newId("les");
     await db(c.env)
       .insert(lessons)
@@ -138,7 +134,7 @@ export const lessonRoutes = new Hono<AppBindings>()
     if (body.params) patch.params = JSON.stringify(body.params);
     if (body.theme) patch.theme = body.theme;
     if (body.chapterIds || body.ranges) {
-      const { scope, title } = await scopeFor(c.env, u, lesson.documentId, body.chapterIds ?? [], body.ranges ?? [], true);
+      const { scope, title } = await resolveScope(c.env, u, lesson.documentId, body.chapterIds ?? [], body.ranges ?? [], true);
       const unit = lessonScope(lesson).unit;
       patch.scope = JSON.stringify(unit ? { ...scope, unit } : scope);
       if (!body.title) patch.title = title;
@@ -152,7 +148,7 @@ export const lessonRoutes = new Hono<AppBindings>()
     const u = c.get("user");
     const lesson = await ownedLesson(c.env, u, c.req.param("id"));
     const scope = lessonScope(lesson);
-    const [pageTexts, tree] = await Promise.all([scopePages(c.env, lesson.documentId, scope), treeOf(c.env, lesson.documentId)]);
+    const [pageTexts, tree] = await Promise.all([selectionPages(c.env, lesson.documentId, scope.ranges), chapterTree(c.env, lesson.documentId)]);
     if (!pageTexts.length) {
       throw new HttpError(422, "NO_SOURCE_TEXT", "所选页面都没有可读的文字（可能是扫描图），不能凭空起草。请回到“选章节”，为这些页粘贴文字 · The selected pages have no text; paste it on the chapters step");
     }
@@ -255,7 +251,7 @@ export const lessonRoutes = new Hono<AppBindings>()
     const res = await writeSlide(makeAi(c.env, u.orgId), outline, specId, {
       lessonTitle: lesson.title,
       params,
-      pages: await scopePages(c.env, lesson.documentId, versionScope(v)),
+      pages: await selectionPages(c.env, lesson.documentId, versionScope(v).ranges),
       workedProblem: workedContent?.layout === "steps" ? workedContent.problem : undefined,
       ctx: { orgId: u.orgId, userId: u.id, lessonId: lesson.id },
     }).catch((e: unknown) => {

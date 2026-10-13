@@ -5,7 +5,8 @@ import { db } from "../db/index.ts";
 import { lessons, shareLinks, users } from "../db/schema.ts";
 import type { AppBindings } from "../env.ts";
 import { HttpError } from "../http.ts";
-import { deckExport, pageLabels, sharedSlides, versionOf } from "../store.ts";
+import { deckExport, sharedSlides, versionOf } from "../store.ts";
+import { pageLabels } from "../textbook/index.ts";
 
 
 /**

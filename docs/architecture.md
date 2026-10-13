@@ -1,4 +1,4 @@
-# AI 课件工坊 · 架构（v9，迭代 8：出处页码不被控制条遮住、版式预算挪进 schema）
+# AI 课件工坊 · 架构（v10，教材模块：教材读写收进一个模块，见 docs/design/textbook-module.md）
 
 > 状态：2026-10-12 · 与 `main` 上的代码一致（迭代 8 PR 合并后）。来源文档：第一性原理审查 · 夜间决策记录（权威）· HTML 课件调研 · 教学规则（规则编号 L/P/V/I/T/Q 出自此文）· 老师调研 · 项目决策记录 · 对抗审查 1 / 2 / 3 · 消融结果（均在项目资料库 `docs/`，不在本仓库）。代码与本文冲突时以代码为准，并修正本文。
 
@@ -47,7 +47,8 @@
 Worker（Hono，apps/app）
  ├─ routes（HTTP 边界、鉴权、zod 校验、用例编排）
  ├─ generation（draftOutline / writeSlide）→ ai（唯一模型出口）→ DeepSeek / GLM / OpenAI 兼容
- └─ store（D1 仓储与读模型：快照、复用、聚合查询、lessonView、分享视图）；db/index.ts（drizzle 句柄）
+ ├─ textbook（教材模块：documents / pages / chapters 的唯一读写入口；index.ts 读接口、write.ts 写接口只给 routes/documents.ts、tables.ts 表定义）
+ └─ store（课的 D1 仓储与读模型：快照、复用、聚合查询、lessonView、分享视图；读教材只经 textbook/index.ts）；db/index.ts（drizzle 句柄）
 D1：orgs, users, sessions, login_attempts, ai_providers, ai_calls, audit_log,
     documents, pages, chapters, lessons, outline_versions, slides, share_links
 静态资源：SPA、字体（Arimo、Noto Sans SC）、KaTeX、内置实验 /sims/*.html
@@ -72,7 +73,7 @@ D1：orgs, users, sessions, login_attempts, ai_providers, ai_calls, audit_log,
         │            │                 │             │          │
         │            └──────────► generation ◄───────┴──────────┘
         │                              ▲
-        │                 apps/app（routes → store）     tools/eval（消融驱动、渲染测量）
+        │                 apps/app（routes → store / textbook）tools/eval（消融驱动、渲染测量）
    apps/web（pdf-structure/browser, templates/render, widgets/render, player, pedagogy, pptx）
    pptx（schema + templates 核心 + widgets 核心 → 可编辑 .pptx；不依赖应用、渲染入口、player、模型）
 ```
@@ -91,6 +92,10 @@ D1：orgs, users, sessions, login_attempts, ai_providers, ai_calls, audit_log,
 | `ai-layer-is-generic` | `ai` 只依赖 `schema`，不认识课、版式、教学规则 |
 | `pedagogy-rules-do-not-import-templates` | `pedagogy` 不得依赖 `templates`：共用的版式预算与页型 → 版式映射来自 `schema`（审查 #3 D-10）。规则同时匹配裸包名 `@kj/templates`，没有声明依赖、导入解析不了时也会报错 |
 | `pedagogy-has-no-io` | `pedagogy` 不得依赖 `ai`、`generation`、`player`、`pdf-structure` |
+| `textbook-core-is-a-low-layer` | `pdf-structure`（教材核心）只依赖 `schema`，不认识课、教学规则、版式、模型（同时匹配裸包名） |
+| `textbook-tables-are-private` | `documents` / `pages` / `chapters`（`apps/app/src/textbook/tables.ts`）只能在 `apps/app/src/textbook/` 里导入；`db/schema.ts` 只为 `lessons` 的外键导入且不再导出（`apps/app/test/boundaries.test.ts` 检查） |
+| `textbook-writes-only-from-the-documents-route` | `textbook/write.ts`（上传、粘贴、删除）只给 `routes/documents.ts` 用；其他代码只经 `textbook/index.ts` 读 |
+| `textbook-does-not-know-lessons` | `apps/app/src/textbook/` 不得导入 `store.ts`、`routes/*`、`ai.ts`，也不得导入 `generation`、`pedagogy`、`templates`、`widgets`、`ai`、`player`、`pptx` |
 | `pptx-export-reads-the-deck-only` | `pptx` 只依赖 `schema`、`templates` / `widgets` 的核心入口（和 pptxgenjs），不得导入渲染入口、player、`ai`、`generation`、`pedagogy`、`pdf-structure` |
 | AI 出口检查 | 只有 `packages/ai` 能导入模型 SDK 或写模型端点（`scripts/check-ai-boundary.mjs`，扫描 apps、packages、tools、scripts；这是这条边界唯一的检查） |
 
@@ -101,14 +106,14 @@ D1：orgs, users, sessions, login_attempts, ai_providers, ai_calls, audit_log,
 | 模块 | 单一职责 | 公共接口（摘要） |
 |---|---|---|
 | `schema` | 跨模块数据契约 | `ParsedPdf`、`PageText{no, text, label?}`、`ChapterNode`、`LessonParams`、`PageType`、`LayoutId`、`SlideSpec{…, sourceIssue?}`、`Outline{objectives, slides, glossary, notCovered}`、`SlideContent`（按版式区分的联合）、`Slide{…, unverified?, canUndo?}`、`Unverified{kind: number\|formula\|calc\|source, text, detail}`、`WidgetSpec`（含 `table`、`placeholder`）、`ThemeId`；`newId()`、`sha256Hex()`、`countWords()`；版式预算 `BUDGETS`、`CANVAS`、`FONT` 与页型 → 版式映射 `layoutForPageType`（`templates` 与 `pedagogy` 共用，放在这里使 `pedagogy` 不依赖 `templates`，D-10） |
-| `pdf-structure` | 目录 + 页文本 → 章节树、范围、源文本 | `buildChapterTree`、`rangesForChapters`、`normalizeRanges`、`pagesInRanges`、`countPages`、`sourceForRanges(pages, ranges, maxChars) → {text, included, omitted}`、`sourceCut(pageSizes, maxChars)`（只按长度预测哪些页读不进）、`isEmptyPage(words)`（< 5 词 = 扫描页）、`distributeText`（粘贴文字分到多页）、`labelOf`、`formatPages`、`pageForLabel`（按印刷页码解析输入）、`subtreeIds`；浏览器入口 `parsePdf(data, title, {onProgress, assets})`（配置 CMap / 标准字体；丢弃极小字号文字；页面有像指令的文字时再去掉白色文字） |
+| `pdf-structure` | 目录 + 页文本 → 章节树、范围、源文本 | `buildChapterTree`、`rangesForChapters`、`normalizeRanges`、`pagesInRanges`、`countPages`、`sourceForRanges(pages, ranges, maxChars) → {text, included, omitted}`、`sourceCut(pageSizes, maxChars)`（只按长度预测哪些页读不进）、`isEmptyPage(words)`（< 5 词 = 扫描页）、`distributeText`（粘贴文字分到多页）、`labelOf`、`formatPages`、`pageForLabel`（按印刷页码解析输入）、`subtreeIds`、`leafSections(tree, chapterIds)`（选中的最深一级章节：大纲的 sections、单元拆分的归属）、`chapterRunsOf(tree, scope, words) → ChapterRun[]`（按叶子章节切成连续页段，父章节的引言页归父章节；结构上就是 `pedagogy.UnitPiece`）；浏览器入口 `parsePdf(data, title, {onProgress, assets})`（配置 CMap / 标准字体；丢弃极小字号文字；页面有像指令的文字时再去掉白色文字） |
 | `widgets` | 声明式图示与交互：校验、表达式、渲染 | 核心：`validateWidget`、`compileExpr`（自写解析器，不用 eval）、`chartOption`、`functionOption`、`EMBED_CATALOG` / `resolveEmbed` / `findEmbed(text, minHits)`（整词匹配）；渲染入口 `renderWidget(spec, host, ctx) → {dispose}`（从不抛错：画不出来时显示“图示无法显示”占位） |
 | `templates` | 9 个固定版式：槽位 schema、内容预算、HTML 渲染、给老师看的槽位报错 | 核心：`LAYOUTS`、`layoutForPageType`（从 `schema` 再导出）、`PAGE_TYPE_VISUALS`、`SLOT_SCHEMAS` / `slotSchema`、`TABLE_SLOT` / `TABLE_NARROW_SLOT` / `FLOW_SLOT` / `PLACEHOLDER_SLOT`、`BUDGETS`、`FONT`（从 `schema` 再导出）、`stepsOf`；`testing` 入口（只给 `/dev/gallery` 和测试用）：`maxBudgetContent(layout, lang)`、`sampleContent`、`galleryCells()`；`issues` 入口：`slotIssues(content)`（含过长列表遮住的逐条错误）、`widgetIssues`、`describeIssue`（中文：“要点 第 2 条：太长：最多 8 个英文词（约 14 个汉字）”）；渲染入口：`renderSlide(slide, {theme, interactive, badge, pageLabels, onSourceClick, tally, language}) → {el, steps, tally?, dispose}`（`tally.set(counts)` 更新投票分布）、`shuffledOrder`（排序卡片的确定性打乱，起始顺序不泄露答案）、`applyStep`、`fitSlide`、`measureOverflow`、`minBodyFontPx`、`THEMES`、`sourceRuns`（出处页码合并成连续区间，如 p.5–8）、`fitSources(el, avoid)`（碰到 `avoid` 矩形的出处页码从末尾收起成 “+N”，悬停显示收起的页码） |
 | `pedagogy` | “内容量合适、流程合理”的可计算规则 | `PAGE_TYPES`（默认分钟、讲 / 练）、`TIME_TOLERANCE = 0.15`、`planBudget(params) → {minutes, minMinutes, maxMinutes}`、`outlineTiming → {totalMinutes, status, needsAck, …}`、`checkOutline`、`checkSlide`、`densityOf`、`scopeAdvice(words, minutes, unreadPages) → {estimatedMinutes, lessons, tooMuch}`（6 分钟 / 千词；有读不进的页时永远不算“合适”）、`planUnit(pieces, minutes, count?)`（不给 count 时每组 ≤ `maxMinutes`）/ `unitGroupMinutes` / `unitGroupLabel`、`OUTLINE_SOURCE_CHARS = 60_000`、`MAX_LECTURE_RUN = 10`；数字核对 `verifyNumbers(content, sourceText, {pageType, notes}) → Unverified[]`（数字可按 10³ / 10⁶ / 百分比换算匹配；≤ 10 的整数忽略；公式的符号必须出现在源文某个含“=”的句子里；算式重算） |
 | `ai` | 唯一模型出口：结构化 JSON、修复一次、计量、stub | `createAiLayer({config: {active: {provider, model} \| null}, meter, allowStub})`、`ai.callStructured({capability, promptVersion, schema, messages, stub, ctx})`、`jsonSchemaOf(schema)`（WeakMap 缓存）、`testProvider`、`sealSecret/openSecret`、`PROVIDER_PRESETS` |
 | `generation` | 源文本 + 参数 → 时间预算大纲；大纲 + 规格 → 单页内容；一页的复用键 | `draftOutline(ai, DraftInput) → {outline, warnings}`、`normalizeOutline`（含 `checkSourcePages`、`enforceCheckCadence`）、`rebalanceMinutes`、`writeSlide(ai, outline, specId, WriteInput) → {content, notes, sources, warnings, unverified}`、`slideKey(spec, {level, language})`、`sourceUnverified(spec)`、`workedSpecFor`、`stubOutline` / `stubSlide`、`problemsOf` / `truncateLists` / `clipToBudgets` / `sanitizeWidgets` / `applyGlossary`、`SlideInvalidError`、`PipelineOptions` / `DEFAULT_OPTIONS` / `optionsOf`、`OUTLINE_PROMPT_VERSION`、`SLIDE_PROMPT_VERSION`；`neutralizeSource`（源文本里的 `<` `>` 换成全角，学生教材里的文字关不掉 `<source>`）、`suspiciousContent`（网址、邮箱、可下载文件、像指令的文字） |
 | `player` | 放映壳：16:9 缩放、翻页、分步、全屏、黑屏、讲稿；双窗口同步 | `new Player(host, {slides, theme, showNotes, badge, onSourceClick, pageLabels, language, start, onChange, onBlank, onTally, onInk, onEscape})`（按键监听在 document 上，翻页器在任何焦点下都有效；投票人数框是文本输入，焦点在里面时 PageUp/PageDown/方向键照常翻页、不改数值，回车或停顿 1 秒后失焦）、`setBlank`、`setTally(index, counts)`、`setInk("pen"|"eraser"|null)`、`setStrokes(index, strokes)`、`renderThumb`；每次缩放、翻页、开关画笔后用 `fitSources` 让出处页码避开底部控制条（学生链接、投影、离线文件共用）；`InkLayer`（逻辑 1920×1080 坐标的笔画，按页保存）；`presenterSync(lessonId, {onPosition, onBlank, onHello, onTally, onInk}) → {position, blank, tally, ink, close}`（`ink` 发送一页的全部笔画，收到时校验颜色和坐标）、`answerKey(content)`；纯函数 `keyAction` / `nextPosition` / `prevPosition` |
-| `apps/app` | HTTP 边界 + 用例编排 + 持久化 | 路由见 §6（复用在 `routes/reuse.ts`；路由之间不互相导入）；`store.ts`（快照、复用、聚合列表、导出、`lessonView`、`scopeFor`、`treeOf`、分享视图与 `shareToken`）；`db/index.ts`（`db(env)`）；`auth/*`（PBKDF2 + 会话 + 登录限速） |
+| `apps/app` | HTTP 边界 + 用例编排 + 持久化 | 路由见 §6（复用在 `routes/reuse.ts`；路由之间不互相导入）；`store.ts`（快照、复用、聚合列表、导出、`lessonView`、`lessonsUsing`、分享视图与 `shareToken`）；`textbook/`（教材模块：`index.ts` 读接口 `ownedTextbook`、`textbookList`、`chapterTree`、`pageMeta`、`pageLabels`、`page`、`pageTexts`、`selectionPages`、`scopeStats(…, {sourceBudget})`、`chapterRuns`、`resolveScope`；`write.ts` 写接口 `createTextbook`、`putPages`、`pastePages`、`setTextbookArchived`；`tables.ts`）；`db/accounts.ts`（`orgs`、`users`）；`db/index.ts`（`db(env)`）；`auth/*`（PBKDF2 + 会话 + 登录限速） |
 | `apps/web` | 老师界面 | 登录 / 改密 / 后台 / 我的课（单元成组、“复制到新学期”、删除与撤销）/ 五步向导（章节步显示内容量条，内容偏多时可预览并“整单元规划”）/ 槽位编辑器（按版式生成表单：实时字数、中文报错、图示无需 JSON、A/B/C/D 选答案、先投票开关、实验结果、排序 / 配对卡片、实时预览）/ 放映 / 演讲者窗口 / 离线导出（`src/offline/*`：上课用 + 学生版）/ 分享；后台的“最近操作”（审计日志最新 20 条）；`/dev/gallery`、`/dev/render`、`/dev/player` 只在 `vite dev` 和 `KJ_DEV_PAGES=1` 构建里（E2E、评测用），生产包不含 |
 | `pptx` | 兼容导出：课件 → 可编辑 .pptx（HTML 课件仍是主格式） | `planSlide(slide, {theme, pageLabels}) → {items, notes, degraded}`（9 个版式 → 原生文本框 / 形状 / 表格 / 图表，逻辑 1920×1080 坐标，56px = 28pt；`fitFont` 按 56→48px 降档）、`exportPptx(deck, {chartImage?}) → {data, filename, degraded, overflow}`、`PPTX_FONT`（PingFang SC，macOS 自带，不嵌入字体）、`texToText`；`scripts/render-check.ts`（LibreOffice headless：自增高探针比对每个文本框的实际高度、PDF 每个词都在页内、导出 PNG） |
 | `tools/eval` | 消融评测（不属于产品） | `pnpm eval:run`（manifest 场景 → 流水线 → 每场景 × 次数一个 deck JSON）、`pnpm eval:render`（Chromium 渲染，写回 `slides[].overflow`）；`pnpm eval:run --noise` / `pnpm eval:faults`（注入故障，量每道防线的拦截率与干净数据上的误报率）；`AblationFlags = PipelineOptions + {scope, outline, renderMode, autoConfirm}` |

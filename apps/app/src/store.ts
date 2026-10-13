@@ -1,33 +1,29 @@
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { checkSourceText, slideKey, sourceUnverified, suspiciousContent } from "@kj/generation";
-import { isEmptyPage, MIN_PAGE_WORDS, normalizeRanges, pagesInRanges, rangesForChapters, sourceCut } from "@kj/pdf-structure";
 import { checkOutline, OUTLINE_SOURCE_CHARS, outlineTiming, verifyNumbers } from "@kj/pedagogy";
-import { LessonParams, LessonScope, newId, Outline, SlideContent, type ChapterNode, type PageRange, type PageText, type PageType, type Slide, type Unverified } from "@kj/schema";
+import { LessonParams, LessonScope, newId, Outline, SlideContent, type PageType, type Slide, type Unverified } from "@kj/schema";
 import { withoutAnswers } from "@kj/templates";
 import { db } from "./db/index.ts";
-import { chapters, documents, lessons, outlineVersions, pages, shareLinks, slides } from "./db/schema.ts";
+import { lessons, outlineVersions, shareLinks, slides } from "./db/schema.ts";
 import { secret, type Env, type SessionUser } from "./env.ts";
 import { HttpError } from "./http.ts";
+import { pageLabels, pageTexts, scopeStats, selectionPages } from "./textbook/index.ts";
 
 export type LessonRow = typeof lessons.$inferSelect;
 export type VersionRow = typeof outlineVersions.$inferSelect;
 export type SlideRow = typeof slides.$inferSelect;
-
-/**
- * Deleted (archived) documents are not found unless `archived` is set: reads of its pages for
- * lessons already made from it, editing those lessons' scope, and restore.
- */
-export async function ownedDocument(env: Env, user: SessionUser, id: string, opts: { archived?: boolean } = {}) {
-  const row = (await db(env).select().from(documents).where(and(eq(documents.id, id), eq(documents.orgId, user.orgId), eq(documents.ownerId, user.id))).limit(1))[0];
-  if (!row || (row.archivedAt !== null && !opts.archived)) throw new HttpError(404, "NOT_FOUND", "Document not found · 找不到该文档");
-  return row;
-}
 
 /** Archived lessons are not found unless `archived` is set (only restore asks for them). */
 export async function ownedLesson(env: Env, user: SessionUser, id: string, opts: { archived?: boolean } = {}): Promise<LessonRow> {
   const row = (await db(env).select().from(lessons).where(and(eq(lessons.id, id), eq(lessons.orgId, user.orgId), eq(lessons.ownerId, user.id))).limit(1))[0];
   if (!row || (row.archivedAt !== null && !opts.archived)) throw new HttpError(404, "NOT_FOUND", "Lesson not found · 找不到该课");
   return row;
+}
+
+/** Lessons (not deleted) made from a textbook. */
+export async function lessonsUsing(env: Env, documentId: string): Promise<number> {
+  const [used] = await db(env).select({ n: count() }).from(lessons).where(and(eq(lessons.documentId, documentId), isNull(lessons.archivedAt)));
+  return used?.n ?? 0;
 }
 
 export const lessonParams = (l: LessonRow) => LessonParams.parse(JSON.parse(l.params));
@@ -60,59 +56,6 @@ export function confirmedOutline(v: VersionRow): Outline {
   return outlineOf(v);
 }
 
-/** Text of the scope's pages that have any (pages without text never reach the model). */
-export async function scopePages(env: Env, documentId: string, scope: LessonScope): Promise<PageText[]> {
-  return pagesByNo(env, documentId, pagesInRanges(scope.ranges));
-}
-
-async function pagesByNo(env: Env, documentId: string, wanted: number[]): Promise<PageText[]> {
-  const out: PageText[] = [];
-  for (let i = 0; i < wanted.length; i += 90) {
-    const chunk = wanted.slice(i, i + 90);
-    const rows = await db(env)
-      .select({ no: pages.no, text: pages.text, label: pages.label })
-      .from(pages)
-      .where(and(eq(pages.documentId, documentId), inArray(pages.no, chunk), gte(pages.words, MIN_PAGE_WORDS)))
-      .orderBy(asc(pages.no));
-    out.push(...rows.map((r) => ({ no: r.no, text: r.text, ...(r.label ? { label: r.label } : {}) })));
-  }
-  return out;
-}
-
-interface ScopeStats {
-  /** Word count (for the "this needs about N minutes" estimate). */
-  words: number;
-  /** Pages without usable text (scanned images): never sent to the model. */
-  emptyPages: number[];
-  /** Pages with text beyond OUTLINE_SOURCE_CHARS: the outline planner cannot read them. */
-  unreadPages: number[];
-}
-
-/** One query over the scope's page sizes; texts are not loaded (LENGTH() predicts the source cut). */
-export async function scopeStats(env: Env, documentId: string, scope: LessonScope): Promise<ScopeStats> {
-  const inRanges = or(...scope.ranges.map((r) => and(gte(pages.no, r.start), lte(pages.no, r.end))));
-  const rows = await db(env)
-    .select({ no: pages.no, words: pages.words, chars: sql<number>`LENGTH(${pages.text})` })
-    .from(pages)
-    .where(and(eq(pages.documentId, documentId), inRanges))
-    .orderBy(asc(pages.no));
-  const withText = rows.filter((r) => !isEmptyPage(r.words));
-  return {
-    words: rows.reduce((n, r) => n + r.words, 0),
-    emptyPages: rows.filter((r) => isEmptyPage(r.words)).map((r) => r.no),
-    unreadPages: sourceCut(withText, OUTLINE_SOURCE_CHARS).omitted,
-  };
-}
-
-/** Printed page labels of a document (only pages whose label differs from the index). */
-export async function pageLabels(env: Env, documentId: string): Promise<Record<number, string>> {
-  const rows = await db(env)
-    .select({ no: pages.no, label: pages.label })
-    .from(pages)
-    .where(and(eq(pages.documentId, documentId), isNotNull(pages.label)));
-  return Object.fromEntries(rows.map((r) => [r.no, r.label!]));
-}
-
 export function slideFromRow(r: SlideRow): Slide {
   return {
     id: r.id,
@@ -138,7 +81,7 @@ export async function unverifiedFor(env: Env, documentId: string, row: SlideRow,
   const sources = JSON.parse(row.sources) as number[];
   const version = await versionOf(env, row.lessonId, row.outlineVersionId);
   const spec = outlineOf(version).slides.find((s) => s.id === row.specId);
-  const list = sources.length ? await pagesByNo(env, documentId, sources) : await scopePages(env, documentId, versionScope(version));
+  const list = sources.length ? await pageTexts(env, documentId, sources) : await selectionPages(env, documentId, versionScope(version).ranges);
   return [...(spec ? sourceUnverified(spec) : []), ...verifyNumbers(content, checkSourceText(sources, list), { pageType: row.pageType as PageType, notes })].slice(0, 10);
 }
 
@@ -287,26 +230,6 @@ export function deckExport(lesson: LessonRow, version: VersionRow, list: Slide[]
   };
 }
 
-export async function treeOf(env: Env, documentId: string): Promise<ChapterNode[]> {
-  const rows = await db(env).select().from(chapters).where(eq(chapters.documentId, documentId)).orderBy(chapters.ord);
-  return rows.map(({ documentId: _d, ...ch }) => ch);
-}
-
-/** `existing`: re-scoping a lesson that already uses the document, which works after the document is deleted. */
-export async function scopeFor(env: Env, user: SessionUser, documentId: string, chapterIds: string[], ranges: PageRange[], existing = false): Promise<{ scope: LessonScope; title: string }> {
-  const doc = await ownedDocument(env, user, documentId, { archived: existing });
-  if (doc.pagesReceived < doc.pageCount) throw new HttpError(409, "DOCUMENT_INCOMPLETE", "The PDF is still uploading · PDF 还在上传");
-  const tree = await treeOf(env, doc.id);
-  const known = new Set(tree.map((c) => c.id));
-  const ids = chapterIds.filter((id) => known.has(id));
-  const fromChapters = ids.length ? rangesForChapters(tree, ids, doc.pageCount) : [];
-  const merged = normalizeRanges([...fromChapters, ...ranges], doc.pageCount);
-  if (!merged.length) throw new HttpError(400, "EMPTY_SCOPE", "Choose at least one chapter or page range · 请至少选择一个章节或页码范围");
-  const picked = tree.filter((c) => ids.includes(c.id) && !(c.parentId && ids.includes(c.parentId)));
-  const title = picked.length ? picked.map((c) => c.title).join(" · ") : `${doc.title} pp. ${merged.map((r) => `${r.start}–${r.end}`).join(", ")}`;
-  return { scope: { chapterIds: ids, ranges: merged }, title: title.slice(0, 200) };
-}
-
 export function versionView(v: VersionRow) {
   const outline = outlineOf(v);
   const params = versionParams(v);
@@ -350,7 +273,7 @@ export async function lessonView(env: Env, lesson: LessonRow) {
     latestVersion(env, lesson.id),
     latestConfirmed(env, lesson.id),
     pageLabels(env, lesson.documentId),
-    scopeStats(env, lesson.documentId, scope),
+    scopeStats(env, lesson.documentId, scope.ranges, { sourceBudget: OUTLINE_SOURCE_CHARS }),
     shareView(env, lesson.id),
   ]);
   const drafting = lesson.draftingUntil !== null && lesson.draftingUntil > Date.now();

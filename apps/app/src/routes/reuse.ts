@@ -1,43 +1,16 @@
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { normalizeRanges, pagesInRanges } from "@kj/pdf-structure";
-import { planBudget, planUnit, unitGroupLabel, unitGroupMinutes, type UnitPiece } from "@kj/pedagogy";
-import { DEFAULT_PARAMS, LessonParams, newId, PageRange, type ChapterNode, type LessonScope } from "@kj/schema";
+import { planBudget, planUnit, unitGroupLabel, unitGroupMinutes } from "@kj/pedagogy";
+import { DEFAULT_PARAMS, LessonParams, newId, PageRange, type LessonScope } from "@kj/schema";
 import { requireUser } from "../auth/session.ts";
 import { db } from "../db/index.ts";
-import { lessons, outlineVersions, pages, slides } from "../db/schema.ts";
+import { lessons, outlineVersions, slides } from "../db/schema.ts";
 import type { AppBindings } from "../env.ts";
 import { HttpError, parseJson } from "../http.ts";
-import { latestConfirmed, latestVersion, lessonScope, lessonView, ownedLesson, scopeFor, treeOf, type VersionRow } from "../store.ts";
-
-/** Selected chapters with no selected child: they own their pages in the unit split. */
-function leafChapters(tree: ChapterNode[], ids: string[]): ChapterNode[] {
-  const set = new Set(ids);
-  return tree.filter((c) => set.has(c.id) && !tree.some((k) => k.parentId === c.id && set.has(k.id)));
-}
-
-/** Consecutive pages owned by the same leaf chapter (or by none) form one piece of the unit. */
-function piecesOf(scope: LessonScope, tree: ChapterNode[], words: Map<number, number>): UnitPiece[] {
-  const leaves = leafChapters(tree, scope.chapterIds);
-  const selected = tree.filter((c) => scope.chapterIds.includes(c.id)).sort((a, b) => b.level - a.level);
-  const covers = (c: ChapterNode, no: number) => c.pageStart <= no && no <= c.pageEnd;
-  // A parent's intro pages (before its first selected child) belong to the parent.
-  const ownerOf = (no: number) => leaves.find((c) => covers(c, no)) ?? selected.find((c) => covers(c, no));
-  const out: UnitPiece[] = [];
-  for (const no of pagesInRanges(scope.ranges)) {
-    const owner = ownerOf(no);
-    const last = out[out.length - 1];
-    const page = { no, words: words.get(no) ?? 0 };
-    if (last && last.chapterId === owner?.id && last.pages[last.pages.length - 1]!.no === no - 1) last.pages.push(page);
-    else out.push({ title: owner?.title ?? "", ...(owner ? { chapterId: owner.id } : {}), pages: [page] });
-  }
-  for (const p of out) {
-    const [first, last] = [p.pages[0]!.no, p.pages[p.pages.length - 1]!.no];
-    if (!p.title) p.title = first === last ? `p. ${first}` : `pp. ${first}–${last}`;
-  }
-  return out;
-}
+import { latestConfirmed, latestVersion, lessonScope, lessonView, ownedLesson, type VersionRow } from "../store.ts";
+import { chapterRuns, chapterTree, resolveScope } from "../textbook/index.ts";
 
 /** A copy starts a fresh edit history (`rev` 0); share links stay with the source lesson. */
 const copyVersion = (v: VersionRow, lessonId: string, version: number) => ({
@@ -99,24 +72,15 @@ export const reuseRoutes = new Hono<AppBindings>()
         lessonId: z.string().optional(),
       }),
     );
-    const { scope, title } = await scopeFor(c.env, u, body.documentId, body.chapterIds, body.ranges);
+    const { scope, title } = await resolveScope(c.env, u, body.documentId, body.chapterIds, body.ranges);
     const reuse = body.lessonId ? await ownedLesson(c.env, u, body.lessonId) : null;
     const drafting = !!reuse?.draftingUntil && reuse.draftingUntil > Date.now();
     if (reuse && (drafting || reuse.documentId !== body.documentId || (await latestVersion(c.env, reuse.id)))) throw new HttpError(409, "LESSON_IN_USE", "This lesson already has an outline · 这节课已经有大纲，不能并入单元");
     const params = body.params ?? (reuse ? LessonParams.parse(JSON.parse(reuse.params)) : DEFAULT_PARAMS);
     const d = db(c.env);
     const nos = pagesInRanges(scope.ranges);
-    const words = new Map<number, number>();
-    for (let i = 0; i < nos.length; i += 90) {
-      const rows = await d
-        .select({ no: pages.no, words: pages.words })
-        .from(pages)
-        .where(and(eq(pages.documentId, body.documentId), inArray(pages.no, nos.slice(i, i + 90))))
-        .orderBy(asc(pages.no));
-      for (const r of rows) words.set(r.no, r.words);
-    }
-    const tree = await treeOf(c.env, body.documentId);
-    const groups = planUnit(piecesOf(scope, tree, words), params.minutes, body.count);
+    const tree = await chapterTree(c.env, body.documentId);
+    const groups = planUnit(await chapterRuns(c.env, body.documentId, scope, tree), params.minutes, body.count);
     if (groups.length < 2) throw new HttpError(400, "UNIT_TOO_SMALL", "The selection fits one lesson · 所选内容一节课就够了，不需要拆分");
     const unit = { id: newId("unit", 8), title: (body.title ?? title).slice(0, 160), count: groups.length };
     const maxMinutes = planBudget(params).maxMinutes;
