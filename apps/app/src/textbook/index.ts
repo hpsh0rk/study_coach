@@ -2,7 +2,7 @@
  * The textbook module's read interface: the only way lesson, generation and share code reaches a
  * textbook's pages, chapters and labels. It knows nothing about lessons (see .dependency-cruiser.cjs).
  */
-import { and, asc, between, desc, eq, gte, inArray, isNotNull, isNull, lte, or } from "drizzle-orm";
+import { and, asc, between, count, desc, eq, gte, inArray, isNotNull, isNull, lte, or } from "drizzle-orm";
 import { chapterRunsOf, isEmptyPage, MIN_PAGE_WORDS, missingRanges, PDFJS_PARSER, type PageFlag, normalizeRanges, pagesInRanges, rangesForChapters, sourceCut, type ChapterRun } from "@kj/textbook";
 import type { ChapterNode, LessonScope, PageKind, PageRange, PageText } from "@kj/schema";
 import { db } from "../db/index.ts";
@@ -30,6 +30,11 @@ export async function textbookList(env: Env, user: SessionUser): Promise<Textboo
     .where(and(eq(documents.orgId, user.orgId), eq(documents.ownerId, user.id), isNull(documents.archivedAt)))
     .orderBy(desc(documents.createdAt))
     .limit(100);
+}
+
+/** Textbooks in the org that are not deleted, for the 后台 overview. */
+export async function textbookCount(env: Env, orgId: string): Promise<number> {
+  return (await db(env).select({ n: count() }).from(documents).where(and(eq(documents.orgId, orgId), isNull(documents.archivedAt))))[0]?.n ?? 0;
 }
 
 export type TextbookLookup =
