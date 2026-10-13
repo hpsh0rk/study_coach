@@ -1,6 +1,6 @@
 # AI 课件工坊 · 架构（v10，教材模块：教材读写收进一个模块，见 docs/design/textbook-module.md）
 
-> 状态：2026-10-13 · 与 `main` 上的代码一致（教材模块 PR 9 合并后）。来源文档：第一性原理审查 · 夜间决策记录（权威）· HTML 课件调研 · 教学规则（规则编号 L/P/V/I/T/Q 出自此文）· 老师调研 · 项目决策记录 · 对抗审查 1 / 2 / 3 · 消融结果（均在项目资料库 `docs/`，不在本仓库）。代码与本文冲突时以代码为准，并修正本文。
+> 状态：2026-10-13 · 与 `main` 上的代码一致（本地运行 / 密钥与自部署 PR A 合并后）。来源文档：第一性原理审查 · 夜间决策记录（权威）· HTML 课件调研 · 教学规则（规则编号 L/P/V/I/T/Q 出自此文）· 老师调研 · 项目决策记录 · 对抗审查 1 / 2 / 3 · 消融结果（均在项目资料库 `docs/`，不在本仓库）。代码与本文冲突时以代码为准，并修正本文。
 
 ---
 
@@ -55,6 +55,8 @@ D1：orgs, users, sessions, login_attempts, ai_providers, ai_calls, audit_log,
     documents, pages, chapters, lessons, outline_versions, slides, share_links
 静态资源：SPA、字体（Arimo、Noto Sans SC）、KaTeX、内置实验 /sims/*.html
 ```
+
+本地运行（README“本地运行”）：`corepack pnpm install` → `pnpm setup:local`（本地 D1 迁移 + `scripts/create-admin.mjs --keep`：本地默认管理员 admin / Admin12345、首次登录必须改密码，已有账号不动；`--remote` 总是随机密码）→ `pnpm dev`（:8787）。没有任何 Key 时 `AI_ALLOW_STUB=true` 用确定性 stub 跑通全流程，每页黄色“演示模式”横幅标明不是 AI。
 
 关闭标签页会中断逐页生成；重新打开后“继续生成”只补缺失的页。需要后台生成时再引入 Workflows，`writeSlide()` 原样作为 step 主体。
 
