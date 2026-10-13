@@ -366,4 +366,4 @@ PipelineOptions = { budgetsInPrompt, outlineCheckRetry, slideCheckRetry, truncat
 
 ## 9. 密码哈希的取舍（PBKDF2 迭代次数）
 
-现在部署在本机，没有 Workers 免费版的 10ms CPU 限制，所以从 15k 提高到 **300k**（`node scripts/bench-pbkdf2.mjs` 在 Xeon 上 100k ≈ 12–19ms，300k ≈ 35–55ms；登录有限速，这点延迟可以接受）。Cloudflare 线上的 WebCrypto 每次 PBKDF2 最多 10 万次迭代，为了以后还能部署到 Cloudflare，超过 10 万次时分成每次不超过 10 万次的几段串起来算，上一段的输出当下一段的密码（`derive`，`scripts/create-admin.mjs` 用 Node 的 `pbkdf2Sync` 做同样的事，`auth.test.ts` 用脚本算出的哈希核对两边一致）。哈希串自带迭代次数，登录成功时把其他次数的哈希换成当前次数，老用户下次登录自动升级到 300k。未知用户名用同样次数的假哈希校验，响应时间一致。登录按用户名和 IP 限速（15 分钟 8 次），密码至少 8 位且含字母和数字。
+现在部署在本机，没有 Workers 免费版的 10ms CPU 限制，所以从 15k 提高到 **300k**（`node scripts/bench-pbkdf2.mjs` 在 Xeon 上 100k ≈ 12–19ms，300k ≈ 35–55ms；登录有限速：同一 IP 15 分钟内输错 8 次锁这个 IP，同一 IP 对同一用户名输错 8 次锁这对组合，别人在别处输错不会把真正的用户锁在外面；计数是一条原子的 upsert，并发请求不会多试几次（设计评审 A8）。这点延迟可以接受）。Cloudflare 线上的 WebCrypto 每次 PBKDF2 最多 10 万次迭代，为了以后还能部署到 Cloudflare，超过 10 万次时分成每次不超过 10 万次的几段串起来算，上一段的输出当下一段的密码（`derive`，`scripts/create-admin.mjs` 用 Node 的 `pbkdf2Sync` 做同样的事，`auth.test.ts` 用脚本算出的哈希核对两边一致）。哈希串自带迭代次数，登录成功时把其他次数的哈希换成当前次数，老用户下次登录自动升级到 300k。未知用户名用同样次数的假哈希校验，响应时间一致。登录按用户名和 IP 限速（15 分钟 8 次），密码至少 8 位且含字母和数字。

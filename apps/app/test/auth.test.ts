@@ -43,6 +43,16 @@ describe("whitelist auth", () => {
     expect((await c.req("POST", "/api/auth/login", { username: "nobody", password: "wrong-pass1" })).status).toBe(401);
   });
 
+  it("locks a username only from the IP that guessed wrong; concurrent failures all count", async () => {
+    await seedUser("usr_lock", "locked", "Locked12345", { mustChange: false });
+    const login = (password: string, ip: string) => new Client().req("POST", "/api/auth/login", { username: "locked", password }, { "cf-connecting-ip": ip });
+    const tries = await Promise.all(Array.from({ length: 8 }, () => login("wrong-pass1", "10.0.0.1")));
+    expect(tries.map((r) => r.status)).toEqual(Array(8).fill(401));
+    expect(await e.DB.prepare("SELECT failures FROM login_attempts WHERE key = 'u:10.0.0.1:locked'").first("failures")).toBe(8);
+    expect((await login("Locked12345", "10.0.0.1")).status).toBe(429);
+    expect((await login("Locked12345", "10.0.0.2")).status).toBe(200);
+  });
+
   it("requires the CSRF header on mutations", async () => {
     const c = new Client();
     const res = await c.req("POST", "/api/auth/login", { username: "admin", password: "Admin12345" }, { "x-kj-csrf": "" });

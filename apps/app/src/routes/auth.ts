@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, count, eq, gt, gte, inArray, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { auditLog, loginAttempts, users } from "../db/schema.ts";
@@ -11,25 +11,35 @@ import { aiMode } from "../ai.ts";
 
 const WINDOW_MS = 15 * 60_000;
 const MAX_FAILURES = 8;
+/** Per IP, and per username from that IP only: a stranger's wrong guesses never lock the real user out. */
+const attemptKeys = (ip: string, username: string) => [`ip:${ip}`, `u:${ip}:${username}`];
+
 async function tooManyAttempts(env: Env, keys: string[]): Promise<boolean> {
-  const now = Date.now();
-  for (const key of keys) {
-    const row = (await db(env).select().from(loginAttempts).where(eq(loginAttempts.key, key)).limit(1))[0];
-    if (row && now - row.windowStart < WINDOW_MS && row.failures >= MAX_FAILURES) return true;
-  }
-  return false;
+  const rows = await db(env)
+    .select({ n: count() })
+    .from(loginAttempts)
+    .where(and(inArray(loginAttempts.key, keys), gt(loginAttempts.windowStart, Date.now() - WINDOW_MS), gte(loginAttempts.failures, MAX_FAILURES)));
+  return (rows[0]?.n ?? 0) > 0;
 }
 
+/** One upsert per key, so concurrent failures all count. */
 async function recordFailure(env: Env, keys: string[]): Promise<void> {
   const now = Date.now();
-  for (const key of keys) {
-    const row = (await db(env).select().from(loginAttempts).where(eq(loginAttempts.key, key)).limit(1))[0];
-    if (!row || now - row.windowStart >= WINDOW_MS) {
-      await db(env).insert(loginAttempts).values({ key, windowStart: now, failures: 1 }).onConflictDoUpdate({ target: loginAttempts.key, set: { windowStart: now, failures: 1 } });
-    } else {
-      await db(env).update(loginAttempts).set({ failures: row.failures + 1 }).where(eq(loginAttempts.key, key));
-    }
-  }
+  const expired = sql`${loginAttempts.windowStart} <= ${now - WINDOW_MS}`;
+  const d = db(env);
+  const [first, ...rest] = keys.map((key) =>
+    d
+      .insert(loginAttempts)
+      .values({ key, windowStart: now, failures: 1 })
+      .onConflictDoUpdate({
+        target: loginAttempts.key,
+        set: {
+          failures: sql`CASE WHEN ${expired} THEN 1 ELSE ${loginAttempts.failures} + 1 END`,
+          windowStart: sql`CASE WHEN ${expired} THEN ${now} ELSE ${loginAttempts.windowStart} END`,
+        },
+      }),
+  );
+  await d.batch([first!, ...rest]);
 }
 
 export const authRoutes = new Hono<AppBindings>()
@@ -37,7 +47,7 @@ export const authRoutes = new Hono<AppBindings>()
     const body = await parseJson(c, z.object({ username: z.string().trim().min(1).max(64), password: z.string().min(1).max(200) }));
     const username = body.username.toLowerCase();
     const ip = c.req.header("cf-connecting-ip") ?? "local";
-    const keys = [`u:${username}`, `ip:${ip}`];
+    const keys = attemptKeys(ip, username);
     if (await tooManyAttempts(c.env, keys)) throw new HttpError(429, "RATE_LIMITED", "Too many attempts, try again in 15 minutes · 尝试次数过多，请 15 分钟后再试");
     const user = (await db(c.env).select().from(users).where(eq(users.username, username)).limit(1))[0];
     const ok = (await verifyPassword(body.password, user?.passwordHash ?? DUMMY_HASH)) && !!user && !user.disabledAt;
@@ -48,7 +58,7 @@ export const authRoutes = new Hono<AppBindings>()
     if (needsRehash(user.passwordHash)) {
       await db(c.env).update(users).set({ passwordHash: await hashPassword(body.password) }).where(eq(users.id, user.id));
     }
-    await db(c.env).delete(loginAttempts).where(eq(loginAttempts.key, `u:${username}`));
+    await db(c.env).delete(loginAttempts).where(eq(loginAttempts.key, keys[1]!));
     await createSession(c, user.id);
     await db(c.env).insert(auditLog).values({ orgId: user.orgId, actorId: user.id, action: "auth.login" });
     return c.json({ user: { id: user.id, username: user.username, displayName: user.displayName, role: user.role, mustChangePassword: user.mustChangePassword } });
