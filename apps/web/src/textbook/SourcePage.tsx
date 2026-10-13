@@ -1,4 +1,4 @@
-import { MINERU_AGENT_PARSER, MINERU_PARSER, PASTE_PARSER, PDFJS_PARSER } from "@kj/pdf-structure";
+import { isVisionParser, MINERU_AGENT_PARSER, MINERU_PARSER, PASTE_PARSER, PDFJS_PARSER } from "@kj/pdf-structure";
 import type { TextbookPage } from "./api.ts";
 
 const ORIGIN: Record<string, string> = {
@@ -9,7 +9,12 @@ const ORIGIN: Record<string, string> = {
 
 /** A cited textbook page, opened from a slide's source chip. */
 export function SourcePage({ page, onClose }: { page: TextbookPage; onClose: () => void }) {
-  const origin = page.parser === PDFJS_PARSER ? null : (ORIGIN[page.parser] ?? `文字来源 Text from: ${page.parser}`);
+  const origin =
+    page.parser === PDFJS_PARSER
+      ? null
+      : isVisionParser(page.parser)
+        ? "浏览器读不全这一页，文字由看图模型从页面图片识别，公式和数字请对照原书核对 · Read from the page image by a vision model: check the numbers"
+        : (ORIGIN[page.parser] ?? `文字来源 Text from: ${page.parser}`);
   return (
     <div className="modal" onClick={onClose}>
       <div className="modal-card card" onClick={(e) => e.stopPropagation()}>

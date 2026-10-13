@@ -3,7 +3,7 @@ import { newId } from "@kj/schema";
 import { chatCompletion, ProviderError, type AiConfigSource, type ChatMessage, type FetchLike, type ProviderConfig } from "./providers.ts";
 
 /** What a call is for; recorded with every call for metering. */
-export type CapabilityName = "outline.draft" | "slide.write";
+export type CapabilityName = "outline.draft" | "slide.write" | "page.read";
 
 export interface CallContext {
   orgId: string;
@@ -66,6 +66,24 @@ export interface StructuredRequest<T> {
 
 export interface StructuredResult<T> {
   output: T;
+  callId: string;
+  providerId: string;
+  model: string;
+}
+
+export interface VisionRequest {
+  capability: CapabilityName;
+  promptVersion: string;
+  instructions: string;
+  /** `data:image/jpeg;base64,…` (or png / webp). */
+  image: string;
+  maxTokens?: number;
+  timeoutMs?: number;
+  ctx: CallContext;
+}
+
+export interface VisionResult {
+  text: string;
   callId: string;
   providerId: string;
   model: string;
@@ -149,7 +167,38 @@ export function createAiLayer(opts: AiLayerOptions) {
     }
   }
 
-  return { callStructured };
+  /**
+   * One image and an instruction to the provider's vision model; plain text back. Never stubbed: a made-up
+   * transcription would pass for the page. Without a vision model configured it refuses.
+   */
+  async function callVision(req: VisionRequest): Promise<VisionResult> {
+    const callId = newId("ai");
+    const started = Date.now();
+    const base = { id: callId, capability: req.capability, promptVersion: req.promptVersion, ctx: req.ctx };
+    const { active } = await opts.config.load();
+    if (!active?.visionModel) throw new ProviderError("no vision model configured; set one on the provider in /admin · 请在后台给模型配置“看图模型”", undefined, false);
+    const { provider, visionModel: model } = active;
+    try {
+      const res = await chatCompletion(
+        provider,
+        {
+          model,
+          messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: req.image } }, { type: "text", text: req.instructions }] }],
+          temperature: 0,
+          maxTokens: req.maxTokens ?? 4096,
+          timeoutMs: timeoutFor(req.timeoutMs ?? 90_000),
+        },
+        opts.fetch,
+      );
+      await opts.meter.record({ ...base, providerId: provider.id, model: res.model, status: "ok", inputTokens: res.usage.inputTokens, outputTokens: res.usage.outputTokens, latencyMs: Date.now() - started });
+      return { text: res.text, callId, providerId: provider.id, model: res.model };
+    } catch (err) {
+      await opts.meter.record({ ...base, providerId: provider.id, model, status: "error", inputTokens: 0, outputTokens: 0, latencyMs: Date.now() - started, error: (err as Error).message.slice(0, 500) });
+      throw err;
+    }
+  }
+
+  return { callStructured, callVision };
 }
 
 export type AiLayer = ReturnType<typeof createAiLayer>;

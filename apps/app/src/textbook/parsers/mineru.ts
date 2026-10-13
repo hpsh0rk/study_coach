@@ -13,7 +13,7 @@ export interface ExternalParser {
   /** Content pages per sub-PDF; each is preceded by a separator page. */
   maxPagesPerJob: number;
   maxBytes: number;
-  costFenPerPage: number;
+  costMicroYuanPerPage: number;
   /** `markdown`: the result is the Markdown file. `zip`: a zip whose `full.md` is the Markdown. */
   format: "markdown" | "zip";
   submit(opts: { ocr: boolean }): Promise<{ taskId: string; uploadUrl: string }>;
@@ -78,7 +78,7 @@ export function agentParser(f: Fetch = fetch): ExternalParser {
     id: MINERU_AGENT_PARSER,
     maxPagesPerJob: 10,
     maxBytes: 10 * 1024 * 1024,
-    costFenPerPage: 0,
+    costMicroYuanPerPage: 0,
     format: "markdown",
     async submit({ ocr }) {
       const data = await call<{ task_id: string; file_url: string }>(f, `${AGENT_API}/parse/file`, {
@@ -105,7 +105,7 @@ export function tokenParser(token: string, f: Fetch = fetch): ExternalParser {
     id: MINERU_PARSER,
     maxPagesPerJob: 20,
     maxBytes: 90 * 1024 * 1024,
-    costFenPerPage: 0,
+    costMicroYuanPerPage: 0,
     format: "zip",
     async submit({ ocr }) {
       const data = await call<{ batch_id: string; file_urls: string[] }>(f, `${TOKEN_API}/file-urls/batch`, {

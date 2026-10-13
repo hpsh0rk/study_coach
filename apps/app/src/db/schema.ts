@@ -124,6 +124,8 @@ export const aiProviders = sqliteTable("ai_providers", {
   apiKeySealed: text("api_key_sealed").notNull(),
   apiKeyHint: text("api_key_hint").notNull(),
   model: text("model").notNull().default(""),
+  /** The same provider's model for image input (reading pages the browser could not); "" when none. */
+  visionModel: text("vision_model").notNull().default(""),
   /** At most one provider per org is enabled: every model call uses it. */
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
   createdAt: integer("created_at").notNull().$defaultFn(now),

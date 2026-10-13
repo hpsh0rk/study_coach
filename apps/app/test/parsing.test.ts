@@ -144,10 +144,16 @@ describe("external parser switch (外部解析服务)", () => {
     await e.DB.prepare("DELETE FROM parse_usage WHERE task_id = 't'").run();
   });
 
-  it("paid parsers stop at the per-book cost cap (402)", () => {
-    const used = { bookAutoPages: 0, bookCostFen: 450, userDayPages: 0, siteDayPages: 0 };
-    expect(parseAllowance(used, { pages: 5, reason: "auto", costFen: 0 })).toBeNull();
-    expect(parseAllowance(used, { pages: 5, reason: "refine", costFen: 60 })).toEqual({ status: 402, code: "PARSE_BUDGET", scope: "book", remaining: 50 });
+  it("money: paid parsing is off by default, then bounded by the monthly budget and the per-book cap (402); the site-wide day counts MinerU only", () => {
+    const used = { bookAutoPages: 0, bookCostMicroYuan: 4_500_000, userDayPages: 0, siteDayPages: 900, orgMonthCostMicroYuan: 2_000_000 };
+    const off = { paidEnabled: false, monthlyBudgetMicroYuan: 0 };
+    const on = { paidEnabled: true, monthlyBudgetMicroYuan: 3_000_000 };
+    expect(parseAllowance(used, { pages: 5, reason: "auto", costMicroYuan: 0, mineru: false }, off)).toBeNull();
+    expect(parseAllowance(used, { pages: 5, reason: "auto", costMicroYuan: 0, mineru: true }, off)).toMatchObject({ status: 429, scope: "site" });
+    expect(parseAllowance(used, { pages: 1, reason: "auto", costMicroYuan: 900, mineru: false }, off)).toEqual({ status: 402, code: "PARSE_BUDGET", scope: "off", remaining: 0 });
+    expect(parseAllowance(used, { pages: 1, reason: "auto", costMicroYuan: 900, mineru: false }, on)).toBeNull();
+    expect(parseAllowance(used, { pages: 5, reason: "refine", costMicroYuan: 1_200_000, mineru: false }, on)).toEqual({ status: 402, code: "PARSE_BUDGET", scope: "month", remaining: 1_000_000 });
+    expect(parseAllowance(used, { pages: 5, reason: "refine", costMicroYuan: 600_000, mineru: false }, on)).toEqual({ status: 402, code: "PARSE_BUDGET", scope: "book", remaining: 500_000 });
   });
 
   it("turning it off stops new jobs and jobs already started", async () => {

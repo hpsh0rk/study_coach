@@ -29,9 +29,13 @@ export const MUST_FIX_KINDS: readonly PageKind[] = ["scanned", "garbled", "formu
 export const REFINE_KINDS: readonly PageKind[] = ["formula-text", "table"];
 export const isMustFix = (kind: PageKind | null | undefined) => !!kind && MUST_FIX_KINDS.includes(kind);
 
-/** A page whose text a teacher may paste (or a parser may replace): no usable text, or a must-fix page still holding the pdf.js text. */
+/**
+ * A page whose text a teacher may paste: no usable text, a must-fix page still holding the pdf.js text, or one
+ * a vision model read (it may have misread digits; the teacher's text wins).
+ */
 export function needsText(p: { words: number; kind?: PageKind | null; parser?: string }): boolean {
-  return isEmptyPage(p.words) || (isMustFix(p.kind) && (p.parser ?? PDFJS_PARSER) === PDFJS_PARSER);
+  const parser = p.parser ?? PDFJS_PARSER;
+  return isEmptyPage(p.words) || (isMustFix(p.kind) && (parser === PDFJS_PARSER || isVisionParser(parser)));
 }
 
 const MATH_CHARS = /[∑∏∫∮√∛∞∂∆∇±∓×÷·≤≥≈≠≡∝∈∉⊂⊃⊆∪∩∀∃→←↔⇒⇔⊥∥°′″αβγδεζηθικλμνξπρστυφχψωΓΔΘΛΞΠΣΦΨΩ⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼₀₁₂₃₄₅₆₇₈₉₊₋]/g;
@@ -90,7 +94,17 @@ export function routePages(pages: { no: number; kind: PageKind }[], parsers: rea
 /** External parsers. The id carries the version: a page read by one is reused (same file, same page) only by the same id. */
 export const MINERU_AGENT_PARSER = "mineru-agent/1";
 export const MINERU_PARSER = "mineru/1";
-export const isExternalParser = (parser: string | null | undefined) => !!parser && parser !== PDFJS_PARSER && parser !== PASTE_PARSER;
+export const isExternalParser = (parser: string | null | undefined) => !!parser && parser !== PDFJS_PARSER && parser !== PASTE_PARSER && !isVisionParser(parser);
+
+/** A vision model's transcription of the page image (`vlm:<model>/1`): may misread digits, so the teacher is asked to check it. */
+export const visionParserId = (model: string) => `vlm:${model}/1`;
+export const isVisionParser = (parser: string | null | undefined) => !!parser && parser.startsWith("vlm:");
+
+/** Vision models wrap their answer in a Markdown fence now and then; the page text is what is inside. */
+export function cleanVisionText(text: string): string {
+  const fenced = /^\s*```(?:markdown|md|latex|text)?[ \t]*\n([\s\S]*?)\n```\s*$/i.exec(text);
+  return cleanParsedMarkdown(fenced ? fenced[1]! : text);
+}
 
 /**
  * A sub-PDF sent to an external parser has a page reading `KJPAGE n` before its n-th page. The result

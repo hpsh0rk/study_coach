@@ -8,7 +8,15 @@ import { secret, type Env } from "./env.ts";
 export async function loadAiConfig(env: Env, orgId: string): Promise<AiConfig> {
   const p = (await db(env).select().from(aiProviders).where(and(eq(aiProviders.orgId, orgId), eq(aiProviders.enabled, true), ne(aiProviders.model, ""))).limit(1))[0];
   if (!p) return { active: null };
-  return { active: { provider: { id: p.id, kind: p.kind, name: p.name, baseUrl: p.baseUrl, apiKey: await openSecret(p.apiKeySealed, secret(env, "AI_CONFIG_KEY")) }, model: p.model } };
+  return {
+    active: { provider: { id: p.id, kind: p.kind, name: p.name, baseUrl: p.baseUrl, apiKey: await openSecret(p.apiKeySealed, secret(env, "AI_CONFIG_KEY")) }, model: p.model, visionModel: p.visionModel || null },
+  };
+}
+
+/** The enabled provider's model for image input, or null (no provider, or none set). */
+export async function visionModelOf(env: Env, orgId: string): Promise<string | null> {
+  const p = (await db(env).select({ visionModel: aiProviders.visionModel }).from(aiProviders).where(and(eq(aiProviders.orgId, orgId), eq(aiProviders.enabled, true), ne(aiProviders.model, ""))).limit(1))[0];
+  return p?.visionModel || null;
 }
 
 /** Model time per HTTP request, all calls and retries together; below DRAFT_LOCK_MS so a slow model never outlives its lock. */

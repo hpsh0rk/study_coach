@@ -7,7 +7,7 @@ import { HttpError } from "../../http.ts";
 import type { TextbookRow } from "../index.ts";
 import { documents, pages, parseUsage } from "../tables.ts";
 import type { ExternalParser } from "./mineru.ts";
-import { chinaDay, externalParserFor, parseAllowance, parserSettingsOf, parseUsed } from "./settings.ts";
+import { chinaDay, externalParserFor, parseAllowance, parserSettingsOf, parseUsed, refusalMessage } from "./settings.ts";
 
 export type ParseReason = "auto" | "refine";
 export type JobRow = typeof parseUsage.$inferSelect;
@@ -40,16 +40,16 @@ async function parserOf(env: Env, user: SessionUser): Promise<ExternalParser> {
 }
 
 /** Must-fix pages still holding pdf.js text go without asking; refine-kind pages only when the teacher asks. */
-function eligible(reason: ParseReason, p: { kind: string | null; parser: string }): boolean {
+export function eligible(reason: ParseReason, p: { kind: string | null; parser: string }): boolean {
   if (p.parser !== PDFJS_PARSER) return false;
   const kind = p.kind as Parameters<typeof isMustFix>[0];
   return isMustFix(kind) || (reason === "refine" && !!kind && REFINE_KINDS.includes(kind));
 }
 
-type Saved = { no: number; parser: string } & PageFacts;
+export type Saved = { no: number; parser: string } & PageFacts;
 
 /** Pages another copy of the same file (same organisation) already got from this parser: copied, not sent again. */
-async function reuseParsed(env: Env, doc: TextbookRow, parser: string, nos: number[]): Promise<Saved[]> {
+export async function reuseParsed(env: Env, doc: TextbookRow, parser: string, nos: number[]): Promise<Saved[]> {
   if (!doc.fileSha256 || !nos.length) return [];
   const d = db(env);
   const found = await d
@@ -63,7 +63,7 @@ async function reuseParsed(env: Env, doc: TextbookRow, parser: string, nos: numb
   return saved;
 }
 
-async function writeParsed(env: Env, documentId: string, rows: (Saved & { text: string })[]): Promise<void> {
+export async function writeParsed(env: Env, documentId: string, rows: (Saved & { text: string })[]): Promise<void> {
   const d = db(env);
   await d.batch(
     rows.map(({ no, ...row }) => d.update(pages).set(row).where(and(eq(pages.documentId, documentId), eq(pages.no, no), eq(pages.parser, PDFJS_PARSER)))) as [any, ...any[]],
@@ -95,14 +95,9 @@ export async function createParseJob(
   const send = nos.filter((no) => !reused.some((r) => r.no === no));
   if (!send.length) return { reused, job: null, parser: info(parser) };
 
-  const refusal = parseAllowance(await parseUsed(env, user.id, doc.id), { pages: send.length, reason: req.reason, costFen: send.length * parser.costFenPerPage });
-  if (refusal) {
-    const message =
-      refusal.code === "PARSE_BUDGET"
-        ? "这本书的外部解析费用已到上限 · This book reached its parsing budget"
-        : { book: "这本书自动送去外部解析的页数已到上限", user: "你今天的外部解析额度用完了，明天再试", site: "本站今天的外部解析额度用完了，明天再试" }[refusal.scope] + " · Parsing quota reached";
-    throw new HttpError(refusal.status, refusal.code, message, { scope: refusal.scope, remaining: refusal.remaining });
-  }
+  const cost = send.length * parser.costMicroYuanPerPage;
+  const refusal = parseAllowance(await parseUsed(env, user, doc.id), { pages: send.length, reason: req.reason, costMicroYuan: cost, mineru: true }, await parserSettingsOf(env, user.orgId));
+  if (refusal) throw new HttpError(refusal.status, refusal.code, refusalMessage(refusal, "外部解析"), { scope: refusal.scope, remaining: refusal.remaining });
 
   const task = await parser.submit({ ocr: req.ocr });
   const id = newId("pjob");
@@ -117,7 +112,7 @@ export async function createParseJob(
       reason: req.reason,
       pages: send,
       pageCount: send.length,
-      costFen: send.length * parser.costFenPerPage,
+      costMicroYuan: cost,
       taskId: task.taskId,
       uploadUrl: task.uploadUrl,
       day: chinaDay(),

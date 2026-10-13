@@ -21,6 +21,13 @@ export interface ExternalParserInfo {
   format: "markdown" | "zip";
 }
 
+/** The configured provider's vision model, when it may be used (free, or paid parsing allowed). */
+export interface VisionParserInfo {
+  parser: string;
+  model: string;
+  microYuanPerPage: number;
+}
+
 export interface CreateTextbook {
   filename: string;
   title: string;
@@ -67,6 +74,7 @@ export const documentApi = {
       pageFlags: Record<number, PageFlag[]>;
       pageKinds: Record<number, PageKind>;
       externalParser: ExternalParserInfo | null;
+      visionParser: VisionParserInfo | null;
     }>(`/api/documents/${id}`),
   page: (id: string, no: number) => api<TextbookPage>(`/api/documents/${id}/pages/${no}`),
   paste: (id: string, start: number, end: number, text: string) => api<{ pages: PastedPage[] }>(`/api/documents/${id}/pages/paste`, { body: { start, end, text } }),
@@ -81,6 +89,8 @@ export const documentApi = {
     return res.arrayBuffer();
   },
   parseSave: (id: string, job: string, pages: { no: number; text: string }[]) => api<{ pages: PastedPage[] }>(`/api/documents/${id}/parse/${job}/pages`, { body: { pages } }),
+  parseImage: (id: string, no: number, image: string, reason: "auto" | "refine" = "auto") =>
+    api<{ page: PastedPage; reused: boolean }>(`/api/documents/${id}/parse-image`, { body: { no, image, reason } }),
   archive: (id: string) => api<{ ok: true; lessons: number }>(`/api/documents/${id}`, { method: "DELETE" }),
   restore: (id: string) => api(`/api/documents/${id}/restore`, { body: {} }),
 };

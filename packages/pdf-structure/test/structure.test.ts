@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PageProbe, TocEntry } from "@kj/schema";
-import { buildChapterTree, chapterRunsOf, countPages, distributeText, formatPages, isEmptyPage, leafSections, missingRanges, normalizeRanges, pageFacts, badCharRatio, classifyPage, mathScore, routePages, splitSeparated, separatorText, cleanParsedMarkdown, MUST_FIX_KINDS, REFINE_KINDS, pageForLabel, rangesForChapters, sourceCut, sourceForRanges, subtreeIds } from "../src/index.ts";
+import { buildChapterTree, chapterRunsOf, countPages, distributeText, formatPages, isEmptyPage, leafSections, missingRanges, normalizeRanges, pageFacts, badCharRatio, classifyPage, mathScore, routePages, splitSeparated, separatorText, cleanParsedMarkdown, cleanVisionText, isExternalParser, isVisionParser, needsText, visionParserId, MINERU_AGENT_PARSER, PASTE_PARSER, PDFJS_PARSER, MUST_FIX_KINDS, REFINE_KINDS, pageForLabel, rangesForChapters, sourceCut, sourceForRanges, subtreeIds } from "../src/index.ts";
 
 const toc: TocEntry[] = [
   {
@@ -241,5 +241,20 @@ describe("external parser results", () => {
 
   it("turns parser Markdown into page text", () => {
     expect(cleanParsedMarkdown("A ![fig](images/a.jpg) B\n\n\n\n<table><tr><td>t</td><td>v</td></tr><tr><td>1</td><td>2</td></tr></table>")).toBe("A  B\n\nt | v\n1 | 2");
+  });
+
+  it("vision answers: fences unwrapped; vlm pages are not counted as the external parser's", () => {
+    expect(cleanVisionText("```markdown\n## 3.1\n$v = u + at$\n```")).toBe("## 3.1\n$v = u + at$");
+    expect(cleanVisionText("plain $s = ut$ text")).toBe("plain $s = ut$ text");
+    expect(visionParserId("glm-4.6v-flash")).toBe("vlm:glm-4.6v-flash/1");
+    expect(isVisionParser(visionParserId("qwen-vl-ocr"))).toBe(true);
+    expect([PDFJS_PARSER, PASTE_PARSER, MINERU_AGENT_PARSER, visionParserId("m")].map(isExternalParser)).toEqual([false, false, true, false]);
+  });
+
+  it("the teacher may paste over pdf.js and vision text on must-fix pages, not over MinerU's or their own", () => {
+    const page = (parser: string, kind: "formula-lost" | "text" = "formula-lost") => ({ words: 40, kind, parser });
+    expect([PDFJS_PARSER, visionParserId("m"), MINERU_AGENT_PARSER, PASTE_PARSER].map((p) => needsText(page(p)))).toEqual([true, true, false, false]);
+    expect(needsText(page(visionParserId("m"), "text"))).toBe(false);
+    expect(needsText({ words: 0, parser: MINERU_AGENT_PARSER })).toBe(true);
   });
 });

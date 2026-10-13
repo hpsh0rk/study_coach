@@ -4,23 +4,26 @@ export const ProviderKind = z.enum(["deepseek", "glm", "custom"]);
 export type ProviderKind = z.infer<typeof ProviderKind>;
 
 /** Defaults shown in the admin form. Teachers never see this; admins can override base URL and model. */
-export const PROVIDER_PRESETS: Record<ProviderKind, { label: string; baseUrl: string; models: string[]; docs: string }> = {
+export const PROVIDER_PRESETS: Record<ProviderKind, { label: string; baseUrl: string; models: string[]; visionModels: string[]; docs: string }> = {
   deepseek: {
     label: "DeepSeek",
     baseUrl: "https://api.deepseek.com/v1",
     models: ["deepseek-chat", "deepseek-reasoner"],
+    visionModels: [],
     docs: "https://api-docs.deepseek.com/",
   },
   glm: {
     label: "GLM · 智谱",
     baseUrl: "https://open.bigmodel.cn/api/paas/v4",
     models: ["glm-4.5", "glm-4.5-air", "glm-4-flash"],
+    visionModels: ["glm-4.6v-flash", "glm-4.6v-flashx", "glm-4.6v"],
     docs: "https://docs.bigmodel.cn/",
   },
   custom: {
     label: "Custom (OpenAI-compatible)",
     baseUrl: "",
     models: [],
+    visionModels: ["qwen-vl-ocr", "qwen3-vl-flash"],
     docs: "",
   },
 };
@@ -37,8 +40,8 @@ export const ProviderConfig = z.object({
 export type ProviderConfig = z.infer<typeof ProviderConfig>;
 
 export interface AiConfig {
-  /** The one provider and model every call uses; null when none is configured. */
-  active: { provider: ProviderConfig; model: string } | null;
+  /** The one provider and model every call uses; null when none is configured. `visionModel`: the same provider's model for image input, if any. */
+  active: { provider: ProviderConfig; model: string; visionModel?: string | null } | null;
 }
 
 export interface AiConfigSource {
@@ -48,6 +51,27 @@ export interface AiConfigSource {
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string;
+}
+
+/** `image_url.url` is a `data:image/…;base64,` URL. */
+export type ContentPart = { type: "text"; text: string } | { type: "image_url"; image_url: { url: string } };
+
+/** A user turn with an image, for vision models. */
+export interface ImageMessage {
+  role: "user";
+  content: ContentPart[];
+}
+
+/** GLM's documented form for inline images is the bare base64 string; it also turns "thinking" off for transcription. */
+function forProvider(provider: ProviderConfig, messages: (ChatMessage | ImageMessage)[]): { messages: unknown[]; extra: Record<string, unknown> } {
+  const hasImage = messages.some((m) => typeof m.content !== "string");
+  if (provider.kind !== "glm" || !hasImage) return { messages, extra: {} };
+  return {
+    messages: messages.map((m) =>
+      typeof m.content === "string" ? m : { ...m, content: m.content.map((p) => (p.type === "image_url" ? { ...p, image_url: { url: p.image_url.url.replace(/^data:[^,]*;base64,/, "") } } : p)) },
+    ),
+    extra: { thinking: { type: "disabled" } },
+  };
 }
 
 export interface ChatResult {
@@ -72,10 +96,11 @@ export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 /** All supported providers speak the OpenAI chat-completions dialect. */
 export async function chatCompletion(
   provider: ProviderConfig,
-  req: { model: string; messages: ChatMessage[]; temperature?: number; json?: boolean; timeoutMs?: number },
+  req: { model: string; messages: (ChatMessage | ImageMessage)[]; temperature?: number; json?: boolean; maxTokens?: number; timeoutMs?: number },
   fetchImpl: FetchLike = fetch,
 ): Promise<ChatResult> {
   const url = `${provider.baseUrl.replace(/\/+$/, "")}/chat/completions`;
+  const { messages, extra } = forProvider(provider, req.messages);
   let res: Response;
   try {
     res = await fetchImpl(url, {
@@ -87,9 +112,11 @@ export async function chatCompletion(
       },
       body: JSON.stringify({
         model: req.model,
-        messages: req.messages,
+        messages,
         temperature: req.temperature ?? 0.4,
         ...(req.json ? { response_format: { type: "json_object" } } : {}),
+        ...(req.maxTokens ? { max_tokens: req.maxTokens } : {}),
+        ...extra,
         stream: false,
       }),
       signal: AbortSignal.timeout(req.timeoutMs ?? 60_000),
