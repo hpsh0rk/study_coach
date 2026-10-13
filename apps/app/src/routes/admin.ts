@@ -9,7 +9,7 @@ import { HttpError, parseJson } from "../http.ts";
 import { generatePassword, hashPassword, passwordProblem } from "../auth/password.ts";
 import { destroyUserSessions, requireAdmin, requireUser } from "../auth/session.ts";
 import { db } from "../db/index.ts";
-import { providerConfigOf, visionModelOf } from "../ai.ts";
+import { dailyModelCalls, modelCallsToday, providerConfigOf, visionModelOf } from "../ai.ts";
 import { textbookCount } from "../textbook/index.ts";
 import {
   effectiveMode,
@@ -132,7 +132,7 @@ export const adminRoutes = new Hono<AppBindings>()
   /** "概览": what each key-backed feature does now and what it still lacks, plus a few counts. Names and model ids only, no secret or URL. */
   .get("/status", async (c) => {
     const orgId = c.get("user").orgId;
-    const [providers, settings, userCount, lessonCount, textbooks, usage] = await Promise.all([
+    const [providers, settings, userCount, lessonCount, textbooks, usage, modelCalls] = await Promise.all([
       db(c.env)
         .select({ purpose: aiProviders.purpose, name: aiProviders.name, model: aiProviders.model, visionModel: aiProviders.visionModel })
         .from(aiProviders)
@@ -142,6 +142,7 @@ export const adminRoutes = new Hono<AppBindings>()
       db(c.env).select({ n: count() }).from(lessons).where(and(eq(lessons.orgId, orgId), isNull(lessons.archivedAt))),
       textbookCount(c.env, orgId),
       parseUsageToday(c.env, orgId),
+      modelCallsToday(c.env, orgId),
     ]);
     const text = providers.find((p) => p.purpose === "text");
     const vision = providers.find((p) => p.purpose === "vision");
@@ -151,7 +152,7 @@ export const adminRoutes = new Hono<AppBindings>()
       ai: text ? { state: "live", provider: text.name, model: text.model } : { state: c.env.AI_ALLOW_STUB === "true" ? "stub" : "off" },
       vision: visionModel ? { state: visionPaidOff ? "paid_off" : "on", provider: (vision ?? text)!.name, model: visionModel, separate: !!vision } : { state: "none" },
       external: { ...externalState(c.env, settings), mode: settings.mineruMode, stub: effectiveMode(c.env, settings) === "stub" },
-      counts: { users: userCount[0]?.n ?? 0, textbooks, lessons: lessonCount[0]?.n ?? 0, parsedPagesToday: usage.org },
+      counts: { users: userCount[0]?.n ?? 0, textbooks, lessons: lessonCount[0]?.n ?? 0, parsedPagesToday: usage.org, modelCallsToday: modelCalls, modelCallsPerDay: dailyModelCalls(c.env) },
     });
   })
 
