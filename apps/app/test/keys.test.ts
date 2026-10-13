@@ -143,4 +143,31 @@ describe("keys and reminders", () => {
     expect(test.json).toMatchObject({ ok: true, model: "glm-5.3-flash" });
     expect(sent[0]).toMatchObject({ url: "http://llmbox.test/v1/messages", headers: { authorization: "Bearer sk-llmbox-1234", "x-source": "tensorhawk", "x-extra": "two" }, body: { max_tokens: 31200, stream: true } });
   });
+
+  it("a stored key and header values never follow a changed address, protocol or self-hosted URL", async () => {
+    const body = { kind: "custom", name: "gw", baseUrl: "http://gw.test", apiKey: "sk-gw-secret-1234", model: "m", headers: { "x-source": "tensorhawk" } };
+    const id = (await admin.req("POST", "/api/admin/ai/providers", body)).json.id as string;
+    const patch = (b: object) => admin.req("PATCH", `/api/admin/ai/providers/${id}`, b);
+    expect((await patch({ baseUrl: "http://evil.test" })).json.error.code).toBe("KEY_REQUIRED");
+    expect((await patch({ protocol: "messages", headers: { "x-source": "" } })).json.error.code).toBe("KEY_REQUIRED");
+    expect((await patch({ protocol: "openai", maxTokens: 100 })).status).toBe(200);
+
+    expect((await patch({ baseUrl: "http://new.test", apiKey: "sk-new-key-5678", headers: { "x-source": "" } })).status).toBe(200);
+    const sent: { url: string; headers: Record<string, string> }[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      sent.push({ url: String(url), headers: init!.headers as Record<string, string> });
+      return Response.json({ model: "m", choices: [{ message: { content: '{"ok":true}' } }] });
+    });
+    await admin.req("POST", `/api/admin/ai/providers/${id}/test`, {});
+    expect(sent[0]!.url.startsWith("http://new.test/")).toBe(true);
+    expect(sent[0]!.headers.authorization).toBe("Bearer sk-new-key-5678");
+    expect(sent[0]!.headers["x-source"]).toBeUndefined();
+
+    expect((await admin.req("PUT", "/api/admin/parsing", { selfhostUrl: "http://mineru.school.test", selfhostKey: "selfhost-key-1" })).status).toBe(200);
+    expect((await admin.req("PUT", "/api/admin/parsing", { selfhostUrl: "http://mineru.school.test" })).status).toBe(200);
+    expect((await admin.req("PUT", "/api/admin/parsing", { selfhostUrl: "http://elsewhere.test" })).json.error.code).toBe("KEY_REQUIRED");
+    expect((await admin.req("PUT", "/api/admin/parsing", { selfhostUrl: "http://elsewhere.test", selfhostKey: null })).status).toBe(200);
+    expect((await parserSettingsOf(e, "org_default")).selfhostKeySealed).toBeNull();
+    expect((await admin.req("PUT", "/api/admin/parsing", { selfhostUrl: "http://mineru.school.test" })).status).toBe(200);
+  });
 });

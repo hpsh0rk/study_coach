@@ -106,6 +106,8 @@ function AdvancedEdit({ p, run, done }: { p: AiProviderRow; run: (fn: () => Prom
       .map((k) => `${k}:`)
       .join("\n"),
   });
+  const [apiKey, setApiKey] = useState("");
+  const moved = value.protocol !== p.protocol;
   return (
     <form
       className="form-grid"
@@ -113,12 +115,19 @@ function AdvancedEdit({ p, run, done }: { p: AiProviderRow; run: (fn: () => Prom
       onSubmit={(e) => {
         e.preventDefault();
         void run(async () => {
-          await api(`/api/admin/ai/providers/${p.id}`, { method: "PATCH", body: advancedBody(value) });
+          await api(`/api/admin/ai/providers/${p.id}`, { method: "PATCH", body: { ...advancedBody(value), ...(moved ? { apiKey } : {}) } });
           done();
         });
       }}
     >
       <AdvancedFields value={value} onChange={setValue} prefix="edit" />
+      {moved && (
+        <label className="span2">
+          API Key（改协议要重新填写）
+          <input type="password" required minLength={8} value={apiKey} onChange={(e) => setApiKey(e.target.value)} autoComplete="off" data-testid="edit-api-key" />
+          <span className="muted small">已保存的 Key 和请求头的值只发给原来的地址和协议；改了就要重新填写。· The stored key only goes where it was first sent.</span>
+        </label>
+      )}
       <p className="muted small span2">已保存的请求头只列出名称；名称后面留空表示保留原来的值，删掉那一行表示不再发送。· Blank value keeps the stored one.</p>
       <div className="form-actions">
         <button type="button" className="btn ghost" onClick={done}>
