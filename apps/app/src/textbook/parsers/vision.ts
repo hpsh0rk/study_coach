@@ -8,7 +8,7 @@ import { HttpError } from "../../http.ts";
 import type { TextbookRow } from "../index.ts";
 import { pages, parseUsage } from "../tables.ts";
 import { eligible, reuseParsed, writeParsed, type ParseReason, type Saved } from "./jobs.ts";
-import { chinaDay, parseAllowance, parserSettingsOf, parseUsed, refusalMessage, visionPriceOf, type ParserSettings } from "./settings.ts";
+import { chinaDay, isFreeVisionModel, parseAllowance, parsedPagesToday, parserSettingsOf, refusalMessage, type ParserSettings } from "./settings.ts";
 
 /**
  * The fallback when the external parser is off or could not read a page: the browser renders the page to
@@ -18,22 +18,19 @@ import { chinaDay, parseAllowance, parserSettingsOf, parseUsed, refusalMessage, 
 export interface VisionParserInfo {
   parser: string;
   model: string;
-  microYuanPerPage: number;
 }
 
 /** Usable now: a vision model is set on the enabled provider, and it is free or paid parsing is allowed. */
 export function visionParserInfo(settings: ParserSettings, visionModel: string | null): VisionParserInfo | null {
-  if (!visionModel) return null;
-  const price = visionPriceOf(visionModel, settings);
-  if (price.microYuanPerPage > 0 && !settings.paidEnabled) return null;
-  return { parser: visionParserId(visionModel), model: visionModel, microYuanPerPage: price.microYuanPerPage };
+  if (!visionModel || (!isFreeVisionModel(visionModel) && !settings.paidEnabled)) return null;
+  return { parser: visionParserId(visionModel), model: visionModel };
 }
 
 /** For the chapters step: why the vision model cannot read pages right now, in words a teacher can act on, or null when it can. */
 export function visionNote(settings: ParserSettings, visionModel: string | null): string | null {
   if (!visionModel) return "看图模型未配置：请联系管理员在后台“AI 模型”里填写看图模型（例如智谱 glm-4.6v-flash，免费）· No vision model configured";
   if (visionParserInfo(settings, visionModel)) return null;
-  return `看图模型 ${visionModel} 按页收费，管理员还没有允许付费兜底：请联系管理员在后台“外部解析服务”里允许付费，或把价格设为 0 · The vision model is paid and paid parsing is off`;
+  return `看图模型 ${visionModel} 可能按页收费，管理员还没有允许付费兜底：请联系管理员在后台“外部解析服务”里允许付费，或换成免费的 glm-4.6v-flash · The vision model may be paid and paid parsing is off`;
 }
 
 /** About 1600 px on the long side at JPEG quality 0.8 is 200–400 KB; anything far beyond is not a page render. */
@@ -80,13 +77,12 @@ export async function readPageImage(
   const [reused] = await reuseParsed(env, doc, parser, [req.no]);
   if (reused) return { page: reused, reused: true };
 
-  const cost = visionPriceOf(visionModel, settings).microYuanPerPage;
-  const refusal = parseAllowance(await parseUsed(env, user, doc.id), { pages: 1, reason: req.reason, costMicroYuan: cost, mineru: false }, settings);
-  if (refusal) throw new HttpError(refusal.status, refusal.code, refusalMessage(refusal, "看图模型识别"), { scope: refusal.scope, remaining: refusal.remaining });
+  const refusal = parseAllowance(await parsedPagesToday(env, user.orgId, user.id), { pages: 1, paid: !isFreeVisionModel(visionModel) }, settings.paidEnabled);
+  if (refusal) throw new HttpError(refusal.status, refusal.code, refusalMessage(refusal, "看图模型识别"), refusal.code === "PARSE_QUOTA" ? { remaining: refusal.remaining } : undefined);
 
   const id = newId("pjob");
   const d = db(env);
-  await d.insert(parseUsage).values({ id, orgId: user.orgId, userId: user.id, documentId: doc.id, parser, reason: req.reason, pages: [req.no], pageCount: 1, costMicroYuan: cost, taskId: "", uploadUrl: "", day: chinaDay() });
+  await d.insert(parseUsage).values({ id, orgId: user.orgId, userId: user.id, documentId: doc.id, parser, reason: req.reason, pages: [req.no], pageCount: 1, taskId: "", uploadUrl: "", day: chinaDay() });
   try {
     const res = await ai.callVision({ capability: "page.read", promptVersion: PAGE_READ_PROMPT_VERSION, instructions: PAGE_READ_PROMPT, image: req.image, timeoutMs: 90_000, ctx: { orgId: user.orgId, userId: user.id } });
     const text = cleanVisionText(res.text);

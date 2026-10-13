@@ -834,7 +834,7 @@ function VisionProviderCard({ view, run, test }: { view: AiView; run: (fn: () =>
   );
 }
 
-type ExternalChoice = "auto" | "on" | "off";
+type ExternalChoice = "auto" | "off";
 type MineruApi = "agent" | "selfhost";
 
 interface ParsingView {
@@ -844,16 +844,11 @@ interface ParsingView {
   selfhostUrlHint: string | null;
   selfhostKeyHint: string | null;
   stub: boolean;
-  limits: { bookAutoPages: number; userDayPages: number; siteDayPages: number; bookCostMicroYuan: number };
-  today: { site: number; org: number; monthCostMicroYuan: number };
+  dayPages: number;
+  today: number;
   paidEnabled: boolean;
-  monthlyBudgetMicroYuan: number;
-  vision: { model: string; microYuanPerPage: number; source: "admin" | "list" | "unknown" } | null;
+  vision: { model: string; free: boolean } | null;
 }
-
-/** Micro-yuan as 元 for display. */
-const yuan = (micro: number) => `${(micro / 1_000_000).toFixed(micro % 10_000 ? 4 : 2)} 元`;
-const PRICE_SOURCE = { admin: "管理员填写", list: "列表价", unknown: "未知模型，按最贵的列表价计" } as const;
 
 const STATE_BADGE = {
   on: { cls: "note", text: "已开启 On" },
@@ -871,8 +866,6 @@ function ParsingPanel({ onSaved }: { onSaved: () => void }) {
   const [view, setView] = useState<ParsingView | null>(null);
   const [selfhostUrl, setSelfhostUrl] = useState("");
   const [selfhostKey, setSelfhostKey] = useState("");
-  const [price, setPrice] = useState("");
-  const [budget, setBudget] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [testing, setTesting] = useState(false);
@@ -909,7 +902,7 @@ function ParsingPanel({ onSaved }: { onSaved: () => void }) {
     }
   };
   if (!view) return <p className="muted">Loading…</p>;
-  const visionUsable = !!view.vision && (view.vision.microYuanPerPage === 0 || view.paidEnabled);
+  const visionUsable = !!view.vision && (view.vision.free || view.paidEnabled);
   const badge = STATE_BADGE[view.external.state];
 
   return (
@@ -937,27 +930,15 @@ function ParsingPanel({ onSaved }: { onSaved: () => void }) {
         <p className="muted small">
           Pages the browser could not read are cut into a small PDF and sent through this server to MinerU (online, or your own server); the rest of the book never leaves the browser. On by default once the chosen API is configured.
         </p>
-        <fieldset className="choice">
-          <legend className="small">开关 Switch</legend>
-          {(
-            [
-              ["auto", "跟随配置（默认）：下面选的接口配置好就开启 · On once configured"],
-              ["on", "开启 · On"],
-              ["off", "关闭：不发送任何页面 · Off: send nothing"],
-            ] as const
-          ).map(([choice, label]) => (
-            <label className="check-row" key={choice}>
-              <input
-                type="radio"
-                name="external-choice"
-                checked={view.externalChoice === choice}
-                onChange={() => void save({ externalChoice: choice }, choice === "off" ? "已关闭外部解析服务 · External parser off" : "已保存 · Saved")}
-                data-testid={`external-choice-${choice}`}
-              />
-              <span>{label}</span>
-            </label>
-          ))}
-        </fieldset>
+        <label className="check-row">
+          <input
+            type="checkbox"
+            checked={view.externalChoice === "auto"}
+            onChange={(e) => void save({ externalChoice: e.target.checked ? "auto" : "off" }, e.target.checked ? "已开启外部解析服务 · External parser on" : "已关闭外部解析服务 · External parser off")}
+            data-testid="external-enabled"
+          />
+          <span>开启外部解析服务（默认开）：下面选的接口配置好就发送；关掉后不发送任何页面 · On once the chosen API is configured; off sends nothing</span>
+        </label>
         <fieldset className="choice">
           <legend className="small">接口 API</legend>
           <label className="check-row">
@@ -1020,7 +1001,7 @@ function ParsingPanel({ onSaved }: { onSaved: () => void }) {
           <span className="muted small">只检查能否连上、Key 对不对，不发送任何页面 · Sends no page</span>
         </div>
         <p className="muted small" data-testid="parsing-usage">
-          今天已送出 {view.today.org} 页（MinerU 在线接口全站 {view.today.site} / {view.limits.siteDayPages}，自部署不计）· 每位老师每天最多 {view.limits.userDayPages} 页 · 每本书自动送出最多 {view.limits.bookAutoPages} 页
+          今天全校已送出 {view.today} 页 · 每位老师每天最多 {view.dayPages} 页（外部解析和看图模型合计）
         </p>
       </div>
 
@@ -1037,34 +1018,12 @@ function ParsingPanel({ onSaved }: { onSaved: () => void }) {
           外部解析服务关着、或者它没读出来的页，可以由“AI 模型”里配置的看图模型识别：浏览器把那一页画成图片，经本站服务器发给模型。读出的文字会标上“看图识别”，提醒老师核对公式和数字。没有配置看图模型时，老师粘贴文字补上。
         </p>
         {view.vision ? (
-          <>
-            <p className="small">
-              看图模型 <code>{view.vision.model}</code> · 每千页约 <b>{yuan(view.vision.microYuanPerPage * 1000)}</b>（{PRICE_SOURCE[view.vision.source]}）
-            </p>
-            <form
-              className="row wrap"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void save({ visionPriceMicroYuan: Math.round(Number(price) * 1000) }, "价格已保存 · Price saved").then(() => setPrice(""));
-              }}
-            >
-              <label className="check-row">
-                <span>每千页价格（元）Price per 1000 pages</span>
-                <input type="number" min="0" step="0.01" value={price} onChange={(e) => setPrice(e.target.value)} placeholder={String(view.vision.microYuanPerPage / 1000)} data-testid="vision-price" />
-              </label>
-              <button className="btn small" disabled={price.trim() === "" || !(Number(price) >= 0)} data-testid="vision-price-save">
-                保存价格
-              </button>
-              {view.vision.source === "admin" && (
-                <button type="button" className="btn small ghost" data-testid="vision-price-reset" onClick={() => void save({ visionPriceMicroYuan: null }, "已恢复列表价 · Back to the list price")}>
-                  恢复列表价
-                </button>
-              )}
-            </form>
-          </>
+          <p className="small">
+            看图模型 <code>{view.vision.model}</code> · {view.vision.free ? "免费" : "可能按页收费：打开下面的“允许付费兜底”才会用"}
+          </p>
         ) : (
           <div className="alert info" data-testid="vision-none">
-            还没有配置看图模型：在“AI 模型”里给启用的模型填写“看图模型”，或在“单独的看图模型”里用另一个提供方的 Key，例如智谱 <code>glm-4.6v-flash</code>（免费）或百炼 <code>qwen-vl-ocr</code>（约 0.9 元 / 千页）。· No vision model configured.
+            还没有配置看图模型：在“AI 模型”里给启用的模型填写“看图模型”，或在“单独的看图模型”里用另一个提供方的 Key，例如智谱 <code>glm-4.6v-flash</code>（免费）或百炼 <code>qwen-vl-ocr</code>（收费）。· No vision model configured.
           </div>
         )}
         <label className="check-row">
@@ -1074,26 +1033,8 @@ function ParsingPanel({ onSaved }: { onSaved: () => void }) {
             onChange={(e) => void save({ paidEnabled: e.target.checked }, e.target.checked ? "已允许付费兜底 · Paid parsing allowed" : "已关闭付费兜底 · Paid parsing off")}
             data-testid="paid-enabled"
           />
-          <span>允许付费兜底：要花钱的解析（每页价格大于 0）只在这里打开后才会用，并受下面的月度预算和每本书 {yuan(view.limits.bookCostMicroYuan)} 的上限约束 · Allow paid parsing</span>
+          <span>允许付费兜底：免费的 glm-4.6v-flash 以外的看图模型可能按页收费，只在这里打开后才会用（仍受每位老师每天 {view.dayPages} 页的限制）· Allow paid vision models</span>
         </label>
-        <form
-          className="row wrap"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void save({ monthlyBudgetMicroYuan: Math.round(Number(budget) * 1_000_000) }, "月度预算已保存 · Monthly budget saved").then(() => setBudget(""));
-          }}
-        >
-          <label className="check-row">
-            <span>每月预算（元）Monthly budget</span>
-            <input type="number" min="0" step="1" value={budget} onChange={(e) => setBudget(e.target.value)} placeholder={String(view.monthlyBudgetMicroYuan / 1_000_000)} data-testid="monthly-budget" />
-          </label>
-          <button className="btn small" disabled={budget.trim() === "" || !(Number(budget) >= 0)} data-testid="monthly-budget-save">
-            保存预算
-          </button>
-        </form>
-        <p className="muted small" data-testid="parsing-month">
-          本月已花 {yuan(view.today.monthCostMicroYuan)} / 预算 {yuan(view.monthlyBudgetMicroYuan)}
-        </p>
       </div>
     </>
   );

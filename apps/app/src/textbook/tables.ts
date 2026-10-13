@@ -75,8 +75,8 @@ export const chapters = sqliteTable(
  */
 export const parserSettings = sqliteTable("parser_settings", {
   orgId: text("org_id").primaryKey().references(() => orgs.id),
-  /** `auto`: on when the chosen API is configured (a token for `token`, a URL for `selfhost`; `agent` needs nothing). `on` / `off`: the admin decided. */
-  externalChoice: text("external_choice", { enum: ["auto", "on", "off"] }).notNull().default("auto"),
+  /** `auto` (default): on once the chosen API is configured (`selfhost` needs a URL, `agent` nothing). `off`: no page leaves the browser. */
+  externalChoice: text("external_choice", { enum: ["auto", "off"] }).notNull().default("auto"),
   /** `agent`: MinerU's token-free API (≤ 20 pages, 10 MB per file). `selfhost`: the school's own mineru-api server (MinerU ≥ 4). */
   mineruMode: text("mineru_mode", { enum: ["agent", "selfhost"] }).notNull().default("agent"),
   /** Self-hosted MinerU base URL (before /v1), sealed like the keys: it may name a private host, so the browser only sees the hint. */
@@ -85,19 +85,15 @@ export const parserSettings = sqliteTable("parser_settings", {
   /** Optional: the server's --api-key, sent as a Bearer token. */
   selfhostKeySealed: text("selfhost_key_sealed"),
   selfhostKeyHint: text("selfhost_key_hint"),
-  /** "允许付费兜底": parsers that cost money (cost per page > 0) run only when on, and only within the monthly budget. */
+  /** "允许付费兜底": a vision model not known to be free (FREE_VISION_MODELS) reads pages only when on. */
   paidEnabled: integer("paid_enabled", { mode: "boolean" }).notNull().default(false),
-  /** Per organisation and calendar month (China), in micro-yuan (1 元 = 1,000,000). */
-  monthlyBudgetMicroYuan: integer("monthly_budget_micro_yuan").notNull().default(0),
-  /** Price of the vision model per page in micro-yuan, when the admin entered one; else the known list price (or the dearest one for unknown models). */
-  visionPriceMicroYuan: integer("vision_price_micro_yuan"),
   updatedAt: integer("updated_at").notNull().$defaultFn(now),
   updatedBy: text("updated_by").references(() => users.id),
 });
 
 /**
  * One row per sub-PDF sent to an external parser, or per page image sent to the vision model: the job's state,
- * and the usage the guardrails count (pages per book, per teacher per day, MinerU pages site-wide per day; cost).
+ * and the pages the daily limit counts (per teacher per day).
  * Pages reused from a copy of the same file are not sent and not counted.
  */
 export const parseUsage = sqliteTable(
@@ -112,8 +108,6 @@ export const parseUsage = sqliteTable(
     reason: text("reason", { enum: ["auto", "refine"] }).notNull(),
     pages: text("pages", { mode: "json" }).$type<number[]>().notNull(),
     pageCount: integer("page_count").notNull(),
-    /** Micro-yuan: a vision page can cost less than one fen (qwen-vl-ocr ≈ 900). */
-    costMicroYuan: integer("cost_micro_yuan").notNull().default(0),
     state: text("state", { enum: ["submitted", "uploaded", "parsed", "done", "failed"] }).notNull().default("submitted"),
     taskId: text("task_id").notNull(),
     /** The parser's signed upload URL: the Worker streams the sub-PDF to it; never sent to the browser. */

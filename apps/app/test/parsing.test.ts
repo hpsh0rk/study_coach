@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { MINERU_AGENT_PARSER } from "@kj/textbook";
 import recorded from "../src/textbook/parsers/mineru-recorded.json";
 import { agentParser, isMineruHost } from "../src/textbook/parsers/mineru.ts";
-import { chinaDay, PARSE_LIMITS, parseAllowance } from "../src/textbook/parsers/settings.ts";
+import { chinaDay, PARSE_DAY_PAGES, parseAllowance } from "../src/textbook/parsers/settings.ts";
 import { e, loggedIn, seedUser, type Client } from "./client.ts";
 
 const TEXT = "Waves carry energy from one place to another without moving matter. The wave speed equals frequency times wavelength.";
@@ -64,7 +64,7 @@ describe("external parser switch (外部解析服务)", () => {
   it("follows the configuration by default (the agent API needs no key, so it is on); admins choose auto / on / off, teachers cannot", async () => {
     const id = await newBook(t7, "1".repeat(64));
     expect((await t7.req("GET", `/api/documents/${id}`)).json.externalParser).toMatchObject({ parser: MINERU_AGENT_PARSER });
-    expect((await admin.req("GET", "/api/admin/parsing")).json).toMatchObject({ externalChoice: "auto", external: { state: "on" }, mineruMode: "agent", stub: true, limits: PARSE_LIMITS });
+    expect((await admin.req("GET", "/api/admin/parsing")).json).toMatchObject({ externalChoice: "auto", external: { state: "on" }, mineruMode: "agent", stub: true, dayPages: PARSE_DAY_PAGES });
     expect((await t7.req("PUT", "/api/admin/parsing", { externalChoice: "off" })).status).toBe(403);
 
     expect((await admin.req("PUT", "/api/admin/parsing", { externalChoice: "off" })).status).toBe(200);
@@ -76,7 +76,7 @@ describe("external parser switch (外部解析服务)", () => {
   });
 
   it("when on: must-fix pages go through the stubbed MinerU and come back as text by page", async () => {
-    expect((await admin.req("PUT", "/api/admin/parsing", { externalChoice: "on" })).status).toBe(200);
+    expect((await admin.req("PUT", "/api/admin/parsing", { externalChoice: "auto" })).status).toBe(200);
     const id = await newBook(t7, "2".repeat(64));
     expect((await t7.req("GET", `/api/documents/${id}`)).json.externalParser).toEqual({ parser: MINERU_AGENT_PARSER, maxPagesPerJob: 10, maxBytes: 10 * 1024 * 1024 });
 
@@ -130,39 +130,23 @@ describe("external parser switch (外部解析服务)", () => {
     expect(sent!.n).toBe(0);
   });
 
-  it("guardrails: 300 automatic pages per book, 300 per teacher per day, 900 site-wide per day", async () => {
-    const id = await newBook(t8, "7".repeat(64));
-    const insert = (user: string, doc: string, reason: string, pages: number, day = chinaDay()) =>
-      e.DB.prepare("INSERT INTO parse_usage (id, org_id, user_id, document_id, parser, reason, pages, page_count, state, task_id, upload_url, day, created_at) VALUES (?, 'org_default', ?, ?, 'mineru-agent/1', ?, '[]', ?, 'done', 't', 'u', ?, 0)")
-        .bind(`pjob_${crypto.randomUUID()}`, user, doc, reason, pages, day)
-        .run();
-
-    await insert("usr_t8", id, "auto", 300, "2026-01-01");
-    const book = await t8.req("POST", `/api/documents/${id}/parse`, { pages: [2], reason: "auto" });
-    expect(book.status).toBe(429);
-    expect(book.json.error).toMatchObject({ code: "PARSE_QUOTA", detail: { scope: "book", remaining: 0 } });
-    expect((await t8.req("POST", `/api/documents/${id}/parse`, { pages: [2], reason: "refine" })).status).toBe(200);
-
+  it("one limit: pages per teacher per day (external parser and vision together); a paid model also needs the switch", async () => {
     const fresh = await newBook(t8, "8".repeat(64));
+    const insert = (user: string, pages: number, day = chinaDay()) =>
+      e.DB.prepare("INSERT INTO parse_usage (id, org_id, user_id, document_id, parser, reason, pages, page_count, state, task_id, upload_url, day, created_at) VALUES (?, 'org_default', ?, ?, 'mineru-agent/1', 'refine', '[]', ?, 'done', 't', 'u', ?, 0)")
+        .bind(`pjob_${crypto.randomUUID()}`, user, fresh, pages, day)
+        .run();
+    await insert("usr_t8", PARSE_DAY_PAGES, "2026-01-01");
+    await insert("usr_t7", PARSE_DAY_PAGES);
     const today = await e.DB.prepare("SELECT COALESCE(SUM(page_count), 0) AS n FROM parse_usage WHERE user_id = 'usr_t8' AND day = ?").bind(chinaDay()).first<{ n: number }>();
-    await insert("usr_t8", fresh, "refine", PARSE_LIMITS.userDayPages - today!.n - 1);
-    expect((await t8.req("POST", `/api/documents/${fresh}/parse`, { pages: [2, 4], reason: "auto" })).json.error).toMatchObject({ code: "PARSE_QUOTA", detail: { scope: "user", remaining: 1 } });
-
-    await insert("usr_pa", fresh, "refine", PARSE_LIMITS.siteDayPages);
-    expect((await t7.req("POST", `/api/documents/${await newBook(t7, "9".repeat(64))}/parse`, { pages: [2], reason: "auto" })).json.error).toMatchObject({ code: "PARSE_QUOTA", detail: { scope: "site" } });
+    await insert("usr_t8", PARSE_DAY_PAGES - today!.n - 1);
+    expect((await t8.req("POST", `/api/documents/${fresh}/parse`, { pages: [2, 4], reason: "auto" })).json.error).toMatchObject({ code: "PARSE_QUOTA", detail: { remaining: 1 } });
+    expect((await t8.req("POST", `/api/documents/${fresh}/parse`, { pages: [2], reason: "auto" })).status).toBe(200);
     await e.DB.prepare("DELETE FROM parse_usage WHERE task_id = 't'").run();
-  });
 
-  it("money: paid parsing is off by default, then bounded by the monthly budget and the per-book cap (402); the site-wide day counts MinerU only", () => {
-    const used = { bookAutoPages: 0, bookCostMicroYuan: 4_500_000, userDayPages: 0, siteDayPages: 900, orgMonthCostMicroYuan: 2_000_000 };
-    const off = { paidEnabled: false, monthlyBudgetMicroYuan: 0 };
-    const on = { paidEnabled: true, monthlyBudgetMicroYuan: 3_000_000 };
-    expect(parseAllowance(used, { pages: 5, reason: "auto", costMicroYuan: 0, mineru: false }, off)).toBeNull();
-    expect(parseAllowance(used, { pages: 5, reason: "auto", costMicroYuan: 0, mineru: true }, off)).toMatchObject({ status: 429, scope: "site" });
-    expect(parseAllowance(used, { pages: 1, reason: "auto", costMicroYuan: 900, mineru: false }, off)).toEqual({ status: 402, code: "PARSE_BUDGET", scope: "off", remaining: 0 });
-    expect(parseAllowance(used, { pages: 1, reason: "auto", costMicroYuan: 900, mineru: false }, on)).toBeNull();
-    expect(parseAllowance(used, { pages: 5, reason: "refine", costMicroYuan: 1_200_000, mineru: false }, on)).toEqual({ status: 402, code: "PARSE_BUDGET", scope: "month", remaining: 1_000_000 });
-    expect(parseAllowance(used, { pages: 5, reason: "refine", costMicroYuan: 600_000, mineru: false }, on)).toEqual({ status: 402, code: "PARSE_BUDGET", scope: "book", remaining: 500_000 });
+    expect(parseAllowance(0, { pages: 1, paid: true }, false)).toEqual({ status: 402, code: "PARSE_BUDGET" });
+    expect(parseAllowance(0, { pages: 1, paid: true }, true)).toBeNull();
+    expect(parseAllowance(PARSE_DAY_PAGES, { pages: 1, paid: false }, true)).toEqual({ status: 429, code: "PARSE_QUOTA", remaining: 0 });
   });
 
   it("turning it off stops new jobs and jobs already started", async () => {
@@ -173,7 +157,7 @@ describe("external parser switch (外部解析服务)", () => {
     expect((await t7.req("POST", `/api/documents/${id}/parse`, { pages: [4], reason: "auto" })).status).toBe(403);
     expect((await t7.req("GET", `/api/documents/${id}`)).json.externalParser).toBeNull();
     const audit = await e.DB.prepare("SELECT target FROM audit_log WHERE action = 'admin.parser_settings' ORDER BY id").all<{ target: string }>();
-    expect(audit.results.map((r) => r.target)).toEqual(["external_off", "external_on", "external_off"]);
+    expect(audit.results.map((r) => r.target)).toEqual(["external_off", "external_auto", "external_off"]);
   });
 });
 
