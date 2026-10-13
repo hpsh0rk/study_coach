@@ -18,6 +18,7 @@ import {
   carryOverSlides,
   DRAFT_LOCK_MS,
   confirmedOutline,
+  citedPages,
   deckExport,
   flaggedSlides,
   latestConfirmed,
@@ -42,7 +43,7 @@ import {
   type SlideRow,
   type VersionRow,
 } from "../store.ts";
-import { chapterTree, pageLabels, resolveScope, selectionPages } from "../textbook/index.ts";
+import { chapterTree, labelsFor, resolveScope, selectionPages, slideSourcePages } from "../textbook/index.ts";
 
 const AnswerMode = z.enum(["hidden", "shown"]);
 
@@ -251,7 +252,7 @@ export const lessonRoutes = new Hono<AppBindings>()
     const res = await writeSlide(makeAi(c.env, u.orgId), outline, specId, {
       lessonTitle: lesson.title,
       params,
-      pages: await selectionPages(c.env, lesson.documentId, versionScope(v).ranges),
+      pages: await slideSourcePages(c.env, lesson.documentId, spec.sourcePages, versionScope(v).ranges),
       workedProblem: workedContent?.layout === "steps" ? workedContent.problem : undefined,
       ctx: { orgId: u.orgId, userId: u.id, lessonId: lesson.id },
     }).catch((e: unknown) => {
@@ -332,7 +333,8 @@ export const lessonRoutes = new Hono<AppBindings>()
     // answers too unless `answers=shown` (课后复习).
     const includeNotes = c.req.query("audience") !== "student";
     const answers = c.req.query("answers") === "shown" ? "shown" : "hidden";
-    return c.json(deckExport(lesson, v, await slidesOf(c.env, v), { includeNotes, answers, pageLabels: await pageLabels(c.env, lesson.documentId) }));
+    const deck = await slidesOf(c.env, v);
+    return c.json(deckExport(lesson, v, deck, { includeNotes, answers, pageLabels: await labelsFor(c.env, lesson.documentId, { pages: citedPages(deck) }) }));
   })
   /**
    * Shares a frozen version. With a link already active this keeps the same URL (on the same

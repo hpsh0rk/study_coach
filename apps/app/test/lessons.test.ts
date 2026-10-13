@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { Client, e, loggedIn, seedUser } from "./client.ts";
+import { slideSourcePages } from "../src/textbook/index.ts";
 
 const PAGE_TEXT = [
   "Waves carry energy from one place to another without moving matter. A transverse wave moves perpendicular to the direction of propagation.",
@@ -572,5 +573,42 @@ describe("sharing", () => {
     expect((await publicDeck(path)).status).toBe(200);
     await e.DB.prepare("UPDATE users SET disabled_at = ? WHERE id = 'usr_t3'").bind(Date.now()).run();
     expect((await publicDeck(path)).status).toBe(404);
+  });
+});
+
+describe("narrow textbook reads", () => {
+  it("decks carry the printed labels of cited pages only; the lesson view those of its selection", async () => {
+    const labelled = await teacher.req("POST", "/api/documents", {
+      filename: "labelled.pdf",
+      title: "Labelled",
+      sizeBytes: 100,
+      pageCount: 8,
+      chapters: [
+        { id: "c1", parentId: null, level: 1, ord: 0, title: "13.1 Types of Waves", pageStart: 1, pageEnd: 4, words: 200 },
+        { id: "c2", parentId: null, level: 1, ord: 1, title: "13.2 Wave Properties", pageStart: 5, pageEnd: 8, words: 200 },
+      ],
+    });
+    const documentId = labelled.json.id as string;
+    await teacher.req("POST", `/api/documents/${documentId}/pages`, { pages: Array.from({ length: 8 }, (_, i) => ({ no: i + 1, text: PAGE_TEXT[i % 4]!, label: `${101 + i}` })) });
+    const lessonId = await newLesson(teacher, documentId, { chapterIds: ["c1"] });
+    const v = (await teacher.req("POST", `/api/lessons/${lessonId}/outline`)).json.version;
+    expect((await teacher.req("POST", `/api/lessons/${lessonId}/outline-versions/${v.id}/confirm`, { ackOverBudget: true })).status).toBe(200);
+    const spec = v.outline.slides.find((s: any) => s.sourcePages.length > 0);
+    const slide = (await teacher.req("POST", `/api/lessons/${lessonId}/outline-versions/${v.id}/slides/${spec.id}/generate`)).json.slide;
+    const cited = Object.fromEntries((slide.sources as number[]).map((no) => [no, `${100 + no}`]));
+    expect(Object.keys(cited).length).toBeGreaterThan(0);
+
+    const view = (await teacher.req("GET", `/api/lessons/${lessonId}`)).json;
+    expect(view.pageLabels).toEqual({ 1: "101", 2: "102", 3: "103", 4: "104" });
+    expect((await teacher.req("GET", `/api/lessons/${lessonId}/deck?audience=student`)).json.lesson.pageLabels).toEqual(cited);
+    const shared = await teacher.req("POST", `/api/lessons/${lessonId}/share`);
+    expect((await new Client().req("GET", `/api${shared.json.path.replace(/^\/s\//, "/share/")}`)).json.lesson.pageLabels).toEqual(cited);
+  });
+
+  it("a slide reads its cited pages inside the selection, or the whole selection when it cites none", async () => {
+    const ranges = [{ start: 1, end: 4 }];
+    expect((await slideSourcePages(e, docId, [], ranges)).map((p) => p.no)).toEqual([1, 2, 3, 4]);
+    expect((await slideSourcePages(e, docId, [3, 2, 3, 7], ranges)).map((p) => p.no)).toEqual([2, 3]);
+    expect(await slideSourcePages(e, docId, [7], ranges)).toEqual([]);
   });
 });

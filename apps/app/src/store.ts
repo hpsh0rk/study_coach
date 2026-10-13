@@ -7,7 +7,7 @@ import { db } from "./db/index.ts";
 import { lessons, outlineVersions, shareLinks, slides } from "./db/schema.ts";
 import { secret, type Env, type SessionUser } from "./env.ts";
 import { HttpError } from "./http.ts";
-import { pageLabels, pageTexts, scopeStats, selectionPages } from "./textbook/index.ts";
+import { labelsFor, pageTexts, scopeStats, selectionPages } from "./textbook/index.ts";
 
 export type LessonRow = typeof lessons.$inferSelect;
 export type VersionRow = typeof outlineVersions.$inferSelect;
@@ -203,6 +203,11 @@ export function studentSlide({ canUndo: _u, ...s }: Slide, answers: AnswerMode) 
   return { ...s, content, notes: "", warnings: [], unverified: [] };
 }
 
+/** Pages the slides cite: the only printed labels a deck needs. */
+export function citedPages(list: Pick<Slide, "sources">[]): number[] {
+  return [...new Set(list.flatMap((s) => s.sources))];
+}
+
 /**
  * Export shape shared with the eval tooling (internal/eval/score.ts reads it). Student copies
  * (`includeNotes: false`) drop notes and checks, and with `answers: "hidden"` every revealed answer.
@@ -269,13 +274,15 @@ export async function shareView(env: Env, lessonId: string) {
  */
 export async function lessonView(env: Env, lesson: LessonRow) {
   const scope = lessonScope(lesson);
-  const [latest, confirmed, labels, stats, share] = await Promise.all([
+  const [latest, confirmed, stats, share] = await Promise.all([
     latestVersion(env, lesson.id),
     latestConfirmed(env, lesson.id),
-    pageLabels(env, lesson.documentId),
     scopeStats(env, lesson.documentId, scope.ranges, { sourceBudget: OUTLINE_SOURCE_CHARS }),
     shareView(env, lesson.id),
   ]);
+  const deck = confirmed ? await slidesOf(env, confirmed) : [];
+  const outlinePages = [latest, confirmed].flatMap((v) => (v ? outlineOf(v).slides.flatMap((s) => s.sourcePages) : []));
+  const labels = await labelsFor(env, lesson.documentId, { ranges: scope.ranges, pages: [...citedPages(deck), ...outlinePages] });
   const drafting = lesson.draftingUntil !== null && lesson.draftingUntil > Date.now();
   return {
     lesson: {
@@ -293,7 +300,7 @@ export async function lessonView(env: Env, lesson: LessonRow) {
     },
     draft: latest && latest.confirmedAt === null ? versionView(latest) : null,
     confirmed: confirmed ? versionView(confirmed) : null,
-    slides: confirmed ? await slidesOf(env, confirmed) : [],
+    slides: deck,
     pageLabels: labels,
     share,
     drafting: drafting ? { startedAt: lesson.draftingUntil! - DRAFT_LOCK_MS } : null,

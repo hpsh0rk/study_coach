@@ -5,8 +5,8 @@ import { db } from "../db/index.ts";
 import { lessons, shareLinks, users } from "../db/schema.ts";
 import type { AppBindings } from "../env.ts";
 import { HttpError } from "../http.ts";
-import { deckExport, sharedSlides, versionOf } from "../store.ts";
-import { pageLabels } from "../textbook/index.ts";
+import { citedPages, deckExport, sharedSlides, versionOf } from "../store.ts";
+import { labelsFor } from "../textbook/index.ts";
 
 
 /**
@@ -27,6 +27,6 @@ export const shareRoutes = new Hono<AppBindings>().get("/:token", async (c) => {
   if (!row?.link.versionId) throw new HttpError(404, "NOT_FOUND", "This link is invalid or was revoked · 链接无效或已撤销");
   const version = await versionOf(c.env, row.lesson.id, row.link.versionId);
   const { slides } = await sharedSlides(c.env, version, row.link.reviewedAt);
-  const deck = deckExport(row.lesson, version, slides, { includeNotes: false, answers: row.link.answers, pageLabels: await pageLabels(c.env, row.lesson.documentId) });
+  const deck = deckExport(row.lesson, version, slides, { includeNotes: false, answers: row.link.answers, pageLabels: await labelsFor(c.env, row.lesson.documentId, { pages: citedPages(slides) }) });
   return c.json({ lesson: deck.lesson, slides: deck.slides });
 });
