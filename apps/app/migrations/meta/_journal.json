@@ -50,6 +50,13 @@
       "when": 1791854612324,
       "tag": "0006_textbook_file_hash",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1791855827252,
+      "tag": "0007_textbook_page_facts",
+      "breakpoints": true
     }
   ]
 }

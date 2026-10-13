@@ -606,6 +606,8 @@ test("Chinese CID-font PDF: text is extracted, scanned pages are flagged and can
   await page.getByTestId("paste-save").click();
   await expect(page.getByTestId("empty-pages")).toHaveCount(0);
   await expect(scanned.getByTestId("chapter-empty")).toHaveCount(0);
+  await expect(scanned.getByTestId("chapter-pasted")).toHaveText("2 页老师粘贴");
+  expect((await (await page.request.get(`/api/documents/${docId}/pages/5`)).json()).parser).toBe("paste");
   await toSettings(page);
 
   await page.waitForURL(/\/settings$/);

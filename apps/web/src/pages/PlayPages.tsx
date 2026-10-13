@@ -4,7 +4,8 @@ import { Player, presenterSync, type PlayerSlide, type Position, type PresenterS
 import type { TeachingLanguage, ThemeId } from "@kj/schema";
 import { api } from "../api.ts";
 import { lessonApi } from "../lessonApi.ts";
-import { documentApi } from "../textbook/api.ts";
+import { documentApi, type TextbookPage } from "../textbook/api.ts";
+import { SourcePage } from "../textbook/SourcePage.tsx";
 
 /**
  * The slide player. With `syncId` it joins the lesson's presenter channel: the audience window
@@ -86,7 +87,7 @@ export function PlayPage() {
   const [exit] = useState(() => () => navigate(`/lessons/${id}/slides`));
   const [data, setData] = useState<{ slides: PlayerSlide[]; theme: ThemeId; documentId: string; pageLabels: Record<number, string>; language: TeachingLanguage } | null>(null);
   const [error, setError] = useState("");
-  const [source, setSource] = useState<{ no: number; text: string; label: string | null } | null>(null);
+  const [source, setSource] = useState<TextbookPage | null>(null);
   useEffect(() => {
     lessonApi
       .get(id)
@@ -121,19 +122,7 @@ export function PlayPage() {
         </button>
       </div>
       <PlayerHost slides={data.slides} theme={data.theme} onSource={stableSource} pageLabels={data.pageLabels} syncId={id} language={data.language} onEscape={source ? undefined : exit} />
-      {source && (
-        <div className="modal" onClick={() => setSource(null)}>
-          <div className="modal-card card" onClick={(e) => e.stopPropagation()}>
-            <div className="row between">
-              <h2>教材第 {source.label ?? source.no} 页 · Source page</h2>
-              <button className="btn small ghost" onClick={() => setSource(null)}>
-                关闭 Close
-              </button>
-            </div>
-            <pre className="source-text">{source.text}</pre>
-          </div>
-        </div>
-      )}
+      {source && <SourcePage page={source} onClose={() => setSource(null)} />}
     </div>
   );
 }

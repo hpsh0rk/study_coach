@@ -1,4 +1,5 @@
 import type { ChapterNode, PageRange, PageText } from "@kj/schema";
+import type { PageFlag } from "@kj/pdf-structure";
 import { api } from "../api.ts";
 
 export interface DocumentRow {
@@ -20,6 +21,21 @@ export interface CreateTextbook {
   sha256?: string;
 }
 
+export interface TextbookPage {
+  no: number;
+  text: string;
+  label: string | null;
+  parser: string;
+}
+
+export interface PastedPage {
+  no: number;
+  words: number;
+  chars: number;
+  flags: PageFlag[];
+  parser: string;
+}
+
 export type TextbookLookup =
   | { status: "none"; pageBatch: number }
   | { status: "ready"; document: DocumentRow; pageBatch: number }
@@ -32,10 +48,17 @@ export const documentApi = {
   create: (body: CreateTextbook) => api<{ id: string; pageBatch: number }>("/api/documents", { body: { ...body } }),
   putPages: (id: string, pages: PageText[]) => api<{ received: number; pageCount: number; complete: boolean }>(`/api/documents/${id}/pages`, { body: { pages } }),
   get: (id: string) =>
-    api<{ document: DocumentRow; chapters: ChapterNode[]; pageLabels: Record<number, string>; pageWords: number[]; pageChars: number[] }>(`/api/documents/${id}`),
-  page: (id: string, no: number) => api<{ no: number; text: string; label: string | null }>(`/api/documents/${id}/pages/${no}`),
-  paste: (id: string, start: number, end: number, text: string) =>
-    api<{ pages: { no: number; words: number; chars: number }[] }>(`/api/documents/${id}/pages/paste`, { body: { start, end, text } }),
+    api<{
+      document: DocumentRow;
+      chapters: ChapterNode[];
+      pageLabels: Record<number, string>;
+      pageWords: number[];
+      pageChars: number[];
+      pageParsers: Record<number, string>;
+      pageFlags: Record<number, PageFlag[]>;
+    }>(`/api/documents/${id}`),
+  page: (id: string, no: number) => api<TextbookPage>(`/api/documents/${id}/pages/${no}`),
+  paste: (id: string, start: number, end: number, text: string) => api<{ pages: PastedPage[] }>(`/api/documents/${id}/pages/paste`, { body: { start, end, text } }),
   archive: (id: string) => api<{ ok: true; lessons: number }>(`/api/documents/${id}`, { method: "DELETE" }),
   restore: (id: string) => api(`/api/documents/${id}/restore`, { body: {} }),
 };

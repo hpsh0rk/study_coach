@@ -3,8 +3,8 @@
  * upserts pages, and a paste only fills pages that have no text.
  */
 import { and, asc, between, count, eq, isNull, sql } from "drizzle-orm";
-import { distributeText, isEmptyPage } from "@kj/pdf-structure";
-import { countWords, newId, type ChapterNode, type PageText } from "@kj/schema";
+import { distributeText, isEmptyPage, PASTE_PARSER, PDFJS_PARSER, pageFacts, type PageFacts } from "@kj/pdf-structure";
+import { newId, type ChapterNode, type PageText } from "@kj/schema";
 import { db } from "../db/index.ts";
 import { auditLog } from "../db/schema.ts";
 import type { Env, SessionUser } from "../env.ts";
@@ -64,12 +64,12 @@ export async function createTextbook(
   return id;
 }
 
-/** Upserts a batch of parsed pages; word counts are computed here, not trusted from the browser. */
+/** Upserts a batch of parsed pages; page facts (words, chars, flags) are computed here, not trusted from the browser. */
 export async function putPages(env: Env, doc: TextbookRow, batch: PageText[]): Promise<{ received: number; pageCount: number; complete: boolean }> {
   const d = db(env);
   await d.batch(
     batch.map((p) => {
-      const row = { text: p.text, label: p.label ?? null, words: countWords(p.text) };
+      const row = { text: p.text, label: p.label ?? null, ...pageFacts(p.text), parser: PDFJS_PARSER };
       return d.insert(pages).values({ documentId: doc.id, no: p.no, ...row }).onConflictDoUpdate({ target: [pages.documentId, pages.no], set: row });
     }) as [any, ...any[]],
   );
@@ -79,16 +79,19 @@ export async function putPages(env: Env, doc: TextbookRow, batch: PageText[]): P
 }
 
 /** Text a teacher pasted for a page range, spread over the range's pages without text (pages with text are never overwritten). */
-export async function pastePages(env: Env, doc: TextbookRow, start: number, end: number, text: string): Promise<{ no: number; words: number; chars: number }[]> {
+export async function pastePages(env: Env, doc: TextbookRow, start: number, end: number, text: string): Promise<({ no: number; parser: string } & PageFacts)[]> {
   const d = db(env);
   const rows = await d.select({ no: pages.no, words: pages.words }).from(pages).where(and(eq(pages.documentId, doc.id), between(pages.no, start, end))).orderBy(asc(pages.no));
   const empty = rows.filter((r) => isEmptyPage(r.words)).map((r) => r.no);
   if (!empty.length) throw new HttpError(409, "PAGES_HAVE_TEXT", "这些页已经有文字，不需要粘贴 · These pages already have text");
   if (empty.length > PAGE_BATCH) throw new HttpError(400, "TOO_MANY_PAGES", `一次最多为 ${PAGE_BATCH} 页粘贴文字，请分几次 · At most ${PAGE_BATCH} pages at a time`);
   const parts = distributeText(text, empty.length);
-  const filled = empty.map((no, i) => ({ no, text: parts[i]!.slice(0, 40_000), words: countWords(parts[i]!.slice(0, 40_000)) }));
-  await d.batch(filled.map((p) => d.update(pages).set({ text: p.text, words: p.words }).where(and(eq(pages.documentId, doc.id), eq(pages.no, p.no)))) as [any, ...any[]]);
-  return filled.map(({ no, words, text: t }) => ({ no, words, chars: t.length }));
+  const filled = empty.map((no, i) => {
+    const t = parts[i]!.slice(0, 40_000);
+    return { no, text: t, ...pageFacts(t), parser: PASTE_PARSER };
+  });
+  await d.batch(filled.map(({ no, ...row }) => d.update(pages).set(row).where(and(eq(pages.documentId, doc.id), eq(pages.no, no)))) as [any, ...any[]]);
+  return filled.map(({ no, words, chars, flags, parser }) => ({ no, words, chars, flags, parser }));
 }
 
 /** Soft delete or restore, with an audit record in the same batch. A restore never makes a second live copy of the same file. */
