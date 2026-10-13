@@ -179,7 +179,7 @@ interface SetupView {
   ai: { state: "live"; provider: string; model: string } | { state: "stub" | "off" };
   vision: { state: "on" | "paid_off"; provider: string; model: string; separate: boolean } | { state: "none" };
   external: ({ state: "on" } | { state: "off" } | { state: "unconfigured"; missing: "token" | "url" }) & { mode: "agent" | "token" | "selfhost"; stub: boolean };
-  counts: { users: number; textbooks: number; lessons: number; parsedPagesToday: number };
+  counts: { users: number; textbooks: number; lessons: number; parsedPagesToday: number; modelCallsToday: number; modelCallsPerDay: number };
 }
 
 function useSetupView(saved: number): SetupView | null {
@@ -199,6 +199,7 @@ function Overview({ saved, open }: { saved: number; open: (tab: Tab) => void }) 
     { id: "textbooks", label: "教材 Textbooks", value: view.counts.textbooks },
     { id: "lessons", label: "课 Lessons", value: view.counts.lessons },
     { id: "parsed", label: "今天外部解析 Pages parsed today", value: view.counts.parsedPagesToday },
+    { id: "model-calls", label: `今天调用 AI 模型（每人每天上限 ${view.counts.modelCallsPerDay}）Model calls today`, value: view.counts.modelCallsToday },
   ];
   return (
     <>

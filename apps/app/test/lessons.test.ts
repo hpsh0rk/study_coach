@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
+import { DAILY_MODEL_CALLS } from "../src/ai.ts";
 import { Client, e, loggedIn, seedUser } from "./client.ts";
 import { slideSourcePages } from "../src/textbook/index.ts";
 
@@ -610,5 +611,29 @@ describe("narrow textbook reads", () => {
     expect((await slideSourcePages(e, docId, [], ranges)).map((p) => p.no)).toEqual([1, 2, 3, 4]);
     expect((await slideSourcePages(e, docId, [3, 2, 3, 7], ranges)).map((p) => p.no)).toEqual([2, 3]);
     expect(await slideSourcePages(e, docId, [7], ranges)).toEqual([]);
+  });
+});
+
+describe("daily model-call cap", () => {
+  it("refuses an outline with a Chinese 429 once today's real calls reach the cap; stub calls and yesterday don't count", async () => {
+    await seedUser("usr_cap", "capteacher", "Teach12345", { mustChange: false });
+    const t = await loggedIn("capteacher", "Teach12345");
+    const lessonId = await newLesson(t, await uploadDoc(t));
+    const fill = (n: number, provider: string, at: number) =>
+      e.DB.prepare(
+        `WITH RECURSIVE k(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM k WHERE i < ?)
+         INSERT INTO ai_calls (id, org_id, user_id, capability, prompt_version, provider_id, model, status, input_tokens, output_tokens, latency_ms, created_at)
+         SELECT 'cap_' || ? || '_' || i, 'org_default', 'usr_cap', 'outline', 'v', ?, 'm', 'ok', 0, 0, 0, ? FROM k`,
+      )
+        .bind(n, provider + at, provider, at)
+        .run();
+    await fill(DAILY_MODEL_CALLS, "stub", Date.now());
+    await fill(DAILY_MODEL_CALLS, "aip_real", Date.now() - 2 * 86_400_000);
+    await fill(DAILY_MODEL_CALLS - 1, "aip_real", Date.now());
+    expect((await t.req("POST", `/api/lessons/${lessonId}/outline`)).status).toBe(201);
+    await fill(1, "aip_last", Date.now());
+    const refused = await t.req("POST", `/api/lessons/${lessonId}/outline`);
+    expect(refused.status).toBe(429);
+    expect(refused.json.error).toMatchObject({ code: "DAILY_MODEL_LIMIT", message: expect.stringContaining("每人每天") });
   });
 });

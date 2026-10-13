@@ -1,8 +1,34 @@
-import { and, eq, ne } from "drizzle-orm";
-import { createAiLayer, openSecret, type AiConfig, type ProviderConfig } from "@kj/ai";
+import { and, count, eq, gte, ne } from "drizzle-orm";
+import { createAiLayer, openSecret, STUB_PROVIDER_ID, type AiConfig, type ProviderConfig } from "@kj/ai";
 import { db } from "./db/index.ts";
 import { aiCalls, aiProviders } from "./db/schema.ts";
-import { secret, type Env } from "./env.ts";
+import { secret, type Env, type SessionUser } from "./env.ts";
+import { HttpError } from "./http.ts";
+
+/** Real model calls (the stub is free) per account per China day, retries included; `AI_DAILY_CALLS` overrides. A 40-slide lesson takes about 45. */
+export const DAILY_MODEL_CALLS = 400;
+const DAY_MS = 86_400_000;
+const CHINA_MS = 8 * 3_600_000;
+const chinaDayStart = (ms = Date.now()) => Math.floor((ms + CHINA_MS) / DAY_MS) * DAY_MS - CHINA_MS;
+export const dailyModelCalls = (env: Env) => Number(env.AI_DAILY_CALLS) || DAILY_MODEL_CALLS;
+
+/** Real model calls today, of one account or (no userId) the whole organisation. */
+export async function modelCallsToday(env: Env, orgId: string, userId?: string): Promise<number> {
+  const rows = await db(env)
+    .select({ n: count() })
+    .from(aiCalls)
+    .where(and(eq(aiCalls.orgId, orgId), gte(aiCalls.createdAt, chinaDayStart()), ne(aiCalls.providerId, STUB_PROVIDER_ID), userId ? eq(aiCalls.userId, userId) : undefined));
+  return rows[0]?.n ?? 0;
+}
+
+/** Called before an outline draft or a slide that needs the model. */
+export async function assertModelAllowance(env: Env, user: SessionUser): Promise<void> {
+  const cap = dailyModelCalls(env);
+  const used = await modelCallsToday(env, user.orgId, user.id);
+  if (used >= cap) {
+    throw new HttpError(429, "DAILY_MODEL_LIMIT", `今天已经调用 AI 模型 ${used} 次，到了每人每天 ${cap} 次的上限，请明天再生成；确实不够用请联系管理员 · Daily model-call limit reached`);
+  }
+}
 
 type ProviderRow = typeof aiProviders.$inferSelect;
 

@@ -7,7 +7,7 @@ import { outlineTiming } from "@kj/pedagogy";
 import { DEFAULT_PARAMS, LessonParams, newId, Outline, PageRange, sha256Hex, SlideContent, ThemeId, type ChapterNode, type LessonScope } from "@kj/schema";
 import { layoutForPageType, SLOT_SCHEMAS } from "@kj/templates";
 import { describeIssue, slotIssues, widgetIssues } from "@kj/templates/issues";
-import { makeAi } from "../ai.ts";
+import { assertModelAllowance, makeAi } from "../ai.ts";
 import { auditLog, lessons, outlineVersions, shareLinks, slides } from "../db/schema.ts";
 import type { AppBindings, Env } from "../env.ts";
 import { HttpError, parseJson } from "../http.ts";
@@ -153,6 +153,7 @@ export const lessonRoutes = new Hono<AppBindings>()
     if (!pageTexts.length) {
       throw new HttpError(422, "NO_SOURCE_TEXT", "所选页面都没有可读的文字（可能是扫描图），不能凭空起草。请回到“选章节”，为这些页粘贴文字 · The selected pages have no text; paste it on the chapters step");
     }
+    await assertModelAllowance(c.env, u);
     const now = Date.now();
     const locked = await db(c.env)
       .update(lessons)
@@ -245,6 +246,7 @@ export const lessonRoutes = new Hono<AppBindings>()
       const carried = (await d.select().from(slides).where(and(eq(slides.outlineVersionId, v.id), eq(slides.specId, specId))).limit(1))[0];
       if (carried && !body.regenerate) return c.json({ slide: slideFromRow(carried), reused: true });
     }
+    await assertModelAllowance(c.env, u);
     const params = versionParams(v);
     const worked = workedSpecFor(outline, specId);
     const workedRow = worked ? (await d.select({ content: slides.content }).from(slides).where(and(eq(slides.outlineVersionId, v.id), eq(slides.specId, worked))).limit(1))[0] : undefined;
