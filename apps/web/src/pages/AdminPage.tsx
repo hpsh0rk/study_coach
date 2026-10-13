@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useReducer, useState, type FormEvent } from "react";
 import { api, ApiError } from "../api.ts";
 import { useAuth } from "../auth.tsx";
 
@@ -31,8 +31,11 @@ interface AiView {
   recentCalls: { id: string; capability: string; providerId: string; model: string; status: string; latencyMs: number; inputTokens: number; outputTokens: number; createdAt: number; error: string | null }[];
 }
 
+type Tab = "users" | "ai" | "parsing";
+
 export function AdminPage() {
-  const [tab, setTab] = useState<"users" | "ai" | "parsing">("users");
+  const [tab, setTab] = useState<Tab>("users");
+  const [saved, bump] = useReducer((n: number) => n + 1, 0);
   return (
     <div className="stack">
       <div className="row between">
@@ -41,7 +44,7 @@ export function AdminPage() {
           <button className={tab === "users" ? "active" : ""} onClick={() => setTab("users")}>
             白名单账号 Users
           </button>
-          <button className={tab === "ai" ? "active" : ""} onClick={() => setTab("ai")}>
+          <button className={tab === "ai" ? "active" : ""} onClick={() => setTab("ai")} data-testid="admin-tab-ai">
             AI 模型 Models
           </button>
           <button className={tab === "parsing" ? "active" : ""} onClick={() => setTab("parsing")} data-testid="admin-tab-parsing">
@@ -49,7 +52,87 @@ export function AdminPage() {
           </button>
         </div>
       </div>
-      {tab === "users" ? <UsersPanel /> : tab === "ai" ? <AiPanel /> : <ParsingPanel />}
+      <SetupStatus saved={saved} open={setTab} />
+      {tab === "users" ? <UsersPanel /> : tab === "ai" ? <AiPanel onSaved={bump} /> : <ParsingPanel onSaved={bump} />}
+    </div>
+  );
+}
+
+interface SetupView {
+  ai: { state: "live"; provider: string; model: string } | { state: "stub" | "off" };
+  vision: { state: "on" | "paid_off"; provider: string; model: string; separate: boolean } | { state: "none" };
+  external: ({ state: "on" } | { state: "off" } | { state: "unconfigured"; missing: "token" | "url" }) & { mode: "agent" | "token" | "selfhost"; stub: boolean };
+}
+
+const MODE_LABEL = { agent: "MinerU 免费轻量接口", token: "MinerU 精准接口", selfhost: "学校自部署的 MinerU" } as const;
+
+/** What each key-backed feature does now and, when something is missing, which feature is off and what to fill in where. */
+function setupRows(v: SetupView): { id: string; title: string; ok: boolean; badge: string; text: string; tab: Tab }[] {
+  const ai =
+    v.ai.state === "live"
+      ? { ok: true, badge: "已配置", text: `${v.ai.provider} / ${v.ai.model}` }
+      : {
+          ok: false,
+          badge: v.ai.state === "stub" ? "演示模式" : "未配置",
+          text: `还没有配置 AI 模型：${v.ai.state === "stub" ? "大纲和幻灯片现在由内置模板生成，不是 AI 写的" : "老师现在无法生成大纲和幻灯片"}。请在“AI 模型”里添加一个提供方（DeepSeek、智谱 GLM 或任何 OpenAI 兼容接口）并填 API Key。`,
+        };
+  const vision =
+    v.vision.state === "on"
+      ? { ok: true, badge: "已配置", text: `${v.vision.provider} / ${v.vision.model}${v.vision.separate ? "（单独的看图模型）" : ""}` }
+      : v.vision.state === "paid_off"
+        ? { ok: false, badge: "未开启", text: `${v.vision.model} 按页收费，还没有允许付费兜底：在“外部解析服务”页允许付费并设月度预算，或把它的价格设为 0。` }
+        : { ok: false, badge: "未配置", text: "扫描页、公式页读不出时不能看图识别，只能老师粘贴文字。请在“AI 模型”里给模型填“看图模型”，或配一个单独的看图模型（智谱 glm-4.6v-flash 免费）。" };
+  const e = v.external;
+  const external =
+    e.state === "on"
+      ? { ok: true, badge: "已开启", text: `${MODE_LABEL[e.mode]}${e.stub ? "（开发 / 测试环境：用录制好的返回结果，不真正发出页面）" : ""}` }
+      : e.state === "off"
+        ? { ok: false, badge: "已关闭", text: "管理员关闭了外部解析服务：读不全的页不会发给 MinerU，交给看图模型或老师粘贴。" }
+        : {
+            ok: false,
+            badge: "未配置",
+            text: e.missing === "url" ? "选了“MinerU 自部署”，但还没有填服务地址。填好之前不会发送任何页面。" : "选了“精准接口”，但还没有填 MinerU Token。填好之前不会发送任何页面。",
+          };
+  return [
+    { id: "ai", title: "AI 模型（写大纲和幻灯片）", tab: "ai", ...ai },
+    { id: "vision", title: "看图模型（识别扫描页、公式页）", tab: "ai", ...vision },
+    { id: "external", title: "外部解析服务（MinerU）", tab: "parsing", ...external },
+  ];
+}
+
+function SetupStatus({ saved, open }: { saved: number; open: (tab: Tab) => void }) {
+  const [view, setView] = useState<SetupView | null>(null);
+  useEffect(() => {
+    void api<SetupView>("/api/admin/status").then(setView, () => undefined);
+  }, [saved]);
+  if (!view) return null;
+  const rows = setupRows(view);
+  return (
+    <div className="card setup-status" data-testid="setup-status">
+      <h2>配置状态 Setup status</h2>
+      <p className="muted small">所有 Key 都只保存在服务器上（加密），浏览器里只显示开头几个字。· Keys stay on the server, encrypted.</p>
+      <table className="table">
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.id} data-testid={`setup-${r.id}`} data-ok={r.ok}>
+              <td>
+                <strong>{r.title}</strong>
+              </td>
+              <td>
+                <span className={`badge ${r.ok ? "ready" : "warn"}`}>{r.badge}</span>
+              </td>
+              <td className="small">{r.text}</td>
+              <td className="row end">
+                {!r.ok && (
+                  <button className="btn small" onClick={() => open(r.tab)} data-testid={`setup-${r.id}-go`}>
+                    去填写
+                  </button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -194,7 +277,7 @@ function AuditLog() {
   );
 }
 
-function AiPanel() {
+function AiPanel({ onSaved }: { onSaved: () => void }) {
   const { refresh } = useAuth();
   const [view, setView] = useState<AiView | null>(null);
   const [error, setError] = useState("");
@@ -218,6 +301,7 @@ function AiPanel() {
     try {
       await fn();
       await Promise.all([load(), refresh()]);
+      onSaved();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
     }
@@ -583,7 +667,7 @@ const MODE_NOTICE: Record<MineruApi, string> = {
 };
 
 /** "外部解析服务": whether pages the browser could not read go to MinerU (online, or the school's own server). On once configured, unless an admin turns it off. */
-function ParsingPanel() {
+function ParsingPanel({ onSaved }: { onSaved: () => void }) {
   const [view, setView] = useState<ParsingView | null>(null);
   const [token, setToken] = useState("");
   const [selfhostUrl, setSelfhostUrl] = useState("");
@@ -605,6 +689,7 @@ function ParsingPanel() {
     try {
       await api("/api/admin/parsing", { method: "PUT", body });
       await load();
+      onSaved();
       setNotice(done);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));

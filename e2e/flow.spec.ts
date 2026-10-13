@@ -694,7 +694,8 @@ test("formulas drawn as outlines: the chapters step shows the gap, and pasting c
   await expect(summary).toContainText("公式没读出 1 页");
   await expect(summary).toHaveAttribute("data-count", "1");
   // With 外部解析服务 off nothing is sent; the teacher is told the gap and how to close it.
-  await expect(summary.getByTestId("external-off")).toContainText("外部解析服务");
+  await expect(summary.getByTestId("external-off")).toContainText("管理员关闭了外部解析服务");
+  await expect(summary.getByTestId("vision-off")).toContainText("看图模型未配置：请联系管理员在后台“AI 模型”里填写看图模型");
   await expect(page.getByTestId("external-run")).toHaveCount(0);
   await expect(page.getByTestId("external-progress")).toHaveCount(0);
   const lossy = page.getByRole("treeitem").filter({ hasText: "Equations of motion" });
@@ -813,7 +814,7 @@ test("看图模型 fallback (local mock provider): with the external parser off,
     await form.getByLabel("Base URL（OpenAI 兼容）").fill(provider.baseUrl);
     await form.getByLabel("API Key").fill("sk-local-mock-key");
     await form.getByRole("button", { name: /保存并启用/ }).click();
-    await expect(page.locator("tr", { hasText: "Local vision mock" })).toContainText("mock-vl");
+    await expect(page.locator("tr:not([data-testid^=setup])", { hasText: "Local vision mock" })).toContainText("mock-vl");
 
     // A model with no known price counts as paid: unusable until paid parsing is allowed or the admin prices it.
     await page.getByTestId("admin-tab-parsing").click();
@@ -866,7 +867,7 @@ test("看图模型 fallback (local mock provider): with the external parser off,
     await page.goto("/admin");
     await page.getByRole("button", { name: "AI 模型 Models" }).click();
     await expect(page.getByTestId("add-model-form")).toBeVisible();
-    const row = page.locator("tr", { hasText: "Local vision mock" });
+    const row = page.locator("tr:not([data-testid^=setup])", { hasText: "Local vision mock" });
     if (await row.count()) {
       await row.getByRole("button", { name: "删除" }).click();
       await expect(row).toHaveCount(0);
@@ -993,12 +994,33 @@ test("MinerU 自部署 (local mock server): unconfigured until the URL is saved,
     await expect(page.getByTestId("parsing-missing")).toContainText("自部署 MinerU 的地址");
     await expect(page.getByTestId("parsing-test")).toBeDisabled();
     await shot(page, "29-admin-selfhost-missing");
+    const setup = page.getByTestId("setup-status");
+    await expect(setup.getByTestId("setup-ai")).toContainText("演示模式");
+    await expect(setup.getByTestId("setup-vision")).toHaveAttribute("data-ok", "false");
+    await expect(setup.getByTestId("setup-external")).toContainText("还没有填服务地址");
+    await shotOf(setup, "34-admin-setup-status");
+
+    // The teacher is told in plain Chinese whom to ask; nothing is sent and the page can still be pasted.
+    await page.goto("/new");
+    await page.getByTestId("pdf-input").setInputFiles(await kinematicsCopy("Kinematics selfhost unconfigured"));
+    await page.waitForURL(/\/new\/[^/]+$/);
+    const summary = page.getByTestId("must-fix-summary");
+    await expect(summary.getByTestId("external-off")).toHaveText("外部解析未配置：请联系管理员在后台“外部解析服务”里填写自部署 MinerU 的地址 · External parser not configured");
+    await expect(summary.getByTestId("vision-off")).toContainText("看图模型未配置");
+    await expect(summary).toContainText("选到这些页时可以粘贴文字补上");
+    await expect(page.getByTestId("external-run")).toHaveCount(0);
+    await shot(page, "35-teacher-reminders");
+    expect(school.asked).toHaveLength(0);
+    await page.goto("/admin");
+    await page.getByTestId("admin-tab-parsing").click();
+    await expect(page.getByTestId("parsing-state")).toHaveText(/未配置/);
 
     await page.getByTestId("selfhost-url").fill(`${school.baseUrl}/v1`);
     await page.getByTestId("selfhost-key").fill("not-the-key");
     await page.getByTestId("selfhost-save").click();
     await expect(page.getByTestId("parsing-state")).toHaveText(/已开启/);
     await expect(page.getByTestId("selfhost-url")).toHaveAttribute("placeholder", /^已保存：http:\/\/127\.…:\d+$/);
+    await expect(setup.getByTestId("setup-external")).toHaveAttribute("data-ok", "true");
     await page.getByTestId("parsing-test").click();
     await expect(page.getByTestId("parsing-error")).toContainText("API Key");
     await page.getByTestId("selfhost-key").fill(KEY);

@@ -23,7 +23,7 @@ import { OUTLINE_SOURCE_CHARS, scopeAdvice } from "@kj/pedagogy";
 import type { ChapterNode, PageKind, PageRange } from "@kj/schema";
 import { ApiError } from "../../api.ts";
 import { lessonApi, type LessonView, type UnitPreview } from "../../lessonApi.ts";
-import { documentApi, type DocumentRow, type ExternalParserInfo, type PastedPage, type VisionParserInfo } from "../../textbook/api.ts";
+import { documentApi, type DocumentRow, type ExternalParserInfo, type PastedPage, type ReaderNotes, type VisionParserInfo } from "../../textbook/api.ts";
 import { parseExternally, pdfCutter, rememberedFile, rememberFile, type ExternalOutcome } from "../../textbook/external.ts";
 import { pageRenderer } from "../../textbook/pdf.ts";
 import { readWithVision } from "../../textbook/vision.ts";
@@ -136,7 +136,7 @@ const VIA = {
 } as const;
 
 /** Progress and outcome of re-reading pages: `external` (MinerU) or `vision` (the provider's vision model). Test ids carry the prefix. */
-function ParseStatus({ run, via }: { run: ParseRun; via: keyof typeof VIA }) {
+function ParseStatus({ run, via, next }: { run: ParseRun; via: keyof typeof VIA; next?: string | null }) {
   const v = VIA[via];
   if (run.kind === "running")
     return (
@@ -160,6 +160,11 @@ function ParseStatus({ run, via }: { run: ParseRun; via: keyof typeof VIA }) {
       {v.who}读好了 {read} 页{read > 0 && v.check}
       {run.missed.length > 0 && `；${run.missed.length} 页没读出来，选到这些页时可以粘贴文字补上`}
       {run.stopped && `（${run.stopped}）`}。· Re-read {read} page(s) with {v.en}{run.missed.length > 0 && `; ${run.missed.length} not read`}.
+      {run.missed.length > 0 && next && (
+        <div className="small" data-testid={`${via}-next`}>
+          {next}
+        </div>
+      )}
     </div>
   );
 }
@@ -185,6 +190,7 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
   const [extRun, setExtRun] = useState<ParseRun | null>(null);
   const [vision, setVision] = useState<VisionParserInfo | null>(null);
   const [visRun, setVisRun] = useState<ParseRun | null>(null);
+  const [notes, setNotes] = useState<ReaderNotes>({ external: null, vision: null });
   const pickFor = useRef<((file: File) => void) | null>(null);
   const filePicker = useRef<HTMLInputElement>(null);
   const [pasting, setPasting] = useState<PageRange | null>(null);
@@ -210,6 +216,7 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
         setPageKinds(r.pageKinds);
         setExternal(r.externalParser);
         setVision(r.visionParser);
+        setNotes(r.readers);
         setCollapsed(new Set(r.chapters.filter((c) => c.level >= 2 && r.chapters.some((k) => k.parentId === c.id)).map((c) => c.id)));
         if (lesson && !lesson.lesson.scope.chapterIds.length) setRangeText(fmtRanges(lesson.lesson.scope.ranges, map));
       })
@@ -463,7 +470,7 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
                 )
               ) : vision ? (
                 <>
-                  <span data-testid="external-off"> 外部解析服务没有开启。</span>
+                  <span data-testid="external-off"> {notes.external ?? "外部解析服务没有开启。"}</span>
                   {!reading && (
                     <span>
                       可以用看图模型（{vision.model}）识别这些页的图片（读出的数字要核对），或选到这些页时粘贴文字补上。
@@ -474,16 +481,24 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
                   )}
                 </>
               ) : (
-                <span data-testid="external-off">
+                <>
                   {" "}
-                  选到这些页时可以粘贴文字补上；管理员在后台开启“外部解析服务”或配置“看图模型”后，这些页可以自动识别。
-                </span>
+                  选到这些页时可以粘贴文字补上。
+                  <span className="reader-notes">
+                    <span className="block" data-testid="external-off">
+                      {notes.external ?? "外部解析服务没有开启。"}
+                    </span>
+                    <span className="block" data-testid="vision-off">
+                      {notes.vision ?? "没有可用的看图模型。"}
+                    </span>
+                  </span>
+                </>
               )}{" "}
               · Some pages were not fully read (scans, formulas drawn as outlines)
               {external ? ": re-read them with the external parser, or paste their text." : vision ? ": read their images with the vision model, or paste their text." : "; paste their text where you need it."}
             </div>
           )}
-          {extRun && <ParseStatus run={extRun} via="external" />}
+          {extRun && <ParseStatus run={extRun} via="external" next={vision ? null : notes.vision} />}
           {visRun && <ParseStatus run={visRun} via="vision" />}
           <input
             ref={filePicker}

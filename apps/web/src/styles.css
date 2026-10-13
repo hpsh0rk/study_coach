@@ -200,6 +200,20 @@ label {
 .badge.note {
   margin-left: 6px;
 }
+.reader-notes {
+  display: block;
+  margin: 6px 0 2px;
+}
+.reader-notes .block {
+  display: block;
+}
+.setup-status td:first-child {
+  white-space: nowrap;
+}
+.setup-status .badge.warn {
+  margin-left: 0;
+  white-space: nowrap;
+}
 .share-row {
   display: grid;
   gap: 10px;
