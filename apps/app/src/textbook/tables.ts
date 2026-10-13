@@ -23,6 +23,8 @@ export const documents = sqliteTable(
     createdAt: integer("created_at").notNull().$defaultFn(now),
     /** Soft delete, like lessons.archived_at: hidden from lists and new lessons; lessons made from it keep working. */
     archivedAt: integer("archived_at"),
+    /** Deleted for good (no lesson used it): pages and chapters are gone; the row stays for parse-usage accounting. */
+    purgedAt: integer("purged_at"),
   },
   (t) => [
     index("documents_owner_idx").on(t.orgId, t.ownerId),

@@ -26,6 +26,20 @@ export async function lessonsUsing(env: Env, documentId: string): Promise<number
   return used?.n ?? 0;
 }
 
+/** Lessons made from each textbook: `live` leaves out archived lessons; `all` counts every lesson still pointing at it. */
+export async function lessonCountsByDocument(env: Env, documentIds: string[]): Promise<Record<string, { live: number; all: number }>> {
+  const out: Record<string, { live: number; all: number }> = {};
+  for (const id of documentIds) out[id] = { live: 0, all: 0 };
+  if (!documentIds.length) return out;
+  const rows = await db(env)
+    .select({ id: lessons.documentId, live: sql<number>`sum(case when ${lessons.archivedAt} is null then 1 else 0 end)`, all: count() })
+    .from(lessons)
+    .where(inArray(lessons.documentId, documentIds))
+    .groupBy(lessons.documentId);
+  for (const r of rows) out[r.id] = { live: r.live ?? 0, all: r.all };
+  return out;
+}
+
 export const lessonParams = (l: LessonRow) => LessonParams.parse(JSON.parse(l.params));
 export const lessonScope = (l: LessonRow) => LessonScope.parse(JSON.parse(l.scope));
 /** A version's own snapshot: later changes to the lesson settings never affect it. */

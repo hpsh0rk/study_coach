@@ -1,0 +1,1 @@
+ALTER TABLE `documents` ADD `purged_at` integer;
