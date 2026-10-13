@@ -146,8 +146,7 @@ describe("self-hosted MinerU through the routes", () => {
     expect(saved.json.pages.map((p: { parser: string }) => p.parser)).toEqual([MINERU_SELFHOST_PARSER, MINERU_SELFHOST_PARSER]);
     expect(seen.filter((s) => s.method === "POST").map((s) => s.url)).toEqual([`${BASE}/v1/tasks?filename=pages.pdf&ocr_mode=ocr&output_formats=markdown`]);
 
-    // The school's own server does not use MinerU's free daily allowance.
-    expect((await admin.req("GET", "/api/admin/parsing")).json.today).toMatchObject({ site: 0, org: 2 });
+    expect((await admin.req("GET", "/api/admin/parsing")).json.today).toBe(2);
     const audit = await e.DB.prepare("SELECT target FROM audit_log WHERE action = 'admin.parser_settings' AND actor_id = 'usr_sa' ORDER BY id").all<{ target: string }>();
     expect(audit.results.map((r) => r.target)).toEqual(["mode_selfhost", "selfhost"]);
   });

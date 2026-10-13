@@ -1,29 +1,20 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { openSecret } from "@kj/ai";
 import { db } from "../../db/index.ts";
 import { secret, type Env, type SessionUser } from "../../env.ts";
 import { parserSettings, parseUsage } from "../tables.ts";
-import { MINERU_AGENT_PARSER, MINERU_PARSER } from "@kj/textbook";
 import { agentParser, checkConnection, selfhostParser, stubParser, type ExternalParser, type MineruMode } from "./mineru.ts";
 
 export { maskUrl, normalizeBaseUrl } from "./mineru.ts";
 
-/** Guardrails on pages sent to external parsers and vision models (pdf-parsing research §7.6). Money in micro-yuan. */
-export const PARSE_LIMITS = { bookAutoPages: 300, userDayPages: 300, siteDayPages: 900, bookCostMicroYuan: 5_000_000 } as const;
+/** Pages one teacher may send to the external parser and the vision model per day (China time), together. */
+export const PARSE_DAY_PAGES = 300;
 
-/** List prices per page image (research §3.3: about 1,200 tokens in and 1,000 out), in micro-yuan. */
-export const VISION_PRICES: Readonly<Record<string, number>> = {
-  "glm-4.6v-flash": 0,
-  "glm-4.6v-flashx": 1_700,
-  "glm-4.6v": 4_200,
-  "qwen-vl-ocr": 900,
-  "qwen3-vl-flash": 1_700,
-  "qwen3-vl-plus": 11_000,
-};
-/** A model not in the list is priced like the dearest one: paid, so it stays off until an admin allows paid parsing or enters its price. */
-export const UNKNOWN_VISION_PRICE = 11_000;
+/** Vision models known to be free. Any other model may cost money per page, so it waits for "允许付费兜底". */
+export const FREE_VISION_MODELS: readonly string[] = ["glm-4.6v-flash"];
+export const isFreeVisionModel = (model: string) => FREE_VISION_MODELS.includes(model.trim().toLowerCase());
 
-export type ExternalChoice = "auto" | "on" | "off";
+export type ExternalChoice = "auto" | "off";
 export type MineruApi = "agent" | "selfhost";
 type Sealed = { sealed: string; hint: string };
 
@@ -35,8 +26,6 @@ export interface ParserSettings {
   selfhostKeySealed: string | null;
   selfhostKeyHint: string | null;
   paidEnabled: boolean;
-  monthlyBudgetMicroYuan: number;
-  visionPriceMicroYuan: number | null;
 }
 
 /** Sealed values: an object to store, null to remove, undefined to keep. */
@@ -46,9 +35,6 @@ export interface SettingsPatch {
   selfhostUrl?: Sealed | null;
   selfhostKey?: Sealed | null;
   paidEnabled?: boolean;
-  monthlyBudgetMicroYuan?: number;
-  /** null: back to the list price. */
-  visionPriceMicroYuan?: number | null;
 }
 
 function defaultMode(env: Env): MineruApi {
@@ -66,8 +52,6 @@ export async function parserSettingsOf(env: Env, orgId: string): Promise<ParserS
       selfhostKeySealed: null,
       selfhostKeyHint: null,
       paidEnabled: false,
-      monthlyBudgetMicroYuan: 0,
-      visionPriceMicroYuan: null,
     }
   );
 }
@@ -87,8 +71,6 @@ export async function saveParserSettings(env: Env, user: SessionUser, patch: Set
     selfhostKeySealed,
     selfhostKeyHint,
     paidEnabled: patch.paidEnabled ?? current.paidEnabled,
-    monthlyBudgetMicroYuan: patch.monthlyBudgetMicroYuan ?? current.monthlyBudgetMicroYuan,
-    visionPriceMicroYuan: patch.visionPriceMicroYuan === undefined ? current.visionPriceMicroYuan : patch.visionPriceMicroYuan,
     updatedAt: Date.now(),
     updatedBy: user.id,
   };
@@ -149,102 +131,30 @@ export async function externalParserFor(env: Env, settings: ParserSettings, f: t
   return externalState(env, settings).state === "on" ? configuredParser(env, settings, f) : null;
 }
 
-export interface VisionPrice {
-  microYuanPerPage: number;
-  /** `admin`: entered in the backend. `list`: VISION_PRICES. `unknown`: priced as the dearest listed model. */
-  source: "admin" | "list" | "unknown";
-}
-
-export function visionPriceOf(model: string, settings: ParserSettings): VisionPrice {
-  if (settings.visionPriceMicroYuan !== null) return { microYuanPerPage: settings.visionPriceMicroYuan, source: "admin" };
-  const listed = VISION_PRICES[model.toLowerCase()];
-  return listed === undefined ? { microYuanPerPage: UNKNOWN_VISION_PRICE, source: "unknown" } : { microYuanPerPage: listed, source: "list" };
-}
-
-/** Calendar day in China (UTC+8): the daily limits reset at local midnight, the monthly budget on the 1st. */
+/** Calendar day in China (UTC+8): the daily limit resets at local midnight. */
 export const chinaDay = (ms = Date.now()) => new Date(ms + 8 * 3600_000).toISOString().slice(0, 10);
-const monthStart = (day: string) => `${day.slice(0, 7)}-01`;
 
-/** MinerU's free daily allowance (online APIs) is what the site-wide limit protects; vision pages and a self-hosted server do not use it. */
-const isMineruRow = sql`${parseUsage.parser} in (${MINERU_AGENT_PARSER}, ${MINERU_PARSER})`;
-
-export interface ParseUsed {
-  bookAutoPages: number;
-  bookCostMicroYuan: number;
-  userDayPages: number;
-  siteDayPages: number;
-  orgMonthCostMicroYuan: number;
-}
-
-/** Pages and money already spent: on this book, by this teacher today, MinerU pages site-wide today, and this organisation this month. One query. */
-export async function parseUsed(env: Env, user: SessionUser, documentId: string, day = chinaDay()): Promise<ParseUsed> {
+/** Pages a teacher sent today (external parser and vision model), or (no userId) the whole organisation. */
+export async function parsedPagesToday(env: Env, orgId: string, userId?: string, day = chinaDay()): Promise<number> {
   const row = (
     await db(env)
-      .select({
-        bookAutoPages: sql<number>`coalesce(sum(case when ${parseUsage.documentId} = ${documentId} and ${parseUsage.reason} = 'auto' then ${parseUsage.pageCount} end), 0)`,
-        bookCostMicroYuan: sql<number>`coalesce(sum(case when ${parseUsage.documentId} = ${documentId} then ${parseUsage.costMicroYuan} end), 0)`,
-        userDayPages: sql<number>`coalesce(sum(case when ${parseUsage.day} = ${day} and ${parseUsage.userId} = ${user.id} then ${parseUsage.pageCount} end), 0)`,
-        siteDayPages: sql<number>`coalesce(sum(case when ${parseUsage.day} = ${day} and ${isMineruRow} then ${parseUsage.pageCount} end), 0)`,
-        orgMonthCostMicroYuan: sql<number>`coalesce(sum(case when ${parseUsage.day} >= ${monthStart(day)} and ${parseUsage.orgId} = ${user.orgId} then ${parseUsage.costMicroYuan} end), 0)`,
-      })
+      .select({ n: sql<number>`coalesce(sum(${parseUsage.pageCount}), 0)` })
       .from(parseUsage)
-      .where(sql`${parseUsage.day} >= ${monthStart(day)} or ${parseUsage.documentId} = ${documentId}`)
+      .where(and(eq(parseUsage.orgId, orgId), eq(parseUsage.day, day), userId ? eq(parseUsage.userId, userId) : undefined))
   )[0];
-  return row ?? { bookAutoPages: 0, bookCostMicroYuan: 0, userDayPages: 0, siteDayPages: 0, orgMonthCostMicroYuan: 0 };
+  return row?.n ?? 0;
 }
 
-/** For the admin page: MinerU pages today site-wide, pages today in this organisation, and its spend this month. */
-export async function parseUsageToday(env: Env, orgId: string): Promise<{ site: number; org: number; monthCostMicroYuan: number }> {
-  const day = chinaDay();
-  const row = (
-    await db(env)
-      .select({
-        site: sql<number>`coalesce(sum(case when ${parseUsage.day} = ${day} and ${isMineruRow} then ${parseUsage.pageCount} end), 0)`,
-        org: sql<number>`coalesce(sum(case when ${parseUsage.day} = ${day} and ${parseUsage.orgId} = ${orgId} then ${parseUsage.pageCount} end), 0)`,
-        monthCostMicroYuan: sql<number>`coalesce(sum(case when ${parseUsage.orgId} = ${orgId} then ${parseUsage.costMicroYuan} end), 0)`,
-      })
-      .from(parseUsage)
-      .where(sql`${parseUsage.day} >= ${monthStart(day)}`)
-  )[0];
-  return row ?? { site: 0, org: 0, monthCostMicroYuan: 0 };
-}
+export type Refusal = { status: 429; code: "PARSE_QUOTA"; remaining: number } | { status: 402; code: "PARSE_BUDGET" };
 
-export type Refusal =
-  | { status: 429; code: "PARSE_QUOTA"; scope: "book" | "user" | "site"; remaining: number }
-  | { status: 402; code: "PARSE_BUDGET"; scope: "off" | "month" | "book"; remaining: number };
-
-/**
- * Whether `pages` more pages may be sent. Pure. Must-fix pages count against the book's automatic allowance;
- * pages the teacher asks for do not. Only MinerU pages count against the site-wide day. A paid request
- * (cost > 0) needs "允许付费兜底" on, and stays within the organisation's monthly budget and the per-book cap.
- */
-export function parseAllowance(
-  used: ParseUsed,
-  req: { pages: number; reason: "auto" | "refine"; costMicroYuan: number; mineru: boolean },
-  budget: Pick<ParserSettings, "paidEnabled" | "monthlyBudgetMicroYuan">,
-): Refusal | null {
-  const quota = (scope: "book" | "user" | "site", left: number): Refusal | null => (req.pages > left ? { status: 429, code: "PARSE_QUOTA", scope, remaining: Math.max(0, left) } : null);
-  const money = (scope: "off" | "month" | "book", left: number): Refusal | null =>
-    req.costMicroYuan > left ? { status: 402, code: "PARSE_BUDGET", scope, remaining: Math.max(0, left) } : null;
-  return (
-    (req.reason === "auto" ? quota("book", PARSE_LIMITS.bookAutoPages - used.bookAutoPages) : null) ??
-    quota("user", PARSE_LIMITS.userDayPages - used.userDayPages) ??
-    (req.mineru ? quota("site", PARSE_LIMITS.siteDayPages - used.siteDayPages) : null) ??
-    (req.costMicroYuan > 0
-      ? (budget.paidEnabled ? null : money("off", 0)) ??
-        money("month", budget.monthlyBudgetMicroYuan - used.orgMonthCostMicroYuan) ??
-        money("book", PARSE_LIMITS.bookCostMicroYuan - used.bookCostMicroYuan)
-      : null)
-  );
+/** Whether `pages` more pages may be sent. Pure. A paid model (vision only) needs "允许付费兜底" on. */
+export function parseAllowance(usedToday: number, req: { pages: number; paid: boolean }, paidEnabled: boolean): Refusal | null {
+  if (req.pages > PARSE_DAY_PAGES - usedToday) return { status: 429, code: "PARSE_QUOTA", remaining: Math.max(0, PARSE_DAY_PAGES - usedToday) };
+  if (req.paid && !paidEnabled) return { status: 402, code: "PARSE_BUDGET" };
+  return null;
 }
 
 export function refusalMessage(r: Refusal, what: string): string {
-  if (r.code === "PARSE_BUDGET") {
-    return {
-      off: `${what}要付费，管理员还没有开启“允许付费兜底” · Paid parsing is off`,
-      month: "本月的付费解析预算用完了，请管理员调整预算 · This month's parsing budget is used up",
-      book: "这本书的付费解析费用已到上限（5 元）· This book reached its parsing budget",
-    }[r.scope];
-  }
-  return { book: `这本书自动送去${what}的页数已到上限`, user: `你今天的${what}额度用完了，明天再试`, site: `本站今天的${what}额度用完了，明天再试` }[r.scope] + " · Parsing quota reached";
+  if (r.code === "PARSE_BUDGET") return `${what}要付费，管理员还没有开启“允许付费兜底” · Paid parsing is off`;
+  return `你今天的${what}额度（每天 ${PARSE_DAY_PAGES} 页）用完了，明天再试 · Parsing quota reached`;
 }

@@ -16,12 +16,12 @@ import {
   externalState,
   maskUrl,
   normalizeBaseUrl,
-  PARSE_LIMITS,
+  PARSE_DAY_PAGES,
   parserSettingsOf,
-  parseUsageToday,
+  parsedPagesToday,
   saveParserSettings,
   testExternalConnection,
-  visionPriceOf,
+  isFreeVisionModel,
 } from "../textbook/parsers/settings.ts";
 
 const Username = z
@@ -141,18 +141,18 @@ export const adminRoutes = new Hono<AppBindings>()
       db(c.env).select({ n: count() }).from(users).where(and(eq(users.orgId, orgId), isNull(users.disabledAt))),
       db(c.env).select({ n: count() }).from(lessons).where(and(eq(lessons.orgId, orgId), isNull(lessons.archivedAt))),
       textbookCount(c.env, orgId),
-      parseUsageToday(c.env, orgId),
+      parsedPagesToday(c.env, orgId),
       modelCallsToday(c.env, orgId),
     ]);
     const text = providers.find((p) => p.purpose === "text");
     const vision = providers.find((p) => p.purpose === "vision");
     const visionModel = vision?.model || text?.visionModel || "";
-    const visionPaidOff = !!visionModel && visionPriceOf(visionModel, settings).microYuanPerPage > 0 && !settings.paidEnabled;
+    const visionPaidOff = !!visionModel && !isFreeVisionModel(visionModel) && !settings.paidEnabled;
     return c.json({
       ai: text ? { state: "live", provider: text.name, model: text.model } : { state: c.env.AI_ALLOW_STUB === "true" ? "stub" : "off" },
       vision: visionModel ? { state: visionPaidOff ? "paid_off" : "on", provider: (vision ?? text)!.name, model: visionModel, separate: !!vision } : { state: "none" },
       external: { ...externalState(c.env, settings), mode: settings.mineruMode, stub: effectiveMode(c.env, settings) === "stub" },
-      counts: { users: userCount[0]?.n ?? 0, textbooks, lessons: lessonCount[0]?.n ?? 0, parsedPagesToday: usage.org, modelCallsToday: modelCalls, modelCallsPerDay: dailyModelCalls(c.env) },
+      counts: { users: userCount[0]?.n ?? 0, textbooks, lessons: lessonCount[0]?.n ?? 0, parsedPagesToday: usage, modelCallsToday: modelCalls, modelCallsPerDay: dailyModelCalls(c.env) },
     });
   })
 
@@ -305,7 +305,7 @@ export const adminRoutes = new Hono<AppBindings>()
    */
   .get("/parsing", async (c) => {
     const orgId = c.get("user").orgId;
-    const [settings, today, visionModel] = await Promise.all([parserSettingsOf(c.env, orgId), parseUsageToday(c.env, orgId), visionModelOf(c.env, orgId)]);
+    const [settings, today, visionModel] = await Promise.all([parserSettingsOf(c.env, orgId), parsedPagesToday(c.env, orgId), visionModelOf(c.env, orgId)]);
     return c.json({
       externalChoice: settings.externalChoice,
       external: externalState(c.env, settings),
@@ -313,11 +313,10 @@ export const adminRoutes = new Hono<AppBindings>()
       selfhostUrlHint: settings.selfhostUrlHint,
       selfhostKeyHint: settings.selfhostKeyHint,
       stub: effectiveMode(c.env, settings) === "stub",
-      limits: PARSE_LIMITS,
+      dayPages: PARSE_DAY_PAGES,
       today,
       paidEnabled: settings.paidEnabled,
-      monthlyBudgetMicroYuan: settings.monthlyBudgetMicroYuan,
-      vision: visionModel ? { model: visionModel, ...visionPriceOf(visionModel, settings) } : null,
+      vision: visionModel ? { model: visionModel, free: isFreeVisionModel(visionModel) } : null,
     });
   })
   /** Money in micro-yuan (1 元 = 1,000,000). Secrets: a string to store, null to remove, absent to keep. */
@@ -325,7 +324,7 @@ export const adminRoutes = new Hono<AppBindings>()
     const body = await parseJson(
       c,
       z.object({
-        externalChoice: z.enum(["auto", "on", "off"]).optional(),
+        externalChoice: z.enum(["auto", "off"]).optional(),
         mineruMode: z.enum(["agent", "selfhost"]).optional(),
         selfhostUrl: z
           .string()
@@ -337,8 +336,6 @@ export const adminRoutes = new Hono<AppBindings>()
           .optional(),
         selfhostKey: z.string().trim().min(1).max(4000).nullable().optional(),
         paidEnabled: z.boolean().optional(),
-        monthlyBudgetMicroYuan: z.number().int().min(0).max(10_000 * 1_000_000).optional(),
-        visionPriceMicroYuan: z.number().int().min(0).max(1_000_000).nullable().optional(),
       }),
     );
     const me = c.get("user");

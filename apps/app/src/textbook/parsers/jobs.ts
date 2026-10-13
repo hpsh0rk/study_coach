@@ -1,5 +1,5 @@
 import { and, eq, inArray, ne } from "drizzle-orm";
-import { isMustFix, MINERU_SELFHOST_PARSER, PDFJS_PARSER, pageFacts, REFINE_KINDS, type PageFacts } from "@kj/textbook";
+import { isMustFix, PDFJS_PARSER, pageFacts, REFINE_KINDS, type PageFacts } from "@kj/textbook";
 import { newId } from "@kj/schema";
 import { db } from "../../db/index.ts";
 import type { Env, SessionUser } from "../../env.ts";
@@ -7,7 +7,7 @@ import { HttpError } from "../../http.ts";
 import type { TextbookRow } from "../index.ts";
 import { documents, pages, parseUsage } from "../tables.ts";
 import type { ExternalParser } from "./mineru.ts";
-import { chinaDay, externalParserFor, externalState, parseAllowance, parserSettingsOf, parseUsed, refusalMessage, type ExternalState, type ParserSettings } from "./settings.ts";
+import { chinaDay, externalParserFor, externalState, parseAllowance, parsedPagesToday, parserSettingsOf, refusalMessage, type ExternalState, type ParserSettings } from "./settings.ts";
 
 export type ParseReason = "auto" | "refine";
 export type JobRow = typeof parseUsage.$inferSelect;
@@ -106,9 +106,8 @@ export async function createParseJob(
   const send = nos.filter((no) => !reused.some((r) => r.no === no));
   if (!send.length) return { reused, job: null, parser: info(parser) };
 
-  const cost = send.length * parser.costMicroYuanPerPage;
-  const refusal = parseAllowance(await parseUsed(env, user, doc.id), { pages: send.length, reason: req.reason, costMicroYuan: cost, mineru: parser.id !== MINERU_SELFHOST_PARSER }, await parserSettingsOf(env, user.orgId));
-  if (refusal) throw new HttpError(refusal.status, refusal.code, refusalMessage(refusal, "外部解析"), { scope: refusal.scope, remaining: refusal.remaining });
+  const refusal = parseAllowance(await parsedPagesToday(env, user.orgId, user.id), { pages: send.length, paid: false }, false);
+  if (refusal) throw new HttpError(refusal.status, refusal.code, refusalMessage(refusal, "外部解析"), refusal.code === "PARSE_QUOTA" ? { remaining: refusal.remaining } : undefined);
 
   const task = await parser.submit({ ocr: req.ocr });
   const id = newId("pjob");
@@ -123,7 +122,6 @@ export async function createParseJob(
       reason: req.reason,
       pages: send,
       pageCount: send.length,
-      costMicroYuan: cost,
       taskId: task.taskId,
       uploadUrl: task.uploadUrl,
       day: chinaDay(),

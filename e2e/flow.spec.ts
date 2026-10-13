@@ -590,12 +590,12 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
   });
 });
 
-/** Sets "外部解析服务" in the admin page: `auto` (on once configured; the stubbed MinerU always is), `on` or `off`. */
-async function setExternal(page: Page, choice: "auto" | "on" | "off") {
+/** Sets "外部解析服务" in the admin page: `auto` (on once configured; the stubbed MinerU always is) or `off`. */
+async function setExternal(page: Page, choice: "auto" | "off") {
   await page.goto("/admin");
   await page.getByTestId("admin-tab-parsing").click();
-  await page.getByTestId(`external-choice-${choice}`).check();
-  await expect(page.getByTestId(`external-choice-${choice}`)).toBeChecked();
+  await page.getByTestId("external-enabled").setChecked(choice === "auto");
+  await expect(page.getByTestId("external-enabled")).toBeChecked({ checked: choice === "auto" });
   await expect(page.getByTestId("parsing-state")).toHaveText(choice === "off" ? /已关闭/ : /已开启|未配置/);
 }
 
@@ -743,8 +743,8 @@ test("外部解析服务 on (stubbed MinerU): unread formulas are re-read; after
   await page.goto("/admin");
   await page.getByTestId("admin-tab-parsing").click();
   await expect(page.getByTestId("parsing-state")).toHaveText(/已关闭/);
-  // "跟随配置" (the default): the stubbed online API needs nothing, so it is on.
-  await page.getByTestId("external-choice-auto").check();
+  // On (the default): the stubbed online API needs nothing, so it sends.
+  await page.getByTestId("external-enabled").check();
   await expect(page.getByTestId("parsing-state")).toHaveText(/已开启/);
   await shot(page, "25-admin-parsing");
 
@@ -817,7 +817,7 @@ test("看图模型 fallback (local mock provider): with the external parser off,
     await form.getByRole("button", { name: /保存并启用/ }).click();
     await expect(page.locator("tr:not([data-testid^=setup])", { hasText: "Local vision mock" })).toContainText("mock-vl");
 
-    // A model with no known price counts as paid: unusable until paid parsing is allowed or the admin prices it.
+    // A model not known to be free counts as paid: unusable until paid parsing is allowed.
     await page.getByTestId("admin-tab-parsing").click();
     await expect(page.getByTestId("parsing-state")).toHaveText(/已关闭/);
     await expect(page.getByTestId("vision-panel")).toContainText("mock-vl");
@@ -831,8 +831,7 @@ test("看图模型 fallback (local mock provider): with the external parser off,
 
     await page.goto("/admin");
     await page.getByTestId("admin-tab-parsing").click();
-    await page.getByTestId("vision-price").fill("0");
-    await page.getByTestId("vision-price-save").click();
+    await page.getByTestId("paid-enabled").check();
     await expect(page.getByTestId("vision-usable")).toHaveText(/可用/);
     await shot(page, "27-admin-vision");
 
@@ -866,6 +865,9 @@ test("看图模型 fallback (local mock provider): with the external parser off,
     expect((await (await page.request.get(`/api/documents/${docId}/pages/2`)).json()).parser).toBe("paste");
   } finally {
     await page.goto("/admin");
+    await page.getByTestId("admin-tab-parsing").click();
+    await expect(page.getByTestId("parsing-state")).toBeVisible();
+    await page.getByTestId("paid-enabled").setChecked(false);
     await page.getByRole("button", { name: "AI 模型 Models" }).click();
     await expect(page.getByTestId("add-model-form")).toBeVisible();
     const row = page.locator("tr:not([data-testid^=setup])", { hasText: "Local vision mock" });
@@ -911,8 +913,7 @@ test("单独的看图模型 (local mock): with no vision model on the text side,
 
     await page.getByTestId("admin-tab-parsing").click();
     await expect(page.getByTestId("vision-panel")).toContainText("mock-qwen-vl");
-    await page.getByTestId("vision-price").fill("0");
-    await page.getByTestId("vision-price-save").click();
+    await page.getByTestId("paid-enabled").check();
     await expect(page.getByTestId("vision-usable")).toHaveText(/可用/);
 
     await page.goto("/new");
@@ -927,10 +928,10 @@ test("单独的看图模型 (local mock): with no vision model on the text side,
     await page.goto("/admin");
     await page.getByTestId("admin-tab-parsing").click();
     await expect(page.getByTestId("parsing-state")).toBeVisible();
-    const reset = page.getByTestId("vision-price-reset");
-    if (await reset.count()) {
-      await reset.click();
-      await expect(reset).toHaveCount(0);
+    const paid = page.getByTestId("paid-enabled");
+    if (await paid.isChecked()) {
+      await paid.uncheck();
+      await expect(paid).not.toBeChecked();
     }
     await page.getByRole("button", { name: "AI 模型 Models" }).click();
     await expect(page.getByTestId("vision-provider-card")).toBeVisible();
@@ -1214,7 +1215,7 @@ test("MinerU 自部署 (local mock server): unconfigured until the URL is saved,
     await page.getByTestId("admin-tab-parsing").click();
     await page.getByTestId("mineru-mode-agent").check();
     await expect(page.getByTestId("mineru-mode-agent")).toBeChecked();
-    await page.getByTestId("external-choice-off").check();
+    await page.getByTestId("external-enabled").uncheck();
     await expect(page.getByTestId("parsing-state")).toHaveText(/已关闭/);
     await school.close();
   }

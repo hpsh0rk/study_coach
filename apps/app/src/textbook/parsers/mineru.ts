@@ -13,7 +13,6 @@ export interface ExternalParser {
   /** Content pages per sub-PDF; each is preceded by a separator page. */
   maxPagesPerJob: number;
   maxBytes: number;
-  costMicroYuanPerPage: number;
   submit(opts: { ocr: boolean }): Promise<{ taskId: string; uploadUrl: string }>;
   /** Returns the task id when the upload itself creates the task (self-hosted servers); the job then polls that id. */
   upload(uploadUrl: string, body: ReadableStream<Uint8Array>, length: number): Promise<string | void>;
@@ -83,7 +82,6 @@ export function agentParser(f: Fetch = fetch): ExternalParser {
     id: MINERU_AGENT_PARSER,
     maxPagesPerJob: 10,
     maxBytes: 10 * 1024 * 1024,
-    costMicroYuanPerPage: 0,
     async submit({ ocr }) {
       const data = await call<{ task_id: string; file_url: string }>(f, `${AGENT_API}/parse/file`, {
         method: "POST",
@@ -150,7 +148,6 @@ export function selfhostParser(baseUrl: string, apiKey: string | null, f: Fetch 
     id: MINERU_SELFHOST_PARSER,
     maxPagesPerJob: 20,
     maxBytes: 90 * 1024 * 1024,
-    costMicroYuanPerPage: 0,
     detect,
     async submit({ ocr }) {
       await detect();

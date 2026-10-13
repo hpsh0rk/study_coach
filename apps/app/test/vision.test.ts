@@ -78,18 +78,18 @@ describe("vision-model fallback (看图模型)", () => {
     expect(asked).toHaveLength(0);
   });
 
-  it("a paid model stays off until paid parsing is allowed, then stops at the monthly budget", async () => {
+  it("a model not known to be free stays off until paid parsing is allowed", async () => {
     const asked = provider(answer("```markdown\n" + READ + "\n```"));
     expect((await setVisionModel("qwen-vl-ocr")).status).toBe(200);
     const id = await newBook("c".repeat(64));
     expect((await teacher.req("GET", `/api/documents/${id}`)).json.visionParser).toBeNull();
     const off = await readImage(id, 2);
     expect(off.status).toBe(402);
-    expect(off.json.error).toMatchObject({ code: "PARSE_BUDGET", detail: { scope: "off" } });
-    expect((await admin.req("GET", "/api/admin/parsing")).json).toMatchObject({ paidEnabled: false, monthlyBudgetMicroYuan: 0, vision: { model: "qwen-vl-ocr", microYuanPerPage: 900, source: "list" } });
+    expect(off.json.error).toMatchObject({ code: "PARSE_BUDGET" });
+    expect((await admin.req("GET", "/api/admin/parsing")).json).toMatchObject({ paidEnabled: false, vision: { model: "qwen-vl-ocr", free: false } });
 
-    expect((await admin.req("PUT", "/api/admin/parsing", { paidEnabled: true, monthlyBudgetMicroYuan: 1_000 })).status).toBe(200);
-    expect((await teacher.req("GET", `/api/documents/${id}`)).json.visionParser).toEqual({ parser: visionParserId("qwen-vl-ocr"), model: "qwen-vl-ocr", microYuanPerPage: 900 });
+    expect((await admin.req("PUT", "/api/admin/parsing", { paidEnabled: true })).status).toBe(200);
+    expect((await teacher.req("GET", `/api/documents/${id}`)).json.visionParser).toEqual({ parser: visionParserId("qwen-vl-ocr"), model: "qwen-vl-ocr" });
     const read = await readImage(id, 2);
     expect(read.status).toBe(200);
     expect(read.json).toMatchObject({ reused: false, page: { no: 2, parser: "vlm:qwen-vl-ocr/1" } });
@@ -97,22 +97,20 @@ describe("vision-model fallback (看图模型)", () => {
     expect(asked[0]!.body).toMatchObject({ model: "qwen-vl-ocr", messages: [{ content: [{ type: "image_url", image_url: { url: IMAGE } }, { type: "text" }] }] });
     expect((await teacher.req("GET", `/api/documents/${id}/pages/2`)).json).toMatchObject({ text: READ, parser: "vlm:qwen-vl-ocr/1" });
 
-    const over = await readImage(id, 4);
-    expect(over.json.error).toMatchObject({ code: "PARSE_BUDGET", detail: { scope: "month", remaining: 100 } });
     expect(asked).toHaveLength(1);
-    const usage = await e.DB.prepare("SELECT parser, cost_micro_yuan AS cost, state FROM parse_usage WHERE document_id = ?").bind(id).all();
-    expect(usage.results).toEqual([{ parser: "vlm:qwen-vl-ocr/1", cost: 900, state: "done" }]);
+    const usage = await e.DB.prepare("SELECT parser, page_count AS pages, state FROM parse_usage WHERE document_id = ?").bind(id).all();
+    expect(usage.results).toEqual([{ parser: "vlm:qwen-vl-ocr/1", pages: 1, state: "done" }]);
     const calls = await e.DB.prepare("SELECT capability, model, status FROM ai_calls WHERE capability = 'page.read'").all();
     expect(calls.results).toEqual([{ capability: "page.read", model: "m", status: "ok" }]);
     const audit = await e.DB.prepare("SELECT target FROM audit_log WHERE action = 'admin.parser_settings' ORDER BY id").all<{ target: string }>();
     expect(audit.results.map((r) => r.target)).toEqual(["paid_on"]);
   });
 
-  it("a free model (or one the admin prices at 0) runs with paid parsing off; failures are counted, not stored", async () => {
+  it("a free model runs with paid parsing off; failures are counted, not stored", async () => {
     await admin.req("PUT", "/api/admin/parsing", { paidEnabled: false });
     await setVisionModel("glm-4.6v-flash");
     const id = await newBook("d".repeat(64));
-    expect((await teacher.req("GET", `/api/documents/${id}`)).json.visionParser).toMatchObject({ model: "glm-4.6v-flash", microYuanPerPage: 0 });
+    expect((await teacher.req("GET", `/api/documents/${id}`)).json.visionParser).toMatchObject({ model: "glm-4.6v-flash" });
 
     const busy = provider(() => new Response("rate limited", { status: 429 }));
     expect((await readImage(id, 4)).json.error.code).toBe("PARSER_BUSY");
@@ -125,9 +123,9 @@ describe("vision-model fallback (看图模型)", () => {
     vi.restoreAllMocks();
 
     await setVisionModel("my-own-vl");
-    expect((await admin.req("GET", "/api/admin/parsing")).json.vision).toEqual({ model: "my-own-vl", microYuanPerPage: 11_000, source: "unknown" });
+    expect((await admin.req("GET", "/api/admin/parsing")).json.vision).toEqual({ model: "my-own-vl", free: false });
     expect((await teacher.req("GET", `/api/documents/${id}`)).json.visionParser).toBeNull();
-    await admin.req("PUT", "/api/admin/parsing", { visionPriceMicroYuan: 0 });
+    await admin.req("PUT", "/api/admin/parsing", { paidEnabled: true });
     provider(answer(READ));
     expect((await readImage(id, 4)).json.page).toMatchObject({ no: 4, parser: "vlm:my-own-vl/1" });
     const states = await e.DB.prepare("SELECT state FROM parse_usage WHERE document_id = ? ORDER BY created_at, rowid").bind(id).all<{ state: string }>();
@@ -180,7 +178,7 @@ describe("vision-model fallback (看图模型)", () => {
     ]);
     expect(JSON.stringify(view)).not.toMatch(/sk-text-key-1234|glm-vision-key-5678/);
     expect((await teacher.req("GET", "/api/auth/me")).json.ai).toBe("live");
-    expect((await admin.req("GET", "/api/admin/parsing")).json.vision).toMatchObject({ model: "glm-4.6v-flash", microYuanPerPage: 0 });
+    expect((await admin.req("GET", "/api/admin/parsing")).json.vision).toMatchObject({ model: "glm-4.6v-flash", free: true });
 
     const id = await newBook("9".repeat(64));
     expect((await teacher.req("GET", `/api/documents/${id}`)).json.visionParser).toMatchObject({ model: "glm-4.6v-flash" });
