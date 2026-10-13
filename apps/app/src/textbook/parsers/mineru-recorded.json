@@ -17,7 +17,7 @@
     "trace_id": "d919e3c3c479ad37f682ad81fa49f489",
     "data": {
       "task_id": "74ea511b-6cd6-47d2-81f2-107fa470ef5407",
-      "file_url": "https://oss-mineru.openxlab.org.cn/agent/recorded.pdf?Expires=0&Signature=redacted"
+      "file_url": "https://mineru.oss-cn-shanghai.aliyuncs.com/api-upload/extract/2026-10-13/agent/recorded.pdf?Expires=0&OSSAccessKeyId=redacted&Signature=redacted"
     }
   },
   "polls": [

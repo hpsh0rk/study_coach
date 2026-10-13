@@ -202,7 +202,11 @@ describe("MinerU adapters (recorded exchange, no network)", () => {
 
   it("refuses URLs outside MinerU, and reports rate limits as busy", async () => {
     expect(isMineruHost("https://cdn-mineru.openxlab.org.cn/pdf/x/full.md")).toBe(true);
+    // The agent and token APIs hand out signed upload URLs on MinerU's own OSS bucket (seen live 2026-10-13).
+    expect(isMineruHost("https://mineru.oss-cn-shanghai.aliyuncs.com/api-upload/extract/x.pdf?Signature=s")).toBe(true);
     expect(isMineruHost("https://evil.example/full.md")).toBe(false);
+    expect(isMineruHost("https://other-bucket.oss-cn-shanghai.aliyuncs.com/x")).toBe(false);
+    expect(isMineruHost("https://mineru.oss-cn-shanghai.aliyuncs.com.evil.example/x")).toBe(false);
     expect(isMineruHost("http://mineru.net/x")).toBe(false);
     const bad = replay([json({ code: 0, data: { task_id: "t", file_url: "https://evil.example/upload" } })]);
     await expect(agentParser(bad.f).submit({ ocr: false })).rejects.toMatchObject({ code: "PARSER_FAILED" });
@@ -212,8 +216,8 @@ describe("MinerU adapters (recorded exchange, no network)", () => {
 
   it("token API: batch upload URL with the token, zip result", async () => {
     const { f, asked } = replay([
+      json({ code: 0, data: { batch_id: "b1", file_urls: ["https://other-bucket.oss-cn-shanghai.aliyuncs.com/x"] } }),
       json({ code: 0, data: { batch_id: "b1", file_urls: ["https://mineru.oss-cn-shanghai.aliyuncs.com/x"] } }),
-      json({ code: 0, data: { batch_id: "b1", file_urls: ["https://oss-mineru.openxlab.org.cn/x"] } }),
       json({ code: 0, data: { extract_result: [{ state: "done", full_zip_url: "https://cdn-mineru.openxlab.org.cn/pdf/b1.zip" }] } }),
     ]);
     const p = tokenParser("tok_secret", f);

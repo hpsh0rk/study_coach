@@ -32,6 +32,8 @@ export interface ExternalOutcome {
   missed: number[];
   /** Why the run stopped early (switch turned off, quota, parser busy), in the server's words. */
   stopped: string | null;
+  /** The last error that did not stop the run (a job the parser could not take or read), so the teacher sees why pages were missed. */
+  failure?: string | null;
 }
 
 const POLL_MS = 2_000;
@@ -87,7 +89,7 @@ export async function parseExternally(
     const group = pages.filter((p) => (!!p.kind && OCR_KINDS.includes(p.kind)) === ocr).map((p) => p.no);
     for (let i = 0; i < group.length; i += info.maxPagesPerJob) queue.push({ nos: group.slice(i, i + info.maxPagesPerJob), ocr });
   }
-  const out: ExternalOutcome = { saved: [], missed: [], stopped: null };
+  const out: ExternalOutcome = { saved: [], missed: [], stopped: null, failure: null };
   let done = 0;
   onProgress(0, pages.length);
   while (queue.length) {
@@ -123,6 +125,7 @@ export async function parseExternally(
       }
     } catch (err) {
       out.missed.push(...chunk.nos);
+      out.failure = (err as Error).message;
       if (err instanceof ApiError && STOPS.has(err.status)) {
         out.stopped = err.message;
         out.missed.push(...queue.flatMap((c) => c.nos));

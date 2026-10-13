@@ -154,12 +154,15 @@ function ParseStatus({ run, via, next }: { run: ParseRun; via: keyof typeof VIA;
         {run.message}
       </div>
     );
-  const read = new Set(run.saved.map((p) => p.no)).size;
+  const read = new Set(run.saved.filter((p) => p.words > 0).map((p) => p.no)).size;
+  const blank = new Set(run.saved.filter((p) => p.words === 0).map((p) => p.no)).size;
+  const why = run.stopped ?? ("failure" in run && run.missed.length ? run.failure : null);
   return (
     <div className={`alert ${run.missed.length ? "warn" : "info"}`} data-testid={`${via}-done`} data-read={read} data-missed={run.missed.length}>
       {v.who}读好了 {read} 页{read > 0 && v.check}
+      {blank > 0 && `；${blank} 页还是没有文字（可能是空白页或图片），要讲的话可以粘贴`}
       {run.missed.length > 0 && `；${run.missed.length} 页没读出来，选到这些页时可以粘贴文字补上`}
-      {run.stopped && `（${run.stopped}）`}。· Re-read {read} page(s) with {v.en}{run.missed.length > 0 && `; ${run.missed.length} not read`}.
+      {why && `（${why}）`}。· Re-read {read} page(s) with {v.en}{run.missed.length > 0 && `; ${run.missed.length} not read`}.
       {run.missed.length > 0 && next && (
         <div className="small" data-testid={`${via}-next`}>
           {next}
