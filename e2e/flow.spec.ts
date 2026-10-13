@@ -865,6 +865,9 @@ test("看图模型 fallback (local mock provider): with the external parser off,
     expect((await (await page.request.get(`/api/documents/${docId}/pages/2`)).json()).parser).toBe("paste");
   } finally {
     await page.goto("/admin");
+    await page.getByTestId("admin-tab-parsing").click();
+    await expect(page.getByTestId("parsing-state")).toBeVisible();
+    await page.getByTestId("paid-enabled").setChecked(false);
     await page.getByRole("button", { name: "AI 模型 Models" }).click();
     await expect(page.getByTestId("add-model-form")).toBeVisible();
     const row = page.locator("tr:not([data-testid^=setup])", { hasText: "Local vision mock" });

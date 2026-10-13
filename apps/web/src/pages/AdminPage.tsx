@@ -876,8 +876,8 @@ function ParsingPanel({ onSaved }: { onSaved: () => void }) {
   const save = async (body: Record<string, unknown>, done: string) => {
     setError("");
     setNotice("");
-    const { externalChoice, mineruMode } = body as Partial<Pick<ParsingView, "externalChoice" | "mineruMode">>;
-    if (externalChoice || mineruMode) setView((v) => v && { ...v, ...(externalChoice && { externalChoice }), ...(mineruMode && { mineruMode }) });
+    const { externalChoice, mineruMode, paidEnabled } = body as Partial<Pick<ParsingView, "externalChoice" | "mineruMode" | "paidEnabled">>;
+    setView((v) => v && { ...v, ...(externalChoice && { externalChoice }), ...(mineruMode && { mineruMode }), ...(paidEnabled !== undefined && { paidEnabled }) });
     try {
       await api("/api/admin/parsing", { method: "PUT", body });
       await load();
