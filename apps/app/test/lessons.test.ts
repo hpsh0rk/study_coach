@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { DAILY_MODEL_CALLS } from "../src/ai.ts";
 import { Client, e, loggedIn, seedUser } from "./client.ts";
 import { slideSourcePages } from "../src/textbook/index.ts";
@@ -635,5 +635,28 @@ describe("daily model-call cap", () => {
     const refused = await t.req("POST", `/api/lessons/${lessonId}/outline`);
     expect(refused.status).toBe(429);
     expect(refused.json.error).toMatchObject({ code: "DAILY_MODEL_LIMIT", message: expect.stringContaining("每人每天") });
+  });
+});
+
+describe("model gateway errors", () => {
+  it("a teacher sees the status and what to do; the gateway's text (which may echo the key) stays in ai_calls", async () => {
+    await seedUser("usr_gwadmin", "gwadmin", "Admin12345", { role: "admin", mustChange: false });
+    await seedUser("usr_gw", "gwteacher", "Teach12345", { mustChange: false });
+    const admin = await loggedIn("gwadmin", "Admin12345");
+    const t = await loggedIn("gwteacher", "Teach12345");
+    const lessonId = await newLesson(t, await uploadDoc(t));
+    const added = await admin.req("POST", "/api/admin/ai/providers", { kind: "custom", name: "Gateway", baseUrl: "https://gw.test/v1", apiKey: "sk-live-ABCD12345678", model: "m" });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({ error: { message: "Incorrect API key provided: sk-live-ABCD****5678" } }), { status: 401 }));
+    try {
+      const res = await t.req("POST", `/api/lessons/${lessonId}/outline`);
+      expect(res.status).toBe(502);
+      expect(res.json.error).toMatchObject({ code: "AI_PROVIDER", message: expect.stringContaining("HTTP 401") });
+      expect(res.json.error.message).not.toMatch(/sk-live|Incorrect/);
+      const logged = await e.DB.prepare("SELECT error FROM ai_calls WHERE user_id = 'usr_gw' AND status = 'error' LIMIT 1").first<string>("error");
+      expect(logged).toContain("sk-live-ABCD****5678");
+    } finally {
+      fetchSpy.mockRestore();
+      await admin.req("DELETE", `/api/admin/ai/providers/${added.json.id}`);
+    }
   });
 });
