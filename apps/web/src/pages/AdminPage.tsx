@@ -411,7 +411,7 @@ function ParsingPanel() {
         <p className="muted small">
           When on, pages the browser could not read are cut into a small PDF and sent through this server to MinerU (OpenDataLab); the rest of the book never leaves the browser. Off by default.
         </p>
-        <label className="row">
+        <label className="check-row">
           <input
             type="checkbox"
             checked={view.externalEnabled}
@@ -420,13 +420,13 @@ function ParsingPanel() {
           />
           <span>允许把读不全的页发送给 MinerU 识别 · Allow sending unreadable pages to MinerU</span>
         </label>
-        <fieldset className="stack">
+        <fieldset className="choice">
           <legend className="small">接口 API</legend>
-          <label className="row">
+          <label className="check-row">
             <input type="radio" name="mineru-mode" checked={view.mineruMode === "agent"} onChange={() => void save({ mineruMode: "agent" }, "已切换到免费轻量接口 · Using the token-free API")} />
             <span>免费轻量接口：不需要 Token，每次最多 10 页、10 MB，按 IP 限频 · Token-free agent API</span>
           </label>
-          <label className="row">
+          <label className="check-row">
             <input type="radio" name="mineru-mode" checked={view.mineruMode === "token"} onChange={() => void save({ mineruMode: "token" }, "已切换到精准接口 · Using the precise API")} />
             <span>精准接口（vlm 模型，更准）：需要 MinerU Token · Precise API (needs a token)</span>
           </label>
