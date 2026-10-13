@@ -100,4 +100,22 @@ export const documentApi = {
     api<{ page: PastedPage; reused: boolean }>(`/api/documents/${id}/parse-image`, { body: { no, image, reason } }),
   archive: (id: string) => api<{ ok: true; lessons: number }>(`/api/documents/${id}`, { method: "DELETE" }),
   restore: (id: string) => api(`/api/documents/${id}/restore`, { body: {} }),
+  library: () => api<{ textbooks: LibraryRow[] }>("/api/documents/library"),
+  rename: (id: string, title: string) => api(`/api/documents/${id}`, { method: "PATCH", body: { title } }),
+  /** Only for a textbook no lesson (archived or not) was made from; otherwise 409. */
+  purge: (id: string) => api(`/api/documents/${id}/permanent`, { method: "DELETE" }),
 };
+
+/** A row of 教材管理. `lessons`: live lessons made from it; `lessonsAll`: archived ones included. */
+export interface LibraryRow {
+  id: string;
+  title: string;
+  filename: string;
+  pageCount: number;
+  pagesReceived: number;
+  flaggedPages: number;
+  createdAt: number;
+  archivedAt: number | null;
+  lessons: number;
+  lessonsAll: number;
+}

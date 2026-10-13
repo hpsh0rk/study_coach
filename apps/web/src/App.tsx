@@ -2,6 +2,7 @@ import { lazy, Suspense, type ReactNode } from "react";
 import { BrowserRouter, Link, NavLink, Route, Routes, useNavigate, useParams } from "react-router";
 import { AuthProvider, RequireAuth, useAuth } from "./auth.tsx";
 import { AdminPage } from "./pages/AdminPage.tsx";
+import { TextbooksPage } from "./pages/TextbooksPage.tsx";
 import { ChangePasswordPage, LoginPage } from "./pages/AuthPages.tsx";
 import { LessonPage } from "./pages/LessonPage.tsx";
 import { LessonsPage } from "./pages/LessonsPage.tsx";
@@ -25,6 +26,7 @@ function Shell({ children }: { children: ReactNode }) {
               我的课 Lessons
             </NavLink>
           )}
+          {me && <NavLink to="/textbooks">教材 Textbooks</NavLink>}
           {me?.role === "admin" && <NavLink to="/admin">后台 Admin</NavLink>}
         </nav>
         <div className="topbar-user">
@@ -107,6 +109,7 @@ export function App() {
           <Route path="/play/:id" element={<RequireAuth><PlayPage /></RequireAuth>} />
           <Route path="/presenter/:id" element={<RequireAuth><PresenterPage /></RequireAuth>} />
           <Route path="/admin" element={authed(<AdminPage />, true)} />
+          <Route path="/textbooks" element={authed(<TextbooksPage />)} />
           <Route path="/new" element={authed(<UploadStep />)} />
           <Route path="/new/:docId" element={authed(<NewChapters />)} />
           <Route path="/lessons/:id/:step?" element={authed(<LessonPage />)} />

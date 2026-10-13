@@ -1577,3 +1577,13 @@ label.check-row input {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+label.inline-check {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+label.inline-check input {
+  width: auto;
+}
