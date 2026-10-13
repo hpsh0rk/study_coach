@@ -85,6 +85,19 @@ export function pagesInRanges(ranges: PageRange[]): number[] {
   return out;
 }
 
+/** Pages 1..pageCount not in `present`, as ranges (what an interrupted upload still has to send). */
+export function missingRanges(present: number[], pageCount: number): PageRange[] {
+  const have = new Set(present);
+  const out: PageRange[] = [];
+  for (let no = 1; no <= pageCount; no++) {
+    if (have.has(no)) continue;
+    const last = out[out.length - 1];
+    if (last && last.end === no - 1) last.end = no;
+    else out.push({ start: no, end: no });
+  }
+  return out;
+}
+
 export function countPages(ranges: PageRange[]): number {
   return ranges.reduce((n, r) => n + r.end - r.start + 1, 0);
 }

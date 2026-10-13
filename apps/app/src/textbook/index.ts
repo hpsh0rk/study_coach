@@ -3,7 +3,7 @@
  * textbook's pages, chapters and labels. It knows nothing about lessons (see .dependency-cruiser.cjs).
  */
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
-import { chapterRunsOf, isEmptyPage, MIN_PAGE_WORDS, normalizeRanges, pagesInRanges, rangesForChapters, sourceCut, type ChapterRun } from "@kj/pdf-structure";
+import { chapterRunsOf, isEmptyPage, MIN_PAGE_WORDS, missingRanges, normalizeRanges, pagesInRanges, rangesForChapters, sourceCut, type ChapterRun } from "@kj/pdf-structure";
 import type { ChapterNode, LessonScope, PageRange, PageText } from "@kj/schema";
 import { db } from "../db/index.ts";
 import type { Env, SessionUser } from "../env.ts";
@@ -30,6 +30,29 @@ export async function textbookList(env: Env, user: SessionUser): Promise<Textboo
     .where(and(eq(documents.orgId, user.orgId), eq(documents.ownerId, user.id), isNull(documents.archivedAt)))
     .orderBy(desc(documents.createdAt))
     .limit(100);
+}
+
+export type TextbookLookup =
+  | { status: "none" }
+  | { status: "ready"; document: TextbookRow }
+  | { status: "incomplete"; document: TextbookRow; missing: PageRange[] }
+  | { status: "archived"; document: TextbookRow };
+
+/**
+ * Has this teacher uploaded this file before? `ready`: use it as is (no parsing, no upload); `incomplete`:
+ * an interrupted upload, resume with the `missing` pages; `archived`: deleted, can be restored.
+ */
+export async function lookupTextbook(env: Env, user: SessionUser, sha256: string): Promise<TextbookLookup> {
+  const rows = await db(env)
+    .select()
+    .from(documents)
+    .where(and(eq(documents.orgId, user.orgId), eq(documents.ownerId, user.id), eq(documents.fileSha256, sha256)))
+    .orderBy(desc(documents.createdAt));
+  const active = rows.find((r) => r.archivedAt === null);
+  if (!active) return rows[0] ? { status: "archived", document: rows[0] } : { status: "none" };
+  if (active.pagesReceived >= active.pageCount) return { status: "ready", document: active };
+  const present = await db(env).select({ no: pages.no }).from(pages).where(eq(pages.documentId, active.id));
+  return { status: "incomplete", document: active, missing: missingRanges(present.map((p) => p.no), active.pageCount) };
 }
 
 export async function chapterTree(env: Env, documentId: string): Promise<ChapterNode[]> {

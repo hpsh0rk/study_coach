@@ -5,11 +5,13 @@ import type { AppBindings } from "../env.ts";
 import { HttpError, parseJson } from "../http.ts";
 import { requireUser } from "../auth/session.ts";
 import { lessonsUsing } from "../store.ts";
-import { chapterTree, ownedTextbook, page, pageMeta, textbookList } from "../textbook/index.ts";
+import { chapterTree, lookupTextbook, ownedTextbook, page, pageMeta, textbookList } from "../textbook/index.ts";
 import { createTextbook, PAGE_BATCH, pastePages, putPages, setTextbookArchived } from "../textbook/write.ts";
 
 export const MAX_PAGES = 600;
 export { PAGE_BATCH };
+
+const Sha256 = z.string().regex(/^[0-9a-f]{64}$/, "sha256 hex");
 
 const CreateDocument = z.object({
   filename: z.string().trim().min(1).max(300),
@@ -17,11 +19,17 @@ const CreateDocument = z.object({
   sizeBytes: z.number().int().min(1).max(200 * 1024 * 1024),
   pageCount: z.number().int().min(1).max(MAX_PAGES),
   chapters: z.array(ChapterNode).max(800),
+  sha256: Sha256.optional(),
 });
 
 export const documentRoutes = new Hono<AppBindings>()
   .use(requireUser())
   .get("/", async (c) => c.json({ documents: await textbookList(c.env, c.get("user")) }))
+  /** Before parsing: the browser asks whether this file (by sha256) is already here, so a book is parsed and uploaded once. */
+  .post("/lookup", async (c) => {
+    const body = await parseJson(c, z.object({ sha256: Sha256 }));
+    return c.json({ ...(await lookupTextbook(c.env, c.get("user"), body.sha256)), pageBatch: PAGE_BATCH });
+  })
   .post("/", async (c) => {
     const body = await parseJson(c, CreateDocument);
     for (const ch of body.chapters) {
