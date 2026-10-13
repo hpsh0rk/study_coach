@@ -68,7 +68,7 @@ describe("whitelist auth", () => {
   it("admin AI config keeps exactly one enabled provider and model", async () => {
     const admin = new Client();
     expect((await admin.req("POST", "/api/auth/login", { username: "admin", password: "Admin123456" })).status).toBe(200);
-    expect(await loadAiConfig(e, "org_default")).toEqual({ active: null });
+    expect(await loadAiConfig(e, "org_default")).toEqual({ active: null, vision: null });
     // No provider and stubs allowed: every page tells the teacher the output is the built-in templates.
     expect((await admin.req("GET", "/api/auth/me")).json.ai).toBe("stub");
     expect((await new Client().req("GET", "/api/auth/me")).json).toEqual({ user: null, ai: null });
@@ -85,7 +85,7 @@ describe("whitelist auth", () => {
     expect((await admin.req("PATCH", "/api/admin/ai/providers/aip_missing", { enabled: true })).status).toBe(404);
     expect(await enabled()).toEqual([a]);
     await admin.req("DELETE", `/api/admin/ai/providers/${a}`);
-    expect(await loadAiConfig(e, "org_default")).toEqual({ active: null });
+    expect(await loadAiConfig(e, "org_default")).toEqual({ active: null, vision: null });
   });
 
   it("serves share links without speaker notes and 404s unknown tokens", async () => {

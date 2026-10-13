@@ -4,19 +4,32 @@ import { db } from "./db/index.ts";
 import { aiCalls, aiProviders } from "./db/schema.ts";
 import { secret, type Env } from "./env.ts";
 
+type ProviderRow = typeof aiProviders.$inferSelect;
+
+/** The enabled provider of each purpose (at most one each). */
+async function enabledProviders(env: Env, orgId: string): Promise<{ text: ProviderRow | null; vision: ProviderRow | null }> {
+  const rows = await db(env)
+    .select()
+    .from(aiProviders)
+    .where(and(eq(aiProviders.orgId, orgId), eq(aiProviders.enabled, true), ne(aiProviders.model, "")));
+  return { text: rows.find((r) => r.purpose === "text") ?? null, vision: rows.find((r) => r.purpose === "vision") ?? null };
+}
+
 /** Provider, model and API key all come from the admin backend (D1), never from env vars. */
 export async function loadAiConfig(env: Env, orgId: string): Promise<AiConfig> {
-  const p = (await db(env).select().from(aiProviders).where(and(eq(aiProviders.orgId, orgId), eq(aiProviders.enabled, true), ne(aiProviders.model, ""))).limit(1))[0];
-  if (!p) return { active: null };
+  const { text, vision } = await enabledProviders(env, orgId);
+  const key = secret(env, "AI_CONFIG_KEY");
+  const config = async (p: ProviderRow) => ({ id: p.id, kind: p.kind, name: p.name, baseUrl: p.baseUrl, apiKey: await openSecret(p.apiKeySealed, key) });
   return {
-    active: { provider: { id: p.id, kind: p.kind, name: p.name, baseUrl: p.baseUrl, apiKey: await openSecret(p.apiKeySealed, secret(env, "AI_CONFIG_KEY")) }, model: p.model, visionModel: p.visionModel || null },
+    active: text && { provider: await config(text), model: text.model, visionModel: text.visionModel || null },
+    vision: vision && { provider: await config(vision), model: vision.model },
   };
 }
 
-/** The enabled provider's model for image input, or null (no provider, or none set). */
+/** The model that reads page images: the separate vision provider's, else the enabled text provider's vision model, else null. */
 export async function visionModelOf(env: Env, orgId: string): Promise<string | null> {
-  const p = (await db(env).select({ visionModel: aiProviders.visionModel }).from(aiProviders).where(and(eq(aiProviders.orgId, orgId), eq(aiProviders.enabled, true), ne(aiProviders.model, ""))).limit(1))[0];
-  return p?.visionModel || null;
+  const { text, vision } = await enabledProviders(env, orgId);
+  return vision?.model || text?.visionModel || null;
 }
 
 /** Model time per HTTP request, all calls and retries together; below DRAFT_LOCK_MS so a slow model never outlives its lock. */
@@ -27,8 +40,8 @@ export const MODEL_DEADLINE_MS = 120_000;
  * (dev/CI/demo) — the UI says so on every page. `off`: none and no stub, generation fails.
  */
 export async function aiMode(env: Env, orgId: string): Promise<"live" | "stub" | "off"> {
-  const p = (await db(env).select({ id: aiProviders.id }).from(aiProviders).where(and(eq(aiProviders.orgId, orgId), eq(aiProviders.enabled, true), ne(aiProviders.model, ""))).limit(1))[0];
-  return p ? "live" : env.AI_ALLOW_STUB === "true" ? "stub" : "off";
+  const { text } = await enabledProviders(env, orgId);
+  return text ? "live" : env.AI_ALLOW_STUB === "true" ? "stub" : "off";
 }
 
 export function makeAi(env: Env, orgId: string) {

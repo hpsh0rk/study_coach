@@ -156,4 +156,50 @@ describe("vision-model fallback (看图模型)", () => {
     expect(pasted.json.pages).toEqual([expect.objectContaining({ no: 2, parser: "paste" })]);
     expect((await readImage(id, 2)).status).toBe(409);
   });
+
+  it("a separate vision provider with its own key reads pages while the text provider keeps writing; both test without sending a page", async () => {
+    await e.DB.prepare("DELETE FROM ai_providers").run();
+    const keys: Record<string, string> = {};
+    const bodies: any[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (!/^https:\/\/(text|glm)\.test\//.test(url)) throw new Error(`unexpected fetch ${url}`);
+      keys[new URL(url).host] = new Headers(init?.headers).get("authorization") ?? "";
+      bodies.push(JSON.parse(String(init?.body)));
+      return answer(READ)();
+    });
+    const text = await admin.req("POST", "/api/admin/ai/providers", { kind: "deepseek", name: "DeepSeek", baseUrl: "https://text.test/v1", apiKey: "sk-text-key-1234", model: "deepseek-chat" });
+    const vision = await admin.req("POST", "/api/admin/ai/providers", { kind: "glm", name: "GLM", baseUrl: "https://glm.test/v4", apiKey: "glm-vision-key-5678", model: "glm-4.6v-flash", purpose: "vision" });
+    expect(vision.status).toBe(201);
+    expect((await admin.req("POST", "/api/admin/ai/providers", { kind: "glm", name: "x", apiKey: "glm-vision-key-5678", model: "a", visionModel: "b", purpose: "vision" })).status).toBe(400);
+
+    const view = (await admin.req("GET", "/api/admin/ai")).json;
+    expect(view.providers.map((p: any) => [p.purpose, p.enabled])).toEqual([
+      ["text", true],
+      ["vision", true],
+    ]);
+    expect(JSON.stringify(view)).not.toMatch(/sk-text-key-1234|glm-vision-key-5678/);
+    expect((await teacher.req("GET", "/api/auth/me")).json.ai).toBe("live");
+    expect((await admin.req("GET", "/api/admin/parsing")).json.vision).toMatchObject({ model: "glm-4.6v-flash", microYuanPerPage: 0 });
+
+    const id = await newBook("9".repeat(64));
+    expect((await teacher.req("GET", `/api/documents/${id}`)).json.visionParser).toMatchObject({ model: "glm-4.6v-flash" });
+    expect((await readImage(id, 2)).json.page).toMatchObject({ parser: "vlm:glm-4.6v-flash/1" });
+    expect(keys).toEqual({ "glm.test": "Bearer glm-vision-key-5678" });
+
+    const tested = await admin.req("POST", `/api/admin/ai/providers/${vision.json.id}/test`, {});
+    expect(tested.json).toMatchObject({ ok: true });
+    expect(bodies.at(-1)).toMatchObject({ model: "glm-4.6v-flash", max_tokens: 16 });
+    expect(bodies.at(-1).messages[0].content[0].image_url.url).not.toMatch(/^data:/);
+    expect((await admin.req("POST", `/api/admin/ai/providers/${text.json.id}/test`, { vision: true })).status).toBe(400);
+
+    // Adding a second text provider leaves the vision provider enabled.
+    await admin.req("POST", "/api/admin/ai/providers", { kind: "custom", name: "Other", baseUrl: "https://text.test/v2", apiKey: "sk-other-key-999", model: "m2" });
+    const after = (await admin.req("GET", "/api/admin/ai")).json.providers.map((p: any) => [p.purpose, p.name, p.enabled]);
+    expect(after).toEqual([
+      ["text", "DeepSeek", false],
+      ["vision", "GLM", true],
+      ["text", "Other", true],
+    ]);
+  });
 });

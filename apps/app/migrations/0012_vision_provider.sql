@@ -1,0 +1,1 @@
+ALTER TABLE `ai_providers` ADD `purpose` text DEFAULT 'text' NOT NULL;

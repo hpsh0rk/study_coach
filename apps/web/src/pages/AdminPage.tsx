@@ -12,10 +12,22 @@ interface UserRow {
   createdAt: number;
 }
 type Kind = "deepseek" | "glm" | "custom";
+interface AiProviderRow {
+  id: string;
+  purpose: "text" | "vision";
+  kind: Kind;
+  name: string;
+  baseUrl: string;
+  apiKeyHint: string;
+  model: string;
+  visionModel: string;
+  enabled: boolean;
+}
+type TestResult = { ok: boolean; error?: string; latencyMs?: number };
 interface AiView {
   presets: Record<Kind, { label: string; baseUrl: string; models: string[]; visionModels: string[]; docs: string }>;
   stubFallback: boolean;
-  providers: { id: string; kind: Kind; name: string; baseUrl: string; apiKeyHint: string; model: string; visionModel: string; enabled: boolean }[];
+  providers: AiProviderRow[];
   recentCalls: { id: string; capability: string; providerId: string; model: string; status: string; latencyMs: number; inputTokens: number; outputTokens: number; createdAt: number; error: string | null }[];
 }
 
@@ -213,7 +225,15 @@ function AiPanel() {
   if (!view) return <p className="muted">Loading…</p>;
   const preset = view.presets[form.kind];
   const providerName = (id: string | null) => view.providers.find((p) => p.id === id)?.name ?? id ?? "—";
-  const active = view.providers.find((p) => p.enabled && p.model);
+  const textProviders = view.providers.filter((p) => p.purpose === "text");
+  const active = textProviders.find((p) => p.enabled && p.model);
+  const test = (p: AiProviderRow, vision: boolean) =>
+    run(async () => {
+      const r = await api<TestResult>(`/api/admin/ai/providers/${p.id}/test`, { body: vision ? { vision: true } : {} });
+      const model = vision && p.purpose === "text" ? p.visionModel : p.model;
+      if (r.ok) setNotice(`测试连接：${p.name} / ${model} 可用 (${r.latencyMs} ms) · OK`);
+      else setError(`测试连接：${p.name} / ${model} 失败 · ${r.error}`);
+    });
 
   return (
     <>
@@ -228,6 +248,7 @@ function AiPanel() {
 
       <form
         className="card form-grid"
+        data-testid="add-model-form"
         onSubmit={(e) => {
           e.preventDefault();
           void run(async () => {
@@ -282,7 +303,7 @@ function AiPanel() {
               <option key={m} value={m} />
             ))}
           </datalist>
-          <span className="muted small">浏览器读不出的扫描页、公式页，可以把页面图片交给它识别；同一个提供方、同一个 Key。· Reads page images the browser could not.</span>
+          <span className="muted small">浏览器读不出的扫描页、公式页，可以把页面图片交给它识别；同一个提供方、同一个 Key；这个提供方没有看图模型（如 DeepSeek）时，在下面“单独的看图模型”里另配一个。· Reads page images the browser could not.</span>
         </label>
         <label className="span2">
           API Key
@@ -295,12 +316,12 @@ function AiPanel() {
 
       <div className="card">
         <h2>模型 Models</h2>
-        {view.providers.length === 0 ? (
+        {textProviders.length === 0 ? (
           <p className="muted">暂无。</p>
         ) : (
           <table className="table">
             <tbody>
-              {view.providers.map((p) => (
+              {textProviders.map((p) => (
                 <tr key={p.id}>
                   <td>
                     <strong>{p.name}</strong> <span className="muted small">{p.kind}</span> {p.id === active?.id && <span className="badge ready">使用中 active</span>}
@@ -318,18 +339,14 @@ function AiPanel() {
                     <code>{p.apiKeyHint}</code>
                   </td>
                   <td className="row end">
-                    <button
-                      className="btn ghost small"
-                      onClick={() =>
-                        run(async () => {
-                          const r = await api<{ ok: boolean; error?: string; latencyMs?: number }>(`/api/admin/ai/providers/${p.id}/test`, { body: {} });
-                          if (r.ok) setNotice(`${p.name} / ${p.model} OK (${r.latencyMs} ms)`);
-                          else setError(`${p.name}: ${r.error}`);
-                        })
-                      }
-                    >
+                    <button className="btn ghost small" onClick={() => test(p, false)}>
                       测试连接 Test
                     </button>
+                    {p.visionModel && (
+                      <button className="btn ghost small" onClick={() => test(p, true)} data-testid="test-vision-model">
+                        测试看图模型
+                      </button>
+                    )}
                     <button
                       className="btn ghost small"
                       onClick={() =>
@@ -366,6 +383,8 @@ function AiPanel() {
         )}
       </div>
 
+      <VisionProviderCard view={view} run={run} test={test} />
+
       <div className="card">
         <h2>最近调用 Recent AI calls</h2>
         <table className="table small">
@@ -392,6 +411,139 @@ function AiPanel() {
         </table>
       </div>
     </>
+  );
+}
+
+/** A provider with its own key that only reads page images, for when the text provider has no vision model (DeepSeek). */
+function VisionProviderCard({ view, run, test }: { view: AiView; run: (fn: () => Promise<void>) => Promise<void>; test: (p: AiProviderRow, vision: boolean) => Promise<void> }) {
+  const [form, setForm] = useState<{ kind: Kind; name: string; baseUrl: string; apiKey: string; model: string }>({ kind: "glm", name: "智谱 GLM", baseUrl: "", apiKey: "", model: "glm-4.6v-flash" });
+  const rows = view.providers.filter((p) => p.purpose === "vision");
+  const separate = rows.find((p) => p.enabled && p.model);
+  const shared = view.providers.find((p) => p.purpose === "text" && p.enabled && p.model && p.visionModel);
+  const preset = view.presets[form.kind];
+  return (
+    <div className="card stack" data-testid="vision-provider-card">
+      <h2>单独的看图模型（可选）Separate vision model</h2>
+      <p className="muted small">
+        浏览器读不出的扫描页、公式页，可以把页面图片交给看图模型识别。使用中的模型自己有看图模型时（比如智谱 GLM 填了 glm-4.6v-flash）不用配这里；文字用
+        DeepSeek 这类没有看图模型的提供方时，在这里单独填一个，用它自己的 Key：智谱 <code>glm-4.6v-flash</code>（免费），或阿里百炼{" "}
+        <code>qwen-vl-ocr</code>（选“Custom”，Base URL 填 <code>https://dashscope.aliyuncs.com/compatible-mode/v1</code>）。· Reads page images with its own key.
+      </p>
+      <div className={`alert ${separate || shared ? "info" : "warn"}`} data-testid="vision-in-use">
+        {separate
+          ? `现在读图用：${separate.name} / ${separate.model}（单独的看图模型）· In use`
+          : shared
+            ? `现在读图用：${shared.name} / ${shared.visionModel}（使用中模型的看图模型）· In use`
+            : "还没有看图模型：读不出的页只能交给外部解析服务，或老师粘贴文字。在这里填一个，或给使用中的模型填“看图模型”。· No vision model"}
+      </div>
+      <form
+        className="form-grid"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void run(async () => {
+            await api("/api/admin/ai/providers", {
+              body: { purpose: "vision", kind: form.kind, name: form.name, apiKey: form.apiKey, model: form.model, ...(form.baseUrl ? { baseUrl: form.baseUrl } : {}) },
+            });
+            setForm({ ...form, apiKey: "" });
+          });
+        }}
+      >
+        <label>
+          类型 Type
+          <select
+            value={form.kind}
+            onChange={(e) => {
+              const kind = e.target.value as Kind;
+              setForm({ ...form, kind, name: kind === "glm" ? "智谱 GLM" : kind === "custom" ? "阿里百炼 Qwen" : view.presets[kind].label, model: view.presets[kind].visionModels[0] ?? "" });
+            }}
+            data-testid="vision-provider-kind"
+          >
+            {(Object.keys(view.presets) as Kind[])
+              .filter((k) => view.presets[k].visionModels.length > 0)
+              .map((k) => (
+                <option key={k} value={k}>
+                  {view.presets[k].label}
+                </option>
+              ))}
+          </select>
+        </label>
+        <label>
+          名称 Name
+          <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
+        </label>
+        <label>
+          看图模型 Vision model
+          <input list="vision-only-suggestions" value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} required data-testid="vision-provider-model" />
+          <datalist id="vision-only-suggestions">
+            {preset.visionModels.map((m) => (
+              <option key={m} value={m} />
+            ))}
+          </datalist>
+        </label>
+        <label>
+          Base URL（OpenAI 兼容）
+          <input
+            value={form.baseUrl}
+            onChange={(e) => setForm({ ...form, baseUrl: e.target.value })}
+            placeholder={preset.baseUrl || "https://dashscope.aliyuncs.com/compatible-mode/v1"}
+            required={form.kind === "custom"}
+            data-testid="vision-provider-base-url"
+          />
+        </label>
+        <label className="span2">
+          API Key
+          <input type="password" value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} required autoComplete="off" data-testid="vision-provider-key" />
+          <span className="muted small">加密保存在服务器上，浏览器里只显示开头几个字。· Encrypted on the server; only a hint comes back.</span>
+        </label>
+        <div className="form-actions">
+          <button className="btn primary" data-testid="vision-provider-save">
+            保存并启用 Save &amp; enable
+          </button>
+        </div>
+      </form>
+      {rows.length > 0 && (
+        <table className="table">
+          <tbody>
+            {rows.map((p) => (
+              <tr key={p.id} data-testid="vision-provider-row">
+                <td>
+                  <strong>{p.name}</strong> <span className="muted small">{p.kind}</span> {p.id === separate?.id && <span className="badge ready">使用中 active</span>}
+                </td>
+                <td>
+                  <code>{p.model}</code>
+                </td>
+                <td className="muted small">{p.baseUrl}</td>
+                <td>
+                  <code>{p.apiKeyHint}</code>
+                </td>
+                <td className="row end">
+                  <button className="btn ghost small" onClick={() => test(p, true)} data-testid="vision-provider-test">
+                    测试连接 Test
+                  </button>
+                  <button
+                    className="btn ghost small"
+                    onClick={() =>
+                      run(async () => {
+                        const model = prompt("看图模型 Vision model", p.model)?.trim();
+                        if (model) await api(`/api/admin/ai/providers/${p.id}`, { method: "PATCH", body: { model } });
+                      })
+                    }
+                  >
+                    改模型
+                  </button>
+                  <button className="btn ghost small" onClick={() => run(async () => void (await api(`/api/admin/ai/providers/${p.id}`, { method: "PATCH", body: { enabled: !p.enabled } })))}>
+                    {p.enabled ? "停用" : "改用这个"}
+                  </button>
+                  <button className="btn ghost small" onClick={() => run(async () => void (await api(`/api/admin/ai/providers/${p.id}`, { method: "DELETE" })))}>
+                    删除
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
   );
 }
 
@@ -645,7 +797,7 @@ function ParsingPanel() {
                 保存价格
               </button>
               {view.vision.source === "admin" && (
-                <button type="button" className="btn small ghost" onClick={() => void save({ visionPriceMicroYuan: null }, "已恢复列表价 · Back to the list price")}>
+                <button type="button" className="btn small ghost" data-testid="vision-price-reset" onClick={() => void save({ visionPriceMicroYuan: null }, "已恢复列表价 · Back to the list price")}>
                   恢复列表价
                 </button>
               )}
@@ -653,7 +805,7 @@ function ParsingPanel() {
           </>
         ) : (
           <div className="alert info" data-testid="vision-none">
-            还没有配置看图模型：在“AI 模型”里给启用的模型填写“看图模型”，例如智谱 <code>glm-4.6v-flash</code>（免费）或百炼 <code>qwen-vl-ocr</code>（约 0.9 元 / 千页）。· No vision model configured.
+            还没有配置看图模型：在“AI 模型”里给启用的模型填写“看图模型”，或在“单独的看图模型”里用另一个提供方的 Key，例如智谱 <code>glm-4.6v-flash</code>（免费）或百炼 <code>qwen-vl-ocr</code>（约 0.9 元 / 千页）。· No vision model configured.
           </div>
         )}
         <label className="check-row">

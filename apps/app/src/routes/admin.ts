@@ -1,7 +1,7 @@
 import { and, desc, eq, ne } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
-import { maskSecret, openSecret, PROVIDER_PRESETS, ProviderKind, sealSecret, testProvider } from "@kj/ai";
+import { maskSecret, openSecret, PROVIDER_PRESETS, ProviderKind, sealSecret, testProvider, testVision } from "@kj/ai";
 import { newId } from "@kj/schema";
 import { aiCalls, aiProviders, auditLog, users } from "../db/schema.ts";
 import { secret, type AppBindings, type Env } from "../env.ts";
@@ -9,6 +9,7 @@ import { HttpError, parseJson } from "../http.ts";
 import { generatePassword, hashPassword, passwordProblem } from "../auth/password.ts";
 import { destroyUserSessions, requireAdmin, requireUser } from "../auth/session.ts";
 import { db } from "../db/index.ts";
+import { visionModelOf } from "../ai.ts";
 import {
   effectiveMode,
   externalState,
@@ -113,7 +114,7 @@ export const adminRoutes = new Hono<AppBindings>()
     return c.json({
       presets: PROVIDER_PRESETS,
       stubFallback: c.env.AI_ALLOW_STUB === "true",
-      providers: providers.map((p) => ({ id: p.id, kind: p.kind, name: p.name, baseUrl: p.baseUrl, apiKeyHint: p.apiKeyHint, model: p.model, visionModel: p.visionModel, enabled: p.enabled })),
+      providers: providers.map((p) => ({ id: p.id, purpose: p.purpose, kind: p.kind, name: p.name, baseUrl: p.baseUrl, apiKeyHint: p.apiKeyHint, model: p.model, visionModel: p.visionModel, enabled: p.enabled })),
       recentCalls: recent,
     });
   })
@@ -127,17 +128,20 @@ export const adminRoutes = new Hono<AppBindings>()
         apiKey: z.string().trim().min(8),
         model: z.string().trim().min(1).max(100),
         visionModel: VisionModel.default(""),
+        /** `vision`: a separate provider that only reads page images; `model` is its vision model. */
+        purpose: z.enum(["text", "vision"]).default("text"),
         enabled: z.boolean().default(true),
       }),
     );
+    if (body.purpose === "vision" && body.visionModel) throw new HttpError(400, "VALIDATION", "A vision provider's model is its vision model · 单独的看图模型只填“模型”");
     const baseUrl = body.baseUrl || PROVIDER_PRESETS[body.kind].baseUrl;
     if (!baseUrl) throw new HttpError(400, "VALIDATION", "Custom providers need a base URL · 自定义提供方需要填写 Base URL");
     const me = c.get("user");
     const id = newId("aip");
     await db(c.env)
       .insert(aiProviders)
-      .values({ id, orgId: me.orgId, kind: body.kind, name: body.name, baseUrl, model: body.model, visionModel: body.visionModel, apiKeySealed: await sealSecret(body.apiKey, secret(c.env, "AI_CONFIG_KEY")), apiKeyHint: maskSecret(body.apiKey), enabled: body.enabled });
-    if (body.enabled) await disableOthers(c.env, me.orgId, id);
+      .values({ id, orgId: me.orgId, purpose: body.purpose, kind: body.kind, name: body.name, baseUrl, model: body.model, visionModel: body.visionModel, apiKeySealed: await sealSecret(body.apiKey, secret(c.env, "AI_CONFIG_KEY")), apiKeyHint: maskSecret(body.apiKey), enabled: body.enabled });
+    if (body.enabled) await disableOthers(c.env, me.orgId, id, body.purpose);
     await db(c.env).insert(auditLog).values({ orgId: me.orgId, actorId: me.id, action: "admin.ai_provider_created", target: id });
     return c.json({ id }, 201);
   })
@@ -165,9 +169,9 @@ export const adminRoutes = new Hono<AppBindings>()
       patch.apiKeySealed = await sealSecret(body.apiKey, secret(c.env, "AI_CONFIG_KEY"));
       patch.apiKeyHint = maskSecret(body.apiKey);
     }
-    const res = await db(c.env).update(aiProviders).set(patch).where(and(eq(aiProviders.id, id), eq(aiProviders.orgId, me.orgId))).returning({ id: aiProviders.id });
+    const res = await db(c.env).update(aiProviders).set(patch).where(and(eq(aiProviders.id, id), eq(aiProviders.orgId, me.orgId))).returning({ id: aiProviders.id, purpose: aiProviders.purpose });
     if (!res.length) throw new HttpError(404, "NOT_FOUND", "Provider not found");
-    if (body.enabled) await disableOthers(c.env, me.orgId, id);
+    if (body.enabled) await disableOthers(c.env, me.orgId, id, res[0]!.purpose);
     return c.json({ ok: true });
   })
   .delete("/ai/providers/:id", async (c) => {
@@ -177,11 +181,16 @@ export const adminRoutes = new Hono<AppBindings>()
   })
   .post("/ai/providers/:id/test", async (c) => {
     const me = c.get("user");
-    const body = await parseJson(c, z.object({ model: z.string().min(1).optional() }).default({}));
+    /** `vision`: send one tiny image to the vision model instead of a text prompt to the model. */
+    const body = await parseJson(c, z.object({ model: z.string().min(1).optional(), vision: z.boolean().default(false) }).default({ vision: false }));
     const row = (await db(c.env).select().from(aiProviders).where(and(eq(aiProviders.id, c.req.param("id")), eq(aiProviders.orgId, me.orgId))).limit(1))[0];
     if (!row) throw new HttpError(404, "NOT_FOUND", "Provider not found");
     const provider = { id: row.id, kind: row.kind, name: row.name, baseUrl: row.baseUrl, apiKey: await openSecret(row.apiKeySealed, secret(c.env, "AI_CONFIG_KEY")) };
-    return c.json(await testProvider(provider, body.model ?? row.model));
+    const vision = body.vision || row.purpose === "vision";
+    if (!vision) return c.json(await testProvider(provider, body.model ?? row.model));
+    const model = body.model ?? (row.purpose === "vision" ? row.model : row.visionModel);
+    if (!model) throw new HttpError(400, "VALIDATION", "这个模型没有配置看图模型 · No vision model on this provider");
+    return c.json(await testVision(provider, model));
   })
   // ---- external parser ----
   /**
@@ -191,12 +200,7 @@ export const adminRoutes = new Hono<AppBindings>()
    */
   .get("/parsing", async (c) => {
     const orgId = c.get("user").orgId;
-    const [settings, today, provider] = await Promise.all([
-      parserSettingsOf(c.env, orgId),
-      parseUsageToday(c.env, orgId),
-      db(c.env).select({ visionModel: aiProviders.visionModel }).from(aiProviders).where(and(eq(aiProviders.orgId, orgId), eq(aiProviders.enabled, true))).limit(1),
-    ]);
-    const visionModel = provider[0]?.visionModel || null;
+    const [settings, today, visionModel] = await Promise.all([parserSettingsOf(c.env, orgId), parseUsageToday(c.env, orgId), visionModelOf(c.env, orgId)]);
     return c.json({
       externalChoice: settings.externalChoice,
       external: externalState(c.env, settings),
@@ -269,6 +273,9 @@ export const adminRoutes = new Hono<AppBindings>()
     return c.json(await testExternalConnection(c.env, await parserSettingsOf(c.env, c.get("user").orgId)));
   });
 
-async function disableOthers(env: Env, orgId: string, keepId: string): Promise<void> {
-  await db(env).update(aiProviders).set({ enabled: false, updatedAt: Date.now() }).where(and(eq(aiProviders.orgId, orgId), ne(aiProviders.id, keepId)));
+async function disableOthers(env: Env, orgId: string, keepId: string, purpose: "text" | "vision"): Promise<void> {
+  await db(env)
+    .update(aiProviders)
+    .set({ enabled: false, updatedAt: Date.now() })
+    .where(and(eq(aiProviders.orgId, orgId), eq(aiProviders.purpose, purpose), ne(aiProviders.id, keepId)));
 }
