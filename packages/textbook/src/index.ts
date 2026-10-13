@@ -94,6 +94,8 @@ export function routePages(pages: { no: number; kind: PageKind }[], parsers: rea
 /** External parsers. The id carries the version: a page read by one is reused (same file, same page) only by the same id. */
 export const MINERU_AGENT_PARSER = "mineru-agent/1";
 export const MINERU_PARSER = "mineru/1";
+/** The school's own mineru-api server: its models and version are the school's, so its pages are cached apart from the online API's. */
+export const MINERU_SELFHOST_PARSER = "mineru-selfhost/1";
 export const isExternalParser = (parser: string | null | undefined) => !!parser && parser !== PDFJS_PARSER && parser !== PASTE_PARSER && !isVisionParser(parser);
 
 /** A vision model's transcription of the page image (`vlm:<model>/1`): may misread digits, so the teacher is asked to check it. */

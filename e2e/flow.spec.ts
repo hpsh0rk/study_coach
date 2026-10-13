@@ -11,7 +11,10 @@ const CHANGED = "Teacher2026x";
 const SHOTS_DIR = process.env.SHOTS_DIR;
 
 async function shot(page: Page, name: string) {
-  if (SHOTS_DIR) await page.screenshot({ path: path.join(SHOTS_DIR, `${name}.png`), fullPage: true });
+  if (!SHOTS_DIR) return;
+  // A full-page capture draws the sticky header wherever the page is scrolled to.
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.screenshot({ path: path.join(SHOTS_DIR, `${name}.png`), fullPage: true });
 }
 
 async function shotOf(el: Locator, name: string) {
@@ -587,8 +590,19 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
   });
 });
 
+/** Sets "外部解析服务" in the admin page: `auto` (on once configured; the stubbed MinerU always is), `on` or `off`. */
+async function setExternal(page: Page, choice: "auto" | "on" | "off") {
+  await page.goto("/admin");
+  await page.getByTestId("admin-tab-parsing").click();
+  await page.getByTestId(`external-choice-${choice}`).check();
+  await expect(page.getByTestId(`external-choice-${choice}`)).toBeChecked();
+  await expect(page.getByTestId("parsing-state")).toHaveText(choice === "off" ? /已关闭/ : /已开启|未配置/);
+}
+
 test("Chinese CID-font PDF: text is extracted, scanned pages are flagged and can be pasted", async ({ page }) => {
   await login(page);
+  await setExternal(page, "off");
+  await page.goto("/");
   await page.getByTestId("new-lesson").click();
   await page.getByTestId("pdf-input").setInputFiles(path.resolve("fixtures/pdfs/newton-zh-cid.pdf"));
   await page.waitForURL(/\/new\/[^/]+$/);
@@ -669,6 +683,8 @@ test("Chinese CID-font PDF: text is extracted, scanned pages are flagged and can
 
 test("formulas drawn as outlines: the chapters step shows the gap, and pasting closes it", async ({ page }) => {
   await login(page);
+  await setExternal(page, "off");
+  await page.goto("/");
   await page.getByTestId("new-lesson").click();
   await page.getByTestId("pdf-input").setInputFiles(path.resolve("fixtures/pdfs/kinematics-outlines.pdf"));
   await page.waitForURL(/\/new\/[^/]+$/);
@@ -677,7 +693,7 @@ test("formulas drawn as outlines: the chapters step shows the gap, and pasting c
   const summary = page.getByTestId("must-fix-summary");
   await expect(summary).toContainText("公式没读出 1 页");
   await expect(summary).toHaveAttribute("data-count", "1");
-  // 外部解析服务 is off by default: nothing is sent, the teacher is told the gap and how to close it.
+  // With 外部解析服务 off nothing is sent; the teacher is told the gap and how to close it.
   await expect(summary.getByTestId("external-off")).toContainText("外部解析服务");
   await expect(page.getByTestId("external-run")).toHaveCount(0);
   await expect(page.getByTestId("external-progress")).toHaveCount(0);
@@ -713,6 +729,8 @@ async function kinematicsCopy(title: string): Promise<string> {
 
 test("外部解析服务 on (stubbed MinerU): unread formulas are re-read; after a reload the teacher picks the file again", async ({ page }) => {
   await login(page);
+  await setExternal(page, "off");
+  await page.goto("/");
   const later = await kinematicsCopy("Kinematics reloaded");
   await page.getByTestId("new-lesson").click();
   await page.getByTestId("pdf-input").setInputFiles(later);
@@ -723,7 +741,8 @@ test("外部解析服务 on (stubbed MinerU): unread formulas are re-read; after
   await page.goto("/admin");
   await page.getByTestId("admin-tab-parsing").click();
   await expect(page.getByTestId("parsing-state")).toHaveText(/已关闭/);
-  await page.getByTestId("parsing-enabled").click();
+  // "跟随配置" (the default): the stubbed online API needs nothing, so it is on.
+  await page.getByTestId("external-choice-auto").check();
   await expect(page.getByTestId("parsing-state")).toHaveText(/已开启/);
   await shot(page, "25-admin-parsing");
 
@@ -757,10 +776,7 @@ test("外部解析服务 on (stubbed MinerU): unread formulas are re-read; after
   expect(reread.text).toContain("\\mathtt { v } = \\mathtt { u }");
   expect((await (await page.request.get(`/api/documents/${freshId}/pages/1`)).json()).parser).toBe("pdfjs/1");
 
-  await page.goto("/admin");
-  await page.getByTestId("admin-tab-parsing").click();
-  await page.getByTestId("parsing-enabled").click();
-  await expect(page.getByTestId("parsing-state")).toHaveText(/已关闭/);
+  await setExternal(page, "off");
 });
 
 /** An OpenAI-compatible endpoint on this machine standing in for the provider's vision model: E2E never calls outside services. */
@@ -786,6 +802,7 @@ test("看图模型 fallback (local mock provider): with the external parser off,
   const provider = await mockVisionProvider("```markdown\n" + READ + "\n```");
   try {
     await login(page);
+    await setExternal(page, "off");
     await page.goto("/admin");
     await page.getByRole("button", { name: "AI 模型 Models" }).click();
     await page.getByLabel("类型 Type").selectOption("custom");
@@ -853,5 +870,101 @@ test("看图模型 fallback (local mock provider): with the external parser off,
       await expect(row).toHaveCount(0);
     }
     await provider.close();
+  }
+});
+
+/**
+ * A self-hosted MinerU 4 server (`mineru-kit api-server --api-key …`) on this machine: /v1/health, then /v1/tasks
+ * with the raw sub-PDF, its status and its JSON result. Every content page comes back with the same Markdown.
+ */
+async function mockSelfhostMinerU(key: string) {
+  const asked: { path: string; query: string; auth: string | undefined; pages?: number }[] = [];
+  const tasks = new Map<string, number>();
+  const server = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => chunks.push(c));
+    req.on("end", async () => {
+      const url = new URL(req.url ?? "/", "http://x");
+      const send = (status: number, body: unknown) => {
+        res.statusCode = status;
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify(body));
+      };
+      const entry: (typeof asked)[number] = { path: url.pathname, query: url.search, auth: req.headers.authorization };
+      asked.push(entry);
+      if (url.pathname === "/v1/health") return send(200, { version: "4.0.12" });
+      if (req.headers.authorization !== `Bearer ${key}`) return send(401, { error: { code: "invalid_api_key", message: "Invalid or missing API key" } });
+      if (url.pathname === "/v1/tasks" && req.method === "POST") {
+        const pdf = await PDFDocument.load(Buffer.concat(chunks));
+        entry.pages = pdf.getPageCount() / 2;
+        const id = `task-${tasks.size + 1}`;
+        tasks.set(id, entry.pages);
+        return send(202, { task_id: id, status: "queued" });
+      }
+      const m = /^\/v1\/tasks\/([^/]+)(\/result)?$/.exec(url.pathname);
+      const count = m ? tasks.get(m[1]!) : undefined;
+      if (!m || count === undefined) return send(404, { error: { code: "not_found", message: "Task not found" } });
+      if (!m[2]) return send(200, { task_id: m[1], status: "completed", files: [{ status: "completed" }] });
+      const markdown = Array.from({ length: count }, (_, i) => `KJPAGE ${i + 1}\n\n## 3.1 Equations of motion (school server)\n\n$$v = u + at$$\n`).join("\n");
+      return send(200, { task_id: m[1], status: "completed", files: [{ status: "completed", content: { markdown } }] });
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as { port: number };
+  return { baseUrl: `http://127.0.0.1:${port}`, asked, close: () => new Promise((resolve) => server.close(resolve)) };
+}
+
+test("MinerU 自部署 (local mock server): unconfigured until the URL is saved, then on by itself; the connection test and the pages use the key", async ({ page }) => {
+  const KEY = "school-mineru-key";
+  const school = await mockSelfhostMinerU(KEY);
+  try {
+    await login(page);
+    await setExternal(page, "auto");
+    await page.getByTestId("mineru-mode-selfhost").check();
+    await expect(page.getByTestId("parsing-state")).toHaveText(/未配置/);
+    await expect(page.getByTestId("parsing-missing")).toContainText("自部署 MinerU 的地址");
+    await expect(page.getByTestId("parsing-test")).toBeDisabled();
+    await shot(page, "29-admin-selfhost-missing");
+
+    await page.getByTestId("selfhost-url").fill(`${school.baseUrl}/v1`);
+    await page.getByTestId("selfhost-key").fill("not-the-key");
+    await page.getByTestId("selfhost-save").click();
+    await expect(page.getByTestId("parsing-state")).toHaveText(/已开启/);
+    await expect(page.getByTestId("selfhost-url")).toHaveAttribute("placeholder", /^已保存：http:\/\/127\.…:\d+$/);
+    await page.getByTestId("parsing-test").click();
+    await expect(page.getByTestId("parsing-error")).toContainText("API Key");
+    await page.getByTestId("selfhost-key").fill(KEY);
+    await page.getByTestId("selfhost-save").click();
+    await expect(page.getByTestId("parsing-notice")).toBeVisible();
+    await page.getByTestId("parsing-test").click();
+    await expect(page.getByTestId("parsing-notice")).toContainText("已连上自部署 MinerU 4.0.12");
+    await shot(page, "30-admin-selfhost-on");
+    // The browser only ever sees hints.
+    const view = await (await page.request.get("/api/admin/parsing")).text();
+    expect(view).not.toContain(KEY);
+    expect(view).not.toContain(school.baseUrl);
+
+    await page.goto("/new");
+    await page.getByTestId("pdf-input").setInputFiles(await kinematicsCopy("Kinematics school server"));
+    await page.waitForURL(/\/new\/[^/]+$/);
+    const docId = page.url().split("/").pop()!;
+    await expect(page.getByTestId("external-done")).toHaveAttribute("data-read", "1");
+    await expect(page.getByTestId("must-fix-summary")).toHaveCount(0);
+    await shot(page, "31-selfhost-parsed");
+    const read = await (await page.request.get(`/api/documents/${docId}/pages/2`)).json();
+    expect(read).toMatchObject({ parser: "mineru-selfhost/1" });
+    expect(read.text).toContain("school server");
+    const submitted = school.asked.filter((a) => a.path === "/v1/tasks");
+    expect(submitted).toHaveLength(1);
+    expect(submitted[0]).toMatchObject({ auth: `Bearer ${KEY}`, pages: 1 });
+    expect(submitted[0]!.query).toContain("ocr_mode=auto");
+  } finally {
+    await page.goto("/admin");
+    await page.getByTestId("admin-tab-parsing").click();
+    await page.getByTestId("mineru-mode-agent").check();
+    await expect(page.getByTestId("mineru-mode-agent")).toBeChecked();
+    await page.getByTestId("external-choice-off").check();
+    await expect(page.getByTestId("parsing-state")).toHaveText(/已关闭/);
+    await school.close();
   }
 });
