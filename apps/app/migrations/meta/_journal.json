@@ -120,6 +120,13 @@
       "when": 1791882929993,
       "tag": "0016_parse_quota_simplify",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1791883458419,
+      "tag": "0017_vision_provider_rows",
+      "breakpoints": true
     }
   ]
 }

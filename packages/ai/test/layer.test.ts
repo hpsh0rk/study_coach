@@ -113,7 +113,7 @@ describe("vision calls", () => {
 
   it("sends the image to the provider's vision model and returns its text, metered", async () => {
     const { bodies, fetchImpl } = capture();
-    const { ai, records } = setup({ active: { provider: { ...provider("q"), kind: "custom" }, model: "chat", visionModel: "qwen-vl-ocr" } }, fetchImpl);
+    const { ai, records } = setup({ active: null, vision: { provider: { ...provider("q"), kind: "custom" }, model: "qwen-vl-ocr" } }, fetchImpl);
     expect((await ai.callVision(vreq)).text).toBe("$v = u + at$");
     expect(bodies[0]).toMatchObject({ model: "qwen-vl-ocr", temperature: 0, messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: image } }, { type: "text", text: "Transcribe." }] }] });
     expect(bodies[0]!.response_format).toBeUndefined();
@@ -122,13 +122,13 @@ describe("vision calls", () => {
 
   it("GLM gets bare base64 and no thinking", async () => {
     const { bodies, fetchImpl } = capture();
-    const { ai } = setup({ active: { provider: { ...provider("g"), kind: "glm" }, model: "glm-4.5", visionModel: "glm-4.6v-flash" } }, fetchImpl);
+    const { ai } = setup({ active: null, vision: { provider: { ...provider("g"), kind: "glm" }, model: "glm-4.6v-flash" } }, fetchImpl);
     await ai.callVision(vreq);
     expect(bodies[0]!.messages[0].content[0].image_url.url).toBe("/9j/4AAQSkZJRg==");
     expect(bodies[0]!.thinking).toEqual({ type: "disabled" });
   });
 
-  it("a separate vision provider (own key) wins over the active provider's vision model, even with no text model", async () => {
+  it("the vision provider (own key) reads pages, with or without a text model", async () => {
     const urls: string[] = [];
     const keys: string[] = [];
     const fetchImpl: FetchLike = async (url, init) => {
@@ -137,7 +137,7 @@ describe("vision calls", () => {
       return okResponse("text");
     };
     const glm = { ...provider("glm"), kind: "glm" as const, apiKey: "glm-key-123456" };
-    await setup({ active: { provider: provider("ds"), model: "deepseek-chat", visionModel: "never" }, vision: { provider: glm, model: "glm-4.6v-flash" } }, fetchImpl).ai.callVision(vreq);
+    await setup({ active: { provider: provider("ds"), model: "deepseek-chat" }, vision: { provider: glm, model: "glm-4.6v-flash" } }, fetchImpl).ai.callVision(vreq);
     await setup({ active: null, vision: { provider: glm, model: "glm-4.6v-flash" } }, fetchImpl).ai.callVision(vreq);
     expect(urls.every((u) => u.startsWith("https://glm.example/v1"))).toBe(true);
     expect(keys).toEqual(["Bearer glm-key-123456", "Bearer glm-key-123456"]);

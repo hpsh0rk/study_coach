@@ -807,15 +807,14 @@ test("看图模型 fallback (local mock provider): with the external parser off,
     await setExternal(page, "off");
     await page.goto("/admin");
     await page.getByRole("button", { name: "AI 模型 Models" }).click();
-    const form = page.getByTestId("add-model-form");
-    await form.getByLabel("类型 Type").selectOption("custom");
-    await form.getByLabel("名称 Name").fill("Local vision mock");
-    await form.getByLabel("模型 Model", { exact: true }).fill("mock-chat");
-    await form.getByTestId("vision-model").fill("mock-vl");
-    await form.getByTestId("model-base-url").fill(provider.baseUrl);
-    await form.getByLabel("API Key").fill("sk-local-mock-key");
-    await form.getByRole("button", { name: /保存并启用/ }).click();
-    await expect(page.locator("tr:not([data-testid^=setup])", { hasText: "Local vision mock" })).toContainText("mock-vl");
+    const card = page.getByTestId("vision-provider-card");
+    await card.getByTestId("vision-provider-kind").selectOption("custom");
+    await card.getByLabel("名称 Name").fill("Local vision mock");
+    await card.getByTestId("vision-provider-model").fill("mock-vl");
+    await card.getByTestId("vision-provider-base-url").fill(provider.baseUrl);
+    await card.getByTestId("vision-provider-key").fill("sk-local-mock-key");
+    await card.getByTestId("vision-provider-save").click();
+    await expect(card.getByTestId("vision-provider-row")).toContainText("mock-vl");
 
     // A model not known to be free counts as paid: unusable until paid parsing is allowed.
     await page.getByTestId("admin-tab-parsing").click();
@@ -869,8 +868,8 @@ test("看图模型 fallback (local mock provider): with the external parser off,
     await expect(page.getByTestId("parsing-state")).toBeVisible();
     await page.getByTestId("paid-enabled").setChecked(false);
     await page.getByRole("button", { name: "AI 模型 Models" }).click();
-    await expect(page.getByTestId("add-model-form")).toBeVisible();
-    const row = page.locator("tr:not([data-testid^=setup])", { hasText: "Local vision mock" });
+    await expect(page.getByTestId("vision-provider-card")).toBeVisible();
+    const row = page.getByTestId("vision-provider-row");
     if (await row.count()) {
       await row.getByRole("button", { name: "删除" }).click();
       await expect(row).toHaveCount(0);
@@ -879,7 +878,7 @@ test("看图模型 fallback (local mock provider): with the external parser off,
   }
 });
 
-test("单独的看图模型 (local mock): with no vision model on the text side, a separate provider with its own key reads pages; 测试连接 sends one tiny image", async ({ page }) => {
+test("看图模型 provider (local mock): with no text model, a vision provider with its own key reads pages; 测试连接 sends one tiny image", async ({ page }) => {
   const READ = "## 3.1 Equations of motion\n\n$$v = u + at$$\n\n$$s = ut + \\frac{1}{2}at^2$$";
   const provider = await mockVisionProvider(READ);
   try {
@@ -897,7 +896,7 @@ test("单独的看图模型 (local mock): with no vision model on the text side,
     await card.getByTestId("vision-provider-base-url").fill(provider.baseUrl);
     await card.getByTestId("vision-provider-key").fill("sk-vision-only-key");
     await card.getByTestId("vision-provider-save").click();
-    await expect(card.getByTestId("vision-in-use")).toContainText("Local qwen mock / mock-qwen-vl（单独的看图模型）");
+    await expect(card.getByTestId("vision-in-use")).toContainText("Local qwen mock / mock-qwen-vl · In use");
     await expect(card.getByTestId("vision-provider-row")).toContainText("sk-••••");
     await expect(page.locator("body")).not.toContainText("sk-vision-only-key");
 

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { newId } from "@kj/schema";
-import { chatCompletion, ProviderError, visionTarget, type AiConfigSource, type ChatMessage, type ChatRequest, type FetchLike, type ProviderConfig } from "./providers.ts";
+import { chatCompletion, ProviderError, type AiConfigSource, type ChatMessage, type ChatRequest, type FetchLike, type ProviderConfig } from "./providers.ts";
 
 /** What a call is for; recorded with every call for metering. */
 export type CapabilityName = "outline.draft" | "slide.write" | "page.read";
@@ -175,7 +175,7 @@ export function createAiLayer(opts: AiLayerOptions) {
     const callId = newId("ai");
     const started = Date.now();
     const base = { id: callId, capability: req.capability, promptVersion: req.promptVersion, ctx: req.ctx };
-    const target = visionTarget(await opts.config.load());
+    const target = (await opts.config.load()).vision;
     if (!target) throw new ProviderError("no vision model configured; set one in /admin · 请在后台“AI 模型”里配置看图模型", undefined, false);
     const { provider, model } = target;
     try {
