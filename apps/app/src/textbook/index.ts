@@ -1,6 +1,6 @@
 /**
  * The textbook module's read interface: the only way lesson, generation and share code reaches a
- * textbook's pages, chapters and labels. It knows nothing about lessons (see .dependency-cruiser.cjs).
+ * textbook's pages, chapters and labels. It knows nothing about lessons.
  */
 import { and, asc, between, count, desc, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { chapterRunsOf, isEmptyPage, MIN_PAGE_WORDS, missingRanges, MUST_FIX_KINDS, PDFJS_PARSER, type PageFlag, normalizeRanges, pagesInRanges, rangesForChapters, sourceCut, type ChapterRun } from "@kj/textbook";
