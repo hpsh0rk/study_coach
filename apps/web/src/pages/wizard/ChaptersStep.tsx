@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { countPages, isEmptyPage, labelOf, normalizeRanges, PASTE_PARSER, pageForLabel, pagesInRanges, rangesForChapters, sourceCut, subtreeIds, type PageFlag } from "@kj/pdf-structure";
+import { countPages, isEmptyPage, isMustFix, labelOf, MUST_FIX_KINDS, normalizeRanges, PASTE_PARSER, PDFJS_PARSER, pageForLabel, pagesInRanges, rangesForChapters, sourceCut, subtreeIds, type PageFlag } from "@kj/pdf-structure";
 import { OUTLINE_SOURCE_CHARS, scopeAdvice } from "@kj/pedagogy";
-import type { ChapterNode, PageRange } from "@kj/schema";
+import type { ChapterNode, PageKind, PageRange } from "@kj/schema";
 import { ApiError } from "../../api.ts";
 import { lessonApi, type LessonView, type UnitPreview } from "../../lessonApi.ts";
 import { documentApi, type DocumentRow, type PastedPage } from "../../textbook/api.ts";
@@ -101,6 +101,8 @@ function PastePanel({ documentId, run, labels, onDone }: { documentId: string; r
   );
 }
 
+const LOSSY: Partial<Record<PageKind, string>> = { "formula-lost": "公式没读出", scanned: "扫描", garbled: "乱码" };
+
 const REUSED: Partial<Record<IngestOutcome, string>> = {
   ready: "这份 PDF 之前上传过，直接用了上次读好的文字，没有重新解析 · Already uploaded: reused without parsing again",
   resumed: "上次没有传完，这次只补传了缺的页 · Finished the interrupted upload; only the missing pages were sent",
@@ -117,6 +119,7 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
   const [pageChars, setPageChars] = useState<number[]>([]);
   const [pageParsers, setPageParsers] = useState<Record<number, string>>({});
   const [pageFlags, setPageFlags] = useState<Record<number, PageFlag[]>>({});
+  const [pageKinds, setPageKinds] = useState<Record<number, PageKind>>({});
   const [pasting, setPasting] = useState<PageRange | null>(null);
   const [preview, setPreview] = useState<{ start: string; end: string } | null>(null);
   const [picked, setPicked] = useState<Set<string>>(new Set(lesson?.lesson.scope.chapterIds ?? []));
@@ -137,6 +140,7 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
         setPageChars(r.pageChars);
         setPageParsers(r.pageParsers);
         setPageFlags(r.pageFlags);
+        setPageKinds(r.pageKinds);
         setCollapsed(new Set(r.chapters.filter((c) => c.level >= 2 && r.chapters.some((k) => k.parentId === c.id)).map((c) => c.id)));
         if (lesson && !lesson.lesson.scope.chapterIds.length) setRangeText(fmtRanges(lesson.lesson.scope.ranges, map));
       })
@@ -156,6 +160,15 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
   const pastedIn = (c: ChapterNode) => pagesOf(c).filter((p) => pageParsers[p] === PASTE_PARSER).length;
   // Links and e-mails are common in textbook footers; only instruction-like text is worth a badge here.
   const flaggedIn = (c: ChapterNode) => pagesOf(c).filter((p) => pageFlags[p]?.includes("instruction"));
+
+  // Must-fix pages whose pdf.js text is still the only text: scans, garbled fonts, formulas drawn as outlines.
+  const unfixed = (p: number) => isMustFix(pageKinds[p]) && (pageParsers[p] ?? PDFJS_PARSER) === PDFJS_PARSER;
+  const lossyIn = (c: ChapterNode) => pagesOf(c).filter((p) => unfixed(p) && !isEmptyPage(pageWords[p - 1] ?? 0));
+  const bookLossy = MUST_FIX_KINDS.flatMap((kind) => {
+    const count = Object.entries(pageKinds).filter(([no, k]) => k === kind && unfixed(Number(no))).length;
+    return count ? [{ kind, count }] : [];
+  });
+  const lossyRuns = runsOf(pagesInRanges(ranges).filter((p) => unfixed(p) && !isEmptyPage(pageWords[p - 1] ?? 0)));
 
   function pasted(rows: PastedPage[]) {
     const words = [...pageWords];
@@ -291,6 +304,11 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
               )}
             </div>
           </div>
+          {bookLossy.length > 0 && (
+            <div className="alert info" data-testid="must-fix-summary" data-count={bookLossy.reduce((n, k) => n + k.count, 0)}>
+              这本书有 {bookLossy.reduce((n, k) => n + k.count, 0)} 页可能没读全：{bookLossy.map((k) => `${LOSSY[k.kind]} ${k.count} 页`).join(" · ")}。浏览器只能读出文字层，扫描图和画成图形的公式读不到；选到这些页时可以粘贴文字补上。· Some pages were not fully read (scans, formulas drawn as outlines); paste their text where you need it.
+            </div>
+          )}
           {pages === 0 ? (
             <div className="empty-inline" data-testid="chapters-empty">
               还没选内容：勾选下面的章节，或在下方输入页码。· Nothing selected yet: tick chapters below or type page ranges.
@@ -315,9 +333,21 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
                   </button>
                 ))}
               </div>
-              {pasting && <PastePanel key={pasting.start} documentId={documentId} run={pasting} labels={labels} onDone={pasted} />}
             </div>
           )}
+          {pages > 0 && lossyRuns.length > 0 && (
+            <div className="alert warn" data-testid="lossy-pages">
+              第 {fmtRanges(lossyRuns, labels)} 页的公式或数字可能没读出来（教材把它们画成了图形，或是扫描页），起草时只能读到残缺的文字。要讲这些页的话，请粘贴完整文字替换。· Formulas or numbers on these pages were not read; paste the full text to replace it.
+              <div className="row wrap">
+                {lossyRuns.map((r) => (
+                  <button key={r.start} className="btn small" onClick={() => setPasting(r)} data-testid="paste-open-lossy">
+                    为 p. {r.start === r.end ? labelOf(labels, r.start) : `${labelOf(labels, r.start)}–${labelOf(labels, r.end)}`} 粘贴文字
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {pages > 0 && pasting && <PastePanel key={pasting.start} documentId={documentId} run={pasting} labels={labels} onDone={pasted} />}
           {pages > 0 && advice.tooMuch && (
             <div className="alert warn split-hint" data-testid="split-hint">
               <span>
@@ -399,6 +429,14 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
                           {emptyIn(c)} 页无文字
                         </span>
                       )}
+                      {MUST_FIX_KINDS.map((k) => {
+                        const n = lossyIn(c).filter((p) => pageKinds[p] === k).length;
+                        return n > 0 ? (
+                          <span key={k} className="badge warn" data-testid="chapter-lossy" title="浏览器读不出这些页的公式、数字或扫描内容 · Content the text layer missed">
+                            {n} 页{LOSSY[k]}
+                          </span>
+                        ) : null;
+                      })}
                       {pastedIn(c) > 0 && (
                         <span className="badge note" data-testid="chapter-pasted" title="这些页是扫描图，文字由老师粘贴 · Text pasted by the teacher for scanned pages">
                           {pastedIn(c)} 页老师粘贴

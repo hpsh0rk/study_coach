@@ -594,6 +594,7 @@ test("Chinese CID-font PDF: text is extracted, scanned pages are flagged and can
   expect((await (await page.request.get(`/api/documents/${docId}/pages/2`)).json()).text).toContain("牛顿第一定律");
 
   const scanned = page.getByRole("treeitem").filter({ hasText: "4.4 习题" });
+  await expect(page.getByTestId("must-fix-summary")).toContainText("扫描 2 页");
   await expect(scanned.getByTestId("chapter-empty")).toHaveText("2 页无文字");
   await expect(page.getByRole("treeitem").filter({ hasText: "4.2 牛顿第一定律" }).getByTestId("chapter-empty")).toHaveCount(0);
   await scanned.locator("input[type=checkbox]").check();
@@ -607,6 +608,7 @@ test("Chinese CID-font PDF: text is extracted, scanned pages are flagged and can
   await expect(page.getByTestId("empty-pages")).toHaveCount(0);
   await expect(scanned.getByTestId("chapter-empty")).toHaveCount(0);
   await expect(scanned.getByTestId("chapter-pasted")).toHaveText("2 页老师粘贴");
+  await expect(page.getByTestId("must-fix-summary")).toHaveCount(0);
   expect((await (await page.request.get(`/api/documents/${docId}/pages/5`)).json()).parser).toBe("paste");
   await toSettings(page);
 
@@ -661,4 +663,35 @@ test("Chinese CID-font PDF: text is extracted, scanned pages are flagged and can
 
   await page.reload();
   await expect(page.getByTestId("outline-row").first().getByLabel("标题 Title")).toHaveValue("标签页 A 的标题");
+});
+
+test("formulas drawn as outlines: the chapters step shows the gap, and pasting closes it", async ({ page }) => {
+  await login(page);
+  await page.getByTestId("new-lesson").click();
+  await page.getByTestId("pdf-input").setInputFiles(path.resolve("fixtures/pdfs/kinematics-outlines.pdf"));
+  await page.waitForURL(/\/new\/[^/]+$/);
+  const docId = page.url().split("/").pop()!;
+
+  const summary = page.getByTestId("must-fix-summary");
+  await expect(summary).toContainText("公式没读出 1 页");
+  await expect(summary).toHaveAttribute("data-count", "1");
+  const lossy = page.getByRole("treeitem").filter({ hasText: "Equations of motion" });
+  await expect(lossy.getByTestId("chapter-lossy")).toHaveText("1 页公式没读出");
+  await expect(page.getByRole("treeitem").filter({ hasText: "Using the equations" }).getByTestId("chapter-lossy")).toHaveCount(0);
+  await expect(page.getByTestId("lossy-pages")).toHaveCount(0);
+
+  await lossy.locator("input[type=checkbox]").check();
+  await expect(page.getByTestId("lossy-pages")).toContainText("公式或数字可能没读出来");
+  await shot(page, "24-formula-lost");
+  await page.getByTestId("paste-open-lossy").click();
+  await page.getByTestId("paste-text").fill("3.1 Equations of motion: v = v0 + a t; s = v0 t + a t² / 2; v² = v0² + 2 a s. A car accelerating from rest at 2 m/s² reaches 20 m/s after ten seconds.");
+  await page.getByTestId("paste-save").click();
+
+  await expect(page.getByTestId("lossy-pages")).toHaveCount(0);
+  await expect(summary).toHaveCount(0);
+  await expect(lossy.getByTestId("chapter-lossy")).toHaveCount(0);
+  await expect(lossy.getByTestId("chapter-pasted")).toHaveText("1 页老师粘贴");
+  const fixed = await (await page.request.get(`/api/documents/${docId}/pages/2`)).json();
+  expect(fixed).toMatchObject({ parser: "paste" });
+  expect(fixed.text).toContain("v = v0 + a t");
 });

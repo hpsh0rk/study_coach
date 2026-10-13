@@ -1,4 +1,4 @@
-import { countWords, suspiciousSpans, type ChapterNode, type PageRange, type PageText, type SuspiciousSpan, type TocEntry } from "@kj/schema";
+import { countWords, suspiciousSpans, type ChapterNode, type PageKind, type PageProbe, type PageRange, type PageText, type SuspiciousSpan, type TocEntry } from "@kj/schema";
 
 export const MAX_TREE_DEPTH = 3;
 /** Pages with fewer words carry no usable text (scanned images, figure-only pages, blank pages). */
@@ -21,6 +21,70 @@ export interface PageFacts {
 
 export function pageFacts(text: string): PageFacts {
   return { words: countWords(text), chars: text.length, flags: [...new Set(suspiciousSpans(text).map((s) => s.kind))].sort() };
+}
+
+/** The text layer misses or mangles content on these pages: worth sending to a better parser automatically. */
+export const MUST_FIX_KINDS: readonly PageKind[] = ["scanned", "garbled", "formula-lost"];
+/** Readable as is; a better parser keeps structure. Only on the teacher's request ("精修本章"), never automatically. */
+export const REFINE_KINDS: readonly PageKind[] = ["formula-text", "table"];
+export const isMustFix = (kind: PageKind | null | undefined) => !!kind && MUST_FIX_KINDS.includes(kind);
+
+/** A page whose text a teacher may paste (or a parser may replace): no usable text, or a must-fix page still holding the pdf.js text. */
+export function needsText(p: { words: number; kind?: PageKind | null; parser?: string }): boolean {
+  return isEmptyPage(p.words) || (isMustFix(p.kind) && (p.parser ?? PDFJS_PARSER) === PDFJS_PARSER);
+}
+
+const MATH_CHARS = /[∑∏∫∮√∛∞∂∆∇±∓×÷·≤≥≈≠≡∝∈∉⊂⊃⊆∪∩∀∃→←↔⇒⇔⊥∥°′″αβγδεζηθικλμνξπρστυφχψωΓΔΘΛΞΠΣΦΨΩ⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼₀₁₂₃₄₅₆₇₈₉₊₋]/g;
+
+/** Math symbols, Greek letters, super/subscripts and equals signs: a page of typeset formulas scores 40+. */
+export function mathScore(text: string): number {
+  return (text.match(MATH_CHARS)?.length ?? 0) + (text.match(/=/g)?.length ?? 0);
+}
+
+/** Share of non-space characters that are U+FFFD, private-use or control characters (fonts without a usable ToUnicode map). */
+export function badCharRatio(text: string): number {
+  const visible = text.replace(/\s/g, "").length;
+  if (!visible) return 0;
+  // eslint-disable-next-line no-control-regex
+  return (text.match(/[\uFFFD\uE000-\uF8FF\u0000-\u0008\u000E-\u001F]/g)?.length ?? 0) / visible;
+}
+
+/** Thresholds from the parsing research (docs/research/pdf-parsing.md §7), checked in this order. */
+export function classifyPage(p: PageProbe): PageKind {
+  if ((p.chars < 30 && p.imageArea > 0.3) || (p.imageArea > 0.5 && p.chars < 400)) return "scanned";
+  if (isEmptyPage(p.words)) return "blank";
+  if (p.badCharRatio > 0.05) return "garbled";
+  if (p.glyphRows >= 2 || (p.holes >= 2 && p.glyphs >= 5)) return "formula-lost";
+  if (p.mathScore >= 40) return "formula-text";
+  if (p.rules >= 20 || (p.rects >= 15 && p.gridRows >= 3)) return "table";
+  return "text";
+}
+
+/** A parser that can take pages over from pdf.js, as the router sees it (enabled ones only, in preference order). */
+export interface ParserChoice {
+  id: string;
+  kinds: readonly PageKind[];
+}
+
+/** The parser id for pages no enabled parser takes: the teacher pastes their text. */
+export const MANUAL_PARSER = "manual";
+
+/**
+ * Which parser re-reads which page. Only pages of `kinds` are routed (must-fix ones automatically,
+ * refine kinds when the teacher asks); each goes to the first parser that handles its kind, until
+ * `limit` pages are assigned. The rest go to `manual`. Pure: the caller decides which parsers are enabled.
+ */
+export function routePages(pages: { no: number; kind: PageKind }[], parsers: readonly ParserChoice[], opts: { kinds: readonly PageKind[]; limit: number }): Record<string, number[]> {
+  const out: Record<string, number[]> = {};
+  let assigned = 0;
+  for (const p of pages) {
+    if (!opts.kinds.includes(p.kind)) continue;
+    const parser = assigned < opts.limit ? parsers.find((x) => x.kinds.includes(p.kind)) : undefined;
+    const id = parser?.id ?? MANUAL_PARSER;
+    if (parser) assigned++;
+    (out[id] ??= []).push(p.no);
+  }
+  return out;
 }
 
 interface FlatEntry {

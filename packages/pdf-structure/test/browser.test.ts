@@ -55,3 +55,60 @@ describe("parsePdf", () => {
     expect(parsed.pages[1]!.text).toBe("White heading on a dark banner");
   });
 });
+
+/** A 1×1 grey PNG: scaled up it stands in for a scanned page image. */
+const PNG = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGNoAAAAggCBd81ytgAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
+
+describe("page kinds from the parse loop", () => {
+  it("tells text, scanned, blank, formula-lost (display and inline), formula-text and table pages apart", async () => {
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const prose = "A wave transfers energy from one place to another without transporting matter along with it.";
+    const body = (page: ReturnType<typeof doc.addPage>, from = 760, lines = 12) => {
+      for (let i = 0; i < lines; i++) page.drawText(prose, { x: 50, y: from - i * 16, size: 10, font });
+    };
+
+    body(doc.addPage([595, 842]));
+
+    const scan = doc.addPage([595, 842]);
+    scan.drawImage(await doc.embedPng(PNG), { x: 0, y: 0, width: 595, height: 842 });
+
+    doc.addPage([595, 842]).drawText("12", { x: 290, y: 30, size: 9, font });
+
+    // OpenStax-style display formulas: glyph outlines (filled curves), no text layer.
+    const display = doc.addPage([595, 842]);
+    body(display);
+    for (const y of [500, 440]) for (let k = 0; k < 6; k++) display.drawEllipse({ x: 200 + k * 14, y, xScale: 4, yScale: 5 });
+
+    // Inline numbers drawn as outlines inside sentences: "The speed is ▢▢▢ m/s".
+    const inline = doc.addPage([595, 842]);
+    body(inline, 760, 6);
+    for (const y of [600, 560]) {
+      inline.drawText("The speed of the wave is", { x: 50, y, size: 10, font });
+      for (let k = 0; k < 3; k++) inline.drawEllipse({ x: 180 + k * 6, y: y + 4, xScale: 2.5, yScale: 3.5 });
+      inline.drawText("m/s along the string.", { x: 205, y, size: 10, font });
+    }
+
+    const mathy = doc.addPage([595, 842]);
+    body(mathy, 760, 4);
+    for (let i = 0; i < 12; i++) mathy.drawText(`v = f x L, T = 1 / f, E = h x f, p = m x v`, { x: 50, y: 680 - i * 16, size: 10, font });
+
+    const table = doc.addPage([595, 842]);
+    body(table, 760, 4);
+    for (let r = 0; r <= 10; r++) table.drawLine({ start: { x: 50, y: 650 - r * 20 }, end: { x: 545, y: 650 - r * 20 }, thickness: 0.5 });
+    for (let c = 0; c <= 10; c++) table.drawLine({ start: { x: 50 + c * 49.5, y: 650 }, end: { x: 50 + c * 49.5, y: 450 }, thickness: 0.5 });
+
+    const bytes = await doc.save();
+    const parsed = await parsePdf(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, "x", { assets: `${pdfjsDir}/` });
+    expect(parsed.pages.map((p) => p.kind)).toEqual(["text", "scanned", "blank", "formula-lost", "formula-lost", "formula-text", "table"]);
+  });
+
+  it("classifies the fixture books", async () => {
+    const waves = await parsePdf(fixture("waves-mini.pdf"), "fallback", { assets: `${pdfjsDir}/` });
+    expect(waves.pages.every((p) => p.kind === "text" || p.kind === "blank")).toBe(true);
+    const zh = await parsePdf(fixture("newton-zh-cid.pdf"), "fallback", { assets: `${pdfjsDir}/` });
+    expect(zh.pages.map((p) => p.kind)).toEqual(["text", "text", "text", "text", "scanned", "scanned"]);
+    const kinematics = await parsePdf(fixture("kinematics-outlines.pdf"), "fallback", { assets: `${pdfjsDir}/` });
+    expect(kinematics.pages.map((p) => p.kind)).toEqual(["text", "formula-lost", "text"]);
+  });
+});
