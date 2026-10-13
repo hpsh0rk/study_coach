@@ -13,4 +13,6 @@ cd ../..
 node scripts/create-admin.mjs --username admin --password Admin12345 --persist-to "$PERSIST" >/dev/null
 cd apps/app
 # External parsing replays a recorded MinerU response: E2E never calls outside services.
-exec npx wrangler dev --port "$PORT" --ip 127.0.0.1 --persist-to "$PERSIST" --var PARSER_MINERU_MODE:stub --show-interactive-dev-session=false
+exec npx wrangler dev --port "$PORT" --ip 127.0.0.1 --persist-to "$PERSIST" --env-file /dev/null \
+  --var ENVIRONMENT:development --var AI_ALLOW_STUB:true --var "AI_CONFIG_KEY:e2e-$(node -e 'console.log(crypto.randomUUID())')" \
+  --var PARSER_MINERU_MODE:stub --show-interactive-dev-session=false
