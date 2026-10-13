@@ -27,7 +27,8 @@ interface AiProviderRow {
   headerHints: Record<string, string>;
   enabled: boolean;
 }
-type TestResult = { ok: boolean; error?: string; latencyMs?: number };
+/** `message` is the plain-Chinese verdict: 连接成功 + latency + reply, or Key / model name / unreachable / HTTP error. */
+type TestResult = { ok: boolean; message: string; kind?: string; error?: string; latencyMs?: number };
 interface AiView {
   presets: Record<Kind, { label: string; baseUrl: string; models: string[]; visionModels: string[]; docs: string }>;
   stubFallback: boolean;
@@ -415,8 +416,8 @@ function AiPanel({ onSaved }: { onSaved: () => void }) {
     run(async () => {
       const r = await api<TestResult>(`/api/admin/ai/providers/${p.id}/test`, { body: vision ? { vision: true } : {} });
       const model = vision && p.purpose === "text" ? p.visionModel : p.model;
-      if (r.ok) setNotice(`测试连接：${p.name} / ${model} 可用 (${r.latencyMs} ms) · OK`);
-      else setError(`测试连接：${p.name} / ${model} 失败 · ${r.error}`);
+      if (r.ok) setNotice(`测试连接：${p.name} / ${model} · ${r.message}`);
+      else setError(`测试连接：${p.name} / ${model} · ${r.message}`);
     });
 
   return (
