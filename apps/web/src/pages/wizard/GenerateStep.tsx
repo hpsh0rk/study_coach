@@ -7,7 +7,8 @@ import { SlotEditor } from "../../components/SlotEditor.tsx";
 import { SlidePreview, SlideThumb } from "../../components/SlideView.tsx";
 import { UnverifiedBadge, UnverifiedBox } from "../../components/Unverified.tsx";
 import { lessonApi, type AnswerMode, type FlaggedSlide, type LessonView, type ShareView } from "../../lessonApi.ts";
-import { documentApi } from "../../textbook/api.ts";
+import { documentApi, type TextbookPage } from "../../textbook/api.ts";
+import { SourcePage } from "../../textbook/SourcePage.tsx";
 import { downloadOfflineHtml } from "../../offline/exportDeck.ts";
 import { downloadPptx } from "../../offline/exportPptx.ts";
 import { Stepper, StepIntro, type StepKey } from "./Stepper.tsx";
@@ -158,7 +159,7 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
   const [running, setRunning] = useState<Set<string>>(new Set());
   const [failed, setFailed] = useState<Record<string, string>>({});
   const [selected, setSelected] = useState<string | null>(specs[0]?.id ?? null);
-  const [source, setSource] = useState<{ no: number; text: string; label: string | null } | null>(null);
+  const [source, setSource] = useState<TextbookPage | null>(null);
   const [editing, setEditing] = useState(false);
   const [exporting, setExporting] = useState("");
   const [exportError, setExportError] = useState("");
@@ -427,19 +428,7 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
           </aside>
         )}
       </div>
-      {source && (
-        <div className="modal" onClick={() => setSource(null)}>
-          <div className="modal-card card" onClick={(e) => e.stopPropagation()}>
-            <div className="row between">
-              <h2>教材第 {source.label ?? source.no} 页 · Source page</h2>
-              <button className="btn small ghost" onClick={() => setSource(null)}>
-                关闭 Close
-              </button>
-            </div>
-            <pre className="source-text">{source.text}</pre>
-          </div>
-        </div>
-      )}
+      {source && <SourcePage page={source} onClose={() => setSource(null)} />}
     </div>
   );
 }

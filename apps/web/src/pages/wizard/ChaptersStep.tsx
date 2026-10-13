@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { countPages, isEmptyPage, labelOf, normalizeRanges, pageForLabel, pagesInRanges, rangesForChapters, sourceCut, subtreeIds } from "@kj/pdf-structure";
+import { countPages, isEmptyPage, labelOf, normalizeRanges, PASTE_PARSER, pageForLabel, pagesInRanges, rangesForChapters, sourceCut, subtreeIds, type PageFlag } from "@kj/pdf-structure";
 import { OUTLINE_SOURCE_CHARS, scopeAdvice } from "@kj/pedagogy";
 import type { ChapterNode, PageRange } from "@kj/schema";
 import { ApiError } from "../../api.ts";
 import { lessonApi, type LessonView, type UnitPreview } from "../../lessonApi.ts";
-import { documentApi, type DocumentRow } from "../../textbook/api.ts";
+import { documentApi, type DocumentRow, type PastedPage } from "../../textbook/api.ts";
 import type { IngestOutcome } from "../../textbook/ingest.ts";
 import { Stepper, StepIntro, type StepKey } from "./Stepper.tsx";
 
@@ -70,7 +70,7 @@ function selectionStats(selected: number[], pageWords: number[], pageChars: numb
 }
 
 /** Teachers paste the text of scanned pages; it is spread over the empty pages of the range. */
-function PastePanel({ documentId, run, labels, onDone }: { documentId: string; run: PageRange; labels: Map<number, string>; onDone: (pages: { no: number; words: number; chars: number }[]) => void }) {
+function PastePanel({ documentId, run, labels, onDone }: { documentId: string; run: PageRange; labels: Map<number, string>; onDone: (pages: PastedPage[]) => void }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -115,6 +115,8 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
   const [labels, setLabels] = useState<Map<number, string>>(new Map());
   const [pageWords, setPageWords] = useState<number[]>([]);
   const [pageChars, setPageChars] = useState<number[]>([]);
+  const [pageParsers, setPageParsers] = useState<Record<number, string>>({});
+  const [pageFlags, setPageFlags] = useState<Record<number, PageFlag[]>>({});
   const [pasting, setPasting] = useState<PageRange | null>(null);
   const [preview, setPreview] = useState<{ start: string; end: string } | null>(null);
   const [picked, setPicked] = useState<Set<string>>(new Set(lesson?.lesson.scope.chapterIds ?? []));
@@ -133,6 +135,8 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
         setLabels(map);
         setPageWords(r.pageWords);
         setPageChars(r.pageChars);
+        setPageParsers(r.pageParsers);
+        setPageFlags(r.pageFlags);
         setCollapsed(new Set(r.chapters.filter((c) => c.level >= 2 && r.chapters.some((k) => k.parentId === c.id)).map((c) => c.id)));
         if (lesson && !lesson.lesson.scope.chapterIds.length) setRangeText(fmtRanges(lesson.lesson.scope.ranges, map));
       })
@@ -147,17 +151,28 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
   const stats = useMemo(() => selectionStats(pagesInRanges(ranges), pageWords, pageChars), [ranges, pageWords, pageChars]);
   const advice = scopeAdvice(stats.words, lessonMinutes, stats.unread.length);
   const emptyRuns = runsOf(stats.empty);
-  const emptyIn = (c: ChapterNode) => pagesInRanges([{ start: c.pageStart, end: c.pageEnd }]).filter((p) => isEmptyPage(pageWords[p - 1] ?? 0)).length;
+  const pagesOf = (c: ChapterNode) => pagesInRanges([{ start: c.pageStart, end: c.pageEnd }]);
+  const emptyIn = (c: ChapterNode) => pagesOf(c).filter((p) => isEmptyPage(pageWords[p - 1] ?? 0)).length;
+  const pastedIn = (c: ChapterNode) => pagesOf(c).filter((p) => pageParsers[p] === PASTE_PARSER).length;
+  // Links and e-mails are common in textbook footers; only instruction-like text is worth a badge here.
+  const flaggedIn = (c: ChapterNode) => pagesOf(c).filter((p) => pageFlags[p]?.includes("instruction"));
 
-  function pasted(rows: { no: number; words: number; chars: number }[]) {
+  function pasted(rows: PastedPage[]) {
     const words = [...pageWords];
     const chars = [...pageChars];
+    const parsers = { ...pageParsers };
+    const flags = { ...pageFlags };
     for (const r of rows) {
       words[r.no - 1] = r.words;
       chars[r.no - 1] = r.chars;
+      parsers[r.no] = r.parser;
+      if (r.flags.length) flags[r.no] = r.flags;
+      else delete flags[r.no];
     }
     setPageWords(words);
     setPageChars(chars);
+    setPageParsers(parsers);
+    setPageFlags(flags);
     setPasting(null);
   }
 
@@ -382,6 +397,16 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
                       {pageWords.length > 0 && emptyIn(c) > 0 && (
                         <span className="badge warn" data-testid="chapter-empty" title="这些页没有文字层，可能是扫描图 · No text layer">
                           {emptyIn(c)} 页无文字
+                        </span>
+                      )}
+                      {pastedIn(c) > 0 && (
+                        <span className="badge note" data-testid="chapter-pasted" title="这些页是扫描图，文字由老师粘贴 · Text pasted by the teacher for scanned pages">
+                          {pastedIn(c)} 页老师粘贴
+                        </span>
+                      )}
+                      {flaggedIn(c).length > 0 && (
+                        <span className="badge warn" data-testid="chapter-flagged" title="页面里有像“忽略之前的指令”这样的文字：生成时只当作教材内容，分享前请检查幻灯片 · Instruction-like text on these pages">
+                          p.{flaggedIn(c).map((p) => labelOf(labels, p)).join(", ")} 含像指令的文字
                         </span>
                       )}
                     </label>

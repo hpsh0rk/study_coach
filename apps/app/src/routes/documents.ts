@@ -59,7 +59,7 @@ export const documentRoutes = new Hono<AppBindings>()
   .get("/:id", async (c) => {
     const doc = await ownedTextbook(c.env, c.get("user"), c.req.param("id"), { archived: true });
     const [tree, meta] = await Promise.all([chapterTree(c.env, doc.id), pageMeta(c.env, doc)]);
-    return c.json({ document: doc, chapters: tree, pageLabels: meta.labels, pageWords: meta.words, pageChars: meta.chars });
+    return c.json({ document: doc, chapters: tree, pageLabels: meta.labels, pageWords: meta.words, pageChars: meta.chars, pageParsers: meta.parsers, pageFlags: meta.flags });
   })
   .get("/:id/pages/:no", async (c) => {
     const doc = await ownedTextbook(c.env, c.get("user"), c.req.param("id"), { archived: true });

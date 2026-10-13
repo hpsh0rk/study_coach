@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import type { PageFlag } from "@kj/pdf-structure";
 import { now, orgs, users } from "../db/accounts.ts";
 
 /** Textbook tables: read and written only through apps/app/src/textbook (see .dependency-cruiser.cjs). */
@@ -37,6 +38,12 @@ export const pages = sqliteTable(
     /** Printed page label when it differs from the page index. */
     label: text("label"),
     words: integer("words").notNull().default(0),
+    /** Facts about the stored text (pdf-structure `pageFacts`), so reads that only need sizes never load the text. */
+    chars: integer("chars").notNull().default(0),
+    /** Where the text came from: `pdfjs/1` or `paste` (see pdf-structure PDFJS_PARSER / PASTE_PARSER). */
+    parser: text("parser").notNull().default("pdfjs/1"),
+    /** Kinds of suspicious text on the page (`instruction`, `link`, `email`, `file`); `[]` for pages stored before migration 0007. */
+    flags: text("flags", { mode: "json" }).$type<PageFlag[]>().notNull().default([]),
   },
   (t) => [primaryKey({ columns: [t.documentId, t.no] })],
 );

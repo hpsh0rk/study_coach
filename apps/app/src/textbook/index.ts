@@ -2,8 +2,8 @@
  * The textbook module's read interface: the only way lesson, generation and share code reaches a
  * textbook's pages, chapters and labels. It knows nothing about lessons (see .dependency-cruiser.cjs).
  */
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
-import { chapterRunsOf, isEmptyPage, MIN_PAGE_WORDS, missingRanges, normalizeRanges, pagesInRanges, rangesForChapters, sourceCut, type ChapterRun } from "@kj/pdf-structure";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, or } from "drizzle-orm";
+import { chapterRunsOf, isEmptyPage, MIN_PAGE_WORDS, missingRanges, PDFJS_PARSER, type PageFlag, normalizeRanges, pagesInRanges, rangesForChapters, sourceCut, type ChapterRun } from "@kj/pdf-structure";
 import type { ChapterNode, LessonScope, PageRange, PageText } from "@kj/schema";
 import { db } from "../db/index.ts";
 import type { Env, SessionUser } from "../env.ts";
@@ -60,18 +60,32 @@ export async function chapterTree(env: Env, documentId: string): Promise<Chapter
   return rows.map(({ documentId: _d, ...ch }) => ch);
 }
 
-/** Per-page sizes for the chapters step (no page text): index i is page i + 1. */
-export async function pageMeta(env: Env, doc: Pick<TextbookRow, "id" | "pageCount">): Promise<{ labels: Record<number, string>; words: number[]; chars: number[] }> {
-  const rows = await db(env).select({ no: pages.no, words: pages.words, chars: sql<number>`LENGTH(${pages.text})`, label: pages.label }).from(pages).where(eq(pages.documentId, doc.id));
-  const words = new Array<number>(doc.pageCount).fill(0);
-  const chars = new Array<number>(doc.pageCount).fill(0);
-  const labels: Record<number, string> = {};
+export interface PageMeta {
+  labels: Record<number, string>;
+  /** Index i is page i + 1. */
+  words: number[];
+  chars: number[];
+  /** Only pages whose text did not come from the PDF's text layer (e.g. `paste`). */
+  parsers: Record<number, string>;
+  /** Only pages with suspicious text. */
+  flags: Record<number, PageFlag[]>;
+}
+
+/** Per-page facts for the chapters step, without page text. */
+export async function pageMeta(env: Env, doc: Pick<TextbookRow, "id" | "pageCount">): Promise<PageMeta> {
+  const rows = await db(env)
+    .select({ no: pages.no, words: pages.words, chars: pages.chars, label: pages.label, parser: pages.parser, flags: pages.flags })
+    .from(pages)
+    .where(eq(pages.documentId, doc.id));
+  const meta: PageMeta = { labels: {}, words: new Array<number>(doc.pageCount).fill(0), chars: new Array<number>(doc.pageCount).fill(0), parsers: {}, flags: {} };
   for (const p of rows) {
-    words[p.no - 1] = p.words;
-    chars[p.no - 1] = p.chars;
-    if (p.label) labels[p.no] = p.label;
+    meta.words[p.no - 1] = p.words;
+    meta.chars[p.no - 1] = p.chars;
+    if (p.label) meta.labels[p.no] = p.label;
+    if (p.parser !== PDFJS_PARSER) meta.parsers[p.no] = p.parser;
+    if (p.flags.length) meta.flags[p.no] = p.flags;
   }
-  return { labels, words, chars };
+  return meta;
 }
 
 /** Printed page labels of a textbook (only pages whose label differs from the index). */
@@ -83,9 +97,9 @@ export async function pageLabels(env: Env, documentId: string): Promise<Record<n
   return Object.fromEntries(rows.map((r) => [r.no, r.label!]));
 }
 
-/** One page's text and printed label (also for deleted textbooks: lessons made from them still cite it). */
-export async function page(env: Env, documentId: string, no: number): Promise<{ no: number; text: string; label: string | null } | null> {
-  const row = (await db(env).select({ no: pages.no, text: pages.text, label: pages.label }).from(pages).where(and(eq(pages.documentId, documentId), eq(pages.no, no))).limit(1))[0];
+/** One page's text, printed label and where the text came from (also for deleted textbooks: lessons made from them still cite it). */
+export async function page(env: Env, documentId: string, no: number): Promise<{ no: number; text: string; label: string | null; parser: string } | null> {
+  const row = (await db(env).select({ no: pages.no, text: pages.text, label: pages.label, parser: pages.parser }).from(pages).where(and(eq(pages.documentId, documentId), eq(pages.no, no))).limit(1))[0];
   return row ?? null;
 }
 
@@ -118,11 +132,11 @@ export interface ScopeStats {
   unreadPages: number[];
 }
 
-/** One query over the selection's page sizes; texts are not loaded (LENGTH() predicts the source cut). */
+/** One query over the selection's page sizes; texts are not loaded (`pages.chars` predicts the source cut). */
 export async function scopeStats(env: Env, documentId: string, ranges: PageRange[], opts: { sourceBudget: number }): Promise<ScopeStats> {
   const inRanges = or(...ranges.map((r) => and(gte(pages.no, r.start), lte(pages.no, r.end))));
   const rows = await db(env)
-    .select({ no: pages.no, words: pages.words, chars: sql<number>`LENGTH(${pages.text})` })
+    .select({ no: pages.no, words: pages.words, chars: pages.chars })
     .from(pages)
     .where(and(eq(pages.documentId, documentId), inRanges))
     .orderBy(asc(pages.no));

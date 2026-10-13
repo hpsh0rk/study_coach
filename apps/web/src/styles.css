@@ -197,6 +197,9 @@ label {
   color: #92400e;
   margin-left: 6px;
 }
+.badge.note {
+  margin-left: 6px;
+}
 .share-row {
   display: grid;
   gap: 10px;

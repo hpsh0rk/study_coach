@@ -1,10 +1,27 @@
-import { countWords, type ChapterNode, type PageRange, type PageText, type TocEntry } from "@kj/schema";
+import { countWords, suspiciousSpans, type ChapterNode, type PageRange, type PageText, type SuspiciousSpan, type TocEntry } from "@kj/schema";
 
 export const MAX_TREE_DEPTH = 3;
 /** Pages with fewer words carry no usable text (scanned images, figure-only pages, blank pages). */
 export const MIN_PAGE_WORDS = 5;
 
 export const isEmptyPage = (words: number) => words < MIN_PAGE_WORDS;
+
+/** Where a page's text came from: `pdfjs/<version>` (the browser's text layer) or `paste` (typed in by the teacher for a scanned page). */
+export const PDFJS_PARSER = "pdfjs/1";
+export const PASTE_PARSER = "paste";
+
+export type PageFlag = SuspiciousSpan["kind"];
+
+/** What is stored about a page next to its text, computed by the server (never trusted from the browser). */
+export interface PageFacts {
+  words: number;
+  chars: number;
+  flags: PageFlag[];
+}
+
+export function pageFacts(text: string): PageFacts {
+  return { words: countWords(text), chars: text.length, flags: [...new Set(suspiciousSpans(text).map((s) => s.kind))].sort() };
+}
 
 interface FlatEntry {
   title: string;
