@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { createAiLayer, openSecret, sealSecret, type AiCallRecord, type AiConfig, type FetchLike } from "../src/index.ts";
+import { createAiLayer, openSecret, sealSecret, testVision, type AiCallRecord, type AiConfig, type FetchLike } from "../src/index.ts";
 
 const Out = z.object({ title: z.string().max(20), n: z.number() });
 
@@ -126,6 +126,31 @@ describe("vision calls", () => {
     await ai.callVision(vreq);
     expect(bodies[0]!.messages[0].content[0].image_url.url).toBe("/9j/4AAQSkZJRg==");
     expect(bodies[0]!.thinking).toEqual({ type: "disabled" });
+  });
+
+  it("a separate vision provider (own key) wins over the active provider's vision model, even with no text model", async () => {
+    const urls: string[] = [];
+    const keys: string[] = [];
+    const fetchImpl: FetchLike = async (url, init) => {
+      urls.push(String(url));
+      keys.push(String((init.headers as Record<string, string>).Authorization ?? (init.headers as Record<string, string>).authorization));
+      return okResponse("text");
+    };
+    const glm = { ...provider("glm"), kind: "glm" as const, apiKey: "glm-key-123456" };
+    await setup({ active: { provider: provider("ds"), model: "deepseek-chat", visionModel: "never" }, vision: { provider: glm, model: "glm-4.6v-flash" } }, fetchImpl).ai.callVision(vreq);
+    await setup({ active: null, vision: { provider: glm, model: "glm-4.6v-flash" } }, fetchImpl).ai.callVision(vreq);
+    expect(urls.every((u) => u.startsWith("https://glm.example/v1"))).toBe(true);
+    expect(keys).toEqual(["Bearer glm-key-123456", "Bearer glm-key-123456"]);
+  });
+
+  it("testVision sends one small image and no JSON mode", async () => {
+    const { bodies, fetchImpl } = capture();
+    expect(await testVision({ ...provider("q"), kind: "custom" }, "qwen-vl-ocr", fetchImpl)).toMatchObject({ ok: true });
+    expect(bodies[0]).toMatchObject({ model: "qwen-vl-ocr", max_tokens: 16 });
+    expect(bodies[0]!.messages[0].content[0].image_url.url).toMatch(/^data:image\/png;base64,/);
+    expect(bodies[0]!.response_format).toBeUndefined();
+    const failing: FetchLike = async () => new Response("bad key", { status: 401 });
+    expect(await testVision(provider("q"), "qwen-vl-ocr", failing)).toMatchObject({ ok: false });
   });
 
   it("is never stubbed: no vision model, no call", async () => {

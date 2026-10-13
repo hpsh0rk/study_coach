@@ -42,6 +42,14 @@ export type ProviderConfig = z.infer<typeof ProviderConfig>;
 export interface AiConfig {
   /** The one provider and model every call uses; null when none is configured. `visionModel`: the same provider's model for image input, if any. */
   active: { provider: ProviderConfig; model: string; visionModel?: string | null } | null;
+  /** A separate provider (own key) for image input, e.g. DeepSeek writes and GLM or Qwen reads pages; wins over `active.visionModel`. */
+  vision?: { provider: ProviderConfig; model: string } | null;
+}
+
+/** Where image input goes: the separate vision provider, else the active provider's vision model, else nowhere. */
+export function visionTarget(config: AiConfig): { provider: ProviderConfig; model: string } | null {
+  if (config.vision) return config.vision;
+  return config.active?.visionModel ? { provider: config.active.provider, model: config.active.visionModel } : null;
 }
 
 export interface AiConfigSource {

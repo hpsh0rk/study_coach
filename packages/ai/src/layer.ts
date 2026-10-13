@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { newId } from "@kj/schema";
-import { chatCompletion, ProviderError, type AiConfigSource, type ChatMessage, type FetchLike, type ProviderConfig } from "./providers.ts";
+import { chatCompletion, ProviderError, visionTarget, type AiConfigSource, type ChatMessage, type FetchLike, type ProviderConfig } from "./providers.ts";
 
 /** What a call is for; recorded with every call for metering. */
 export type CapabilityName = "outline.draft" | "slide.write" | "page.read";
@@ -175,9 +175,9 @@ export function createAiLayer(opts: AiLayerOptions) {
     const callId = newId("ai");
     const started = Date.now();
     const base = { id: callId, capability: req.capability, promptVersion: req.promptVersion, ctx: req.ctx };
-    const { active } = await opts.config.load();
-    if (!active?.visionModel) throw new ProviderError("no vision model configured; set one on the provider in /admin · 请在后台给模型配置“看图模型”", undefined, false);
-    const { provider, visionModel: model } = active;
+    const target = visionTarget(await opts.config.load());
+    if (!target) throw new ProviderError("no vision model configured; set one in /admin · 请在后台“AI 模型”里配置看图模型", undefined, false);
+    const { provider, model } = target;
     try {
       const res = await chatCompletion(
         provider,
@@ -210,6 +210,25 @@ export async function testProvider(provider: ProviderConfig, model: string, fetc
     const res = await chatCompletion(
       provider,
       { model, messages: [{ role: "user", content: 'Reply with the JSON object {"ok":true}' }], json: true, timeoutMs: 20_000, temperature: 0 },
+      fetchImpl,
+    );
+    return { ok: true, model: res.model, latencyMs: Date.now() - started };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+}
+
+/** A 32×32 white PNG: some vision APIs reject images under 10–28 px on a side. */
+const TEST_IMAGE =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAJklEQVR42u3NMQ0AAAwDoPo33arYsQQMkB6LQCAQCAQCgUAg+BIMi1X0ptsIcT0AAAAASUVORK5CYII=";
+
+/** The admin "测试连接" for a vision model: one tiny image, a few tokens back. Sends no page. */
+export async function testVision(provider: ProviderConfig, model: string, fetchImpl?: FetchLike): Promise<{ ok: true; model: string; latencyMs: number } | { ok: false; error: string }> {
+  const started = Date.now();
+  try {
+    const res = await chatCompletion(
+      provider,
+      { model, messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: TEST_IMAGE } }, { type: "text", text: "What colour is this image? One word." }] }], maxTokens: 16, timeoutMs: 30_000, temperature: 0 },
       fetchImpl,
     );
     return { ok: true, model: res.model, latencyMs: Date.now() - started };

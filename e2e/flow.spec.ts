@@ -781,13 +781,13 @@ test("外部解析服务 on (stubbed MinerU): unread formulas are re-read; after
 
 /** An OpenAI-compatible endpoint on this machine standing in for the provider's vision model: E2E never calls outside services. */
 async function mockVisionProvider(reply: string) {
-  const asked: { model: string; image: string }[] = [];
+  const asked: { model: string; image: string; auth: string | undefined }[] = [];
   const server = http.createServer((req, res) => {
     let body = "";
     req.on("data", (chunk) => (body += chunk));
     req.on("end", () => {
       const parsed = JSON.parse(body || "{}");
-      asked.push({ model: parsed.model, image: parsed.messages?.[0]?.content?.[0]?.image_url?.url ?? "" });
+      asked.push({ model: parsed.model, image: parsed.messages?.[0]?.content?.[0]?.image_url?.url ?? "", auth: req.headers.authorization });
       res.setHeader("content-type", "application/json");
       res.end(JSON.stringify({ model: parsed.model, choices: [{ message: { content: reply } }], usage: { prompt_tokens: 1200, completion_tokens: 300 } }));
     });
@@ -805,13 +805,14 @@ test("看图模型 fallback (local mock provider): with the external parser off,
     await setExternal(page, "off");
     await page.goto("/admin");
     await page.getByRole("button", { name: "AI 模型 Models" }).click();
-    await page.getByLabel("类型 Type").selectOption("custom");
-    await page.getByLabel("名称 Name").fill("Local vision mock");
-    await page.getByLabel("模型 Model", { exact: true }).fill("mock-chat");
-    await page.getByTestId("vision-model").fill("mock-vl");
-    await page.getByLabel("Base URL（OpenAI 兼容）").fill(provider.baseUrl);
-    await page.getByLabel("API Key").fill("sk-local-mock-key");
-    await page.getByRole("button", { name: /保存并启用/ }).click();
+    const form = page.getByTestId("add-model-form");
+    await form.getByLabel("类型 Type").selectOption("custom");
+    await form.getByLabel("名称 Name").fill("Local vision mock");
+    await form.getByLabel("模型 Model", { exact: true }).fill("mock-chat");
+    await form.getByTestId("vision-model").fill("mock-vl");
+    await form.getByLabel("Base URL（OpenAI 兼容）").fill(provider.baseUrl);
+    await form.getByLabel("API Key").fill("sk-local-mock-key");
+    await form.getByRole("button", { name: /保存并启用/ }).click();
     await expect(page.locator("tr", { hasText: "Local vision mock" })).toContainText("mock-vl");
 
     // A model with no known price counts as paid: unusable until paid parsing is allowed or the admin prices it.
@@ -864,7 +865,74 @@ test("看图模型 fallback (local mock provider): with the external parser off,
   } finally {
     await page.goto("/admin");
     await page.getByRole("button", { name: "AI 模型 Models" }).click();
+    await expect(page.getByTestId("add-model-form")).toBeVisible();
     const row = page.locator("tr", { hasText: "Local vision mock" });
+    if (await row.count()) {
+      await row.getByRole("button", { name: "删除" }).click();
+      await expect(row).toHaveCount(0);
+    }
+    await provider.close();
+  }
+});
+
+test("单独的看图模型 (local mock): with no vision model on the text side, a separate provider with its own key reads pages; 测试连接 sends one tiny image", async ({ page }) => {
+  const READ = "## 3.1 Equations of motion\n\n$$v = u + at$$\n\n$$s = ut + \\frac{1}{2}at^2$$";
+  const provider = await mockVisionProvider(READ);
+  try {
+    await login(page);
+    await setExternal(page, "off");
+    await page.goto("/admin");
+    await page.getByRole("button", { name: "AI 模型 Models" }).click();
+    const card = page.getByTestId("vision-provider-card");
+    await expect(card.getByTestId("vision-in-use")).toContainText("还没有看图模型");
+    await shot(page, "32-admin-vision-missing");
+
+    await card.getByTestId("vision-provider-kind").selectOption("custom");
+    await card.getByLabel("名称 Name").fill("Local qwen mock");
+    await card.getByTestId("vision-provider-model").fill("mock-qwen-vl");
+    await card.getByTestId("vision-provider-base-url").fill(provider.baseUrl);
+    await card.getByTestId("vision-provider-key").fill("sk-vision-only-key");
+    await card.getByTestId("vision-provider-save").click();
+    await expect(card.getByTestId("vision-in-use")).toContainText("Local qwen mock / mock-qwen-vl（单独的看图模型）");
+    await expect(card.getByTestId("vision-provider-row")).toContainText("sk-••••");
+    await expect(page.locator("body")).not.toContainText("sk-vision-only-key");
+
+    await card.getByTestId("vision-provider-test").click();
+    await expect(page.locator(".alert.success")).toContainText("测试连接：Local qwen mock / mock-qwen-vl 可用");
+    expect(provider.asked).toHaveLength(1);
+    expect(provider.asked[0]).toMatchObject({ model: "mock-qwen-vl", auth: "Bearer sk-vision-only-key" });
+    expect(provider.asked[0]!.image).toMatch(/^data:image\/png;base64,/);
+    await shot(page, "33-admin-vision-separate");
+    // Outlines and slides still come from the built-in templates: no text model is configured.
+    expect((await (await page.request.get("/api/auth/me")).json()).ai).toBe("stub");
+    expect(JSON.stringify(await (await page.request.get("/api/admin/ai")).json())).not.toContain("sk-vision-only-key");
+
+    await page.getByTestId("admin-tab-parsing").click();
+    await expect(page.getByTestId("vision-panel")).toContainText("mock-qwen-vl");
+    await page.getByTestId("vision-price").fill("0");
+    await page.getByTestId("vision-price-save").click();
+    await expect(page.getByTestId("vision-usable")).toHaveText(/可用/);
+
+    await page.goto("/new");
+    await page.getByTestId("pdf-input").setInputFiles(await kinematicsCopy("Kinematics separate vision"));
+    await page.waitForURL(/\/new\/[^/]+$/);
+    const docId = page.url().split("/").pop()!;
+    await expect(page.getByTestId("vision-done")).toHaveAttribute("data-read", "1");
+    expect(provider.asked).toHaveLength(2);
+    expect(provider.asked[1]).toMatchObject({ model: "mock-qwen-vl", auth: "Bearer sk-vision-only-key" });
+    expect((await (await page.request.get(`/api/documents/${docId}/pages/2`)).json()).parser).toBe("vlm:mock-qwen-vl/1");
+  } finally {
+    await page.goto("/admin");
+    await page.getByTestId("admin-tab-parsing").click();
+    await expect(page.getByTestId("parsing-state")).toBeVisible();
+    const reset = page.getByTestId("vision-price-reset");
+    if (await reset.count()) {
+      await reset.click();
+      await expect(reset).toHaveCount(0);
+    }
+    await page.getByRole("button", { name: "AI 模型 Models" }).click();
+    await expect(page.getByTestId("vision-provider-card")).toBeVisible();
+    const row = page.getByTestId("vision-provider-row");
     if (await row.count()) {
       await row.getByRole("button", { name: "删除" }).click();
       await expect(row).toHaveCount(0);

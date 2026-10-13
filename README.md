@@ -37,7 +37,7 @@ corepack pnpm dev              # 构建前端并启动，打开 http://127.0.0.1
 
 所有 Key 都在后台（`/admin`，管理员登录）填写，加密保存在服务器的 D1 里（用 `AI_CONFIG_KEY` 加密），不会发到浏览器：
 
-- **AI 模型**：一个启用的提供方（DeepSeek、GLM，或任何 OpenAI 兼容接口：Base URL + Key）加一个模型名，所有生成调用都用它。可选填“看图模型”（如 GLM 的 `glm-4.6v-flash`），用来识别扫描页的图片。
+- **AI 模型**：一个启用的提供方（DeepSeek、GLM，或任何 OpenAI 兼容接口：Base URL + Key）加一个模型名，所有生成调用都用它。可选填“看图模型”（如 GLM 的 `glm-4.6v-flash`），用来识别扫描页的图片。文字用的提供方没有看图模型时（如 DeepSeek），在同一页的“单独的看图模型”里另填一个，用它自己的 Key：智谱 `glm-4.6v-flash`（免费），或阿里百炼 `qwen-vl-ocr`（类型选 Custom，Base URL 填 `https://dashscope.aliyuncs.com/compatible-mode/v1`）。每个模型旁边都有“测试连接”（看图模型只发一张很小的白色图片，不发教材页面）。
 - **外部解析服务**（MinerU）：重新识别扫描页和公式页。开关默认是“跟随配置”：选中的接口配置好就开启（只有浏览器读不全的页会切成小 PDF 发出去，整本书不出浏览器）。三种接口：
   - 免费轻量接口：不需要 Token，装好就能用（每次最多 10 页、10 MB，按 IP 限频）。
   - 精准接口：填 MinerU Token（[mineru.net](https://mineru.net) 申请）。

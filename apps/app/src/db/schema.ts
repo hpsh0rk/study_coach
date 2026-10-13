@@ -126,7 +126,12 @@ export const aiProviders = sqliteTable("ai_providers", {
   model: text("model").notNull().default(""),
   /** The same provider's model for image input (reading pages the browser could not); "" when none. */
   visionModel: text("vision_model").notNull().default(""),
-  /** At most one provider per org is enabled: every model call uses it. */
+  /**
+   * `text`: writes outlines and slides (`model`; may carry `visionModel`). `vision`: a separate provider with its
+   * own key that only reads page images (`model` is the vision model), e.g. DeepSeek writes and GLM reads.
+   */
+  purpose: text("purpose", { enum: ["text", "vision"] }).notNull().default("text"),
+  /** At most one provider per org and purpose is enabled: every call of that kind uses it. */
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
   createdAt: integer("created_at").notNull().$defaultFn(now),
   updatedAt: integer("updated_at").notNull().$defaultFn(now),

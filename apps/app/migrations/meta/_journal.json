@@ -85,6 +85,13 @@
       "when": 1791863869810,
       "tag": "0011_textbook_selfhost",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1791865259487,
+      "tag": "0012_vision_provider",
+      "breakpoints": true
     }
   ]
 }
