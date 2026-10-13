@@ -2,7 +2,7 @@
  * The textbook module's read interface: the only way lesson, generation and share code reaches a
  * textbook's pages, chapters and labels. It knows nothing about lessons (see .dependency-cruiser.cjs).
  */
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, or } from "drizzle-orm";
+import { and, asc, between, desc, eq, gte, inArray, isNotNull, isNull, lte, or } from "drizzle-orm";
 import { chapterRunsOf, isEmptyPage, MIN_PAGE_WORDS, missingRanges, PDFJS_PARSER, type PageFlag, normalizeRanges, pagesInRanges, rangesForChapters, sourceCut, type ChapterRun } from "@kj/pdf-structure";
 import type { ChapterNode, LessonScope, PageRange, PageText } from "@kj/schema";
 import { db } from "../db/index.ts";
@@ -88,13 +88,22 @@ export async function pageMeta(env: Env, doc: Pick<TextbookRow, "id" | "pageCoun
   return meta;
 }
 
-/** Printed page labels of a textbook (only pages whose label differs from the index). */
-export async function pageLabels(env: Env, documentId: string): Promise<Record<number, string>> {
-  const rows = await db(env)
-    .select({ no: pages.no, label: pages.label })
-    .from(pages)
-    .where(and(eq(pages.documentId, documentId), isNotNull(pages.label)));
-  return Object.fromEntries(rows.map((r) => [r.no, r.label!]));
+/**
+ * Printed labels of only the given pages and ranges (pages whose label differs from the index): a
+ * shared deck carries the labels of the pages it cites, not of the whole book. Usually one query.
+ */
+export async function labelsFor(env: Env, documentId: string, want: { ranges?: PageRange[]; pages?: number[] }): Promise<Record<number, string>> {
+  const merged = normalizeRanges([...(want.ranges ?? []), ...(want.pages ?? []).map((no) => ({ start: no, end: no }))], Number.MAX_SAFE_INTEGER);
+  const out: Record<number, string> = {};
+  // Two bound parameters per range, under D1's 100 per query.
+  for (let i = 0; i < merged.length; i += 45) {
+    const rows = await db(env)
+      .select({ no: pages.no, label: pages.label })
+      .from(pages)
+      .where(and(eq(pages.documentId, documentId), isNotNull(pages.label), or(...merged.slice(i, i + 45).map((r) => between(pages.no, r.start, r.end)))));
+    for (const r of rows) out[r.no] = r.label!;
+  }
+  return out;
 }
 
 /** One page's text, printed label and where the text came from (also for deleted textbooks: lessons made from them still cite it). */
@@ -121,6 +130,17 @@ export async function pageTexts(env: Env, documentId: string, wanted: number[]):
 /** Text of a selection's pages that have any. */
 export async function selectionPages(env: Env, documentId: string, ranges: PageRange[]): Promise<PageText[]> {
   return pageTexts(env, documentId, pagesInRanges(ranges));
+}
+
+/**
+ * The pages one slide is written and checked from: its cited pages inside the selection, or the whole
+ * selection when it cites none (the 待核实 check then reads all of it). Mirrors generation's
+ * `sourcePagesFor` / `checkSourceText`, so a slide never loads the selection it does not use.
+ */
+export async function slideSourcePages(env: Env, documentId: string, cited: number[], ranges: PageRange[]): Promise<PageText[]> {
+  if (!cited.length) return selectionPages(env, documentId, ranges);
+  const inSelection = new Set(pagesInRanges(ranges));
+  return pageTexts(env, documentId, [...new Set(cited)].filter((no) => inSelection.has(no)).sort((a, b) => a - b));
 }
 
 export interface ScopeStats {
