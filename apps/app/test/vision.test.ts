@@ -134,7 +134,7 @@ describe("vision-model fallback (看图模型)", () => {
     expect(states.results.map((r) => r.state)).toEqual(["failed", "failed", "done"]);
   });
 
-  it("only pages that need it, only real images; a copy of the same file reuses the reading", async () => {
+  it("only pages that need it, only real images; another teacher's copy of the file is read on its own", async () => {
     const asked = provider(answer(READ));
     const id = await newBook("e".repeat(64));
     expect((await readImage(id, 1)).json.error.code).toBe("PAGES_NOT_ELIGIBLE");
@@ -144,8 +144,8 @@ describe("vision-model fallback (看图模型)", () => {
     expect((await readImage(id, 2)).status).toBe(409);
 
     const copy = await newBook("e".repeat(64), colleague);
-    expect((await readImage(copy, 2, IMAGE, colleague)).json).toMatchObject({ reused: true, page: { parser: "vlm:my-own-vl/1" } });
-    expect(asked).toHaveLength(1);
+    expect((await readImage(copy, 2, IMAGE, colleague)).json).toMatchObject({ reused: false, page: { parser: "vlm:my-own-vl/1" } });
+    expect(asked).toHaveLength(2);
   });
 
   it("the teacher's paste replaces what the model read; the pasted page is not sent again", async () => {

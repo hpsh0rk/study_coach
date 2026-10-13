@@ -83,7 +83,7 @@ export async function putPages(env: Env, doc: TextbookRow, batch: PageText[]): P
 
 /**
  * Text a teacher pasted for a page range, spread over the range's pages that need it: pages without text,
- * and must-fix pages (scanned, garbled, formula-lost) still holding pdf.js text. Other text is never overwritten.
+ * and must-fix pages (scanned, garbled, formula-lost) whichever parser read them. Readable pages are never overwritten.
  */
 export async function pastePages(env: Env, doc: TextbookRow, start: number, end: number, text: string): Promise<({ no: number; parser: string } & PageFacts)[]> {
   const d = db(env);
