@@ -8,7 +8,7 @@
     "build": "vite build --config vite.offline.config.ts && vite build",
     "build:offline": "vite build --config vite.offline.config.ts",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "echo 'web: covered by e2e'"
+    "test": "vitest run"
   },
   "dependencies": {
     "@fontsource/arimo": "^5.2.0",
@@ -30,6 +30,7 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5.0.0",
-    "vite": "^7.1.0"
+    "vite": "^7.1.0",
+    "vitest": "~4.1.11"
   }
 }

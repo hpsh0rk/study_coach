@@ -3,7 +3,8 @@ import { Link, useNavigate, useParams } from "react-router";
 import { Player, presenterSync, type PlayerSlide, type Position, type PresenterSync } from "@kj/player";
 import type { TeachingLanguage, ThemeId } from "@kj/schema";
 import { api } from "../api.ts";
-import { documentApi, lessonApi } from "../lessonApi.ts";
+import { lessonApi } from "../lessonApi.ts";
+import { documentApi } from "../textbook/api.ts";
 
 /**
  * The slide player. With `syncId` it joins the lesson's presenter channel: the audience window

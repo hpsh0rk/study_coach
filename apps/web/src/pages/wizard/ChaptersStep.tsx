@@ -4,7 +4,8 @@ import { countPages, isEmptyPage, labelOf, normalizeRanges, pageForLabel, pagesI
 import { OUTLINE_SOURCE_CHARS, scopeAdvice } from "@kj/pedagogy";
 import type { ChapterNode, PageRange } from "@kj/schema";
 import { ApiError } from "../../api.ts";
-import { documentApi, lessonApi, type DocumentRow, type LessonView, type UnitPreview } from "../../lessonApi.ts";
+import { lessonApi, type LessonView, type UnitPreview } from "../../lessonApi.ts";
+import { documentApi, type DocumentRow } from "../../textbook/api.ts";
 import { Stepper, StepIntro, type StepKey } from "./Stepper.tsx";
 
 /**

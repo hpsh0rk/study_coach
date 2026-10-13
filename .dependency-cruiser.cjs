@@ -97,6 +97,13 @@ module.exports = {
       to: { path: ["^apps/app/src/(store\\.ts|routes/|ai\\.ts)", "^packages/(generation|pedagogy|templates|widgets|ai|player|pptx)/"] },
     },
     {
+      name: "only-textbook-ingest-loads-pdfjs",
+      comment: "In the web app only the textbook ingest (apps/web/src/textbook) loads pdf.js.",
+      severity: "error",
+      from: { path: "^apps/web/src/", pathNot: "^apps/web/src/textbook/" },
+      to: { path: "^packages/pdf-structure/src/browser\\.ts$|node_modules/pdfjs-dist/|^pdfjs-dist" },
+    },
+    {
       name: "pedagogy-has-no-io",
       severity: "error",
       from: { path: "^packages/pedagogy/" },
