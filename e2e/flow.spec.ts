@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
@@ -760,4 +761,97 @@ test("外部解析服务 on (stubbed MinerU): unread formulas are re-read; after
   await page.getByTestId("admin-tab-parsing").click();
   await page.getByTestId("parsing-enabled").click();
   await expect(page.getByTestId("parsing-state")).toHaveText(/已关闭/);
+});
+
+/** An OpenAI-compatible endpoint on this machine standing in for the provider's vision model: E2E never calls outside services. */
+async function mockVisionProvider(reply: string) {
+  const asked: { model: string; image: string }[] = [];
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      const parsed = JSON.parse(body || "{}");
+      asked.push({ model: parsed.model, image: parsed.messages?.[0]?.content?.[0]?.image_url?.url ?? "" });
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ model: parsed.model, choices: [{ message: { content: reply } }], usage: { prompt_tokens: 1200, completion_tokens: 300 } }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as { port: number };
+  return { baseUrl: `http://127.0.0.1:${port}/v1`, asked, close: () => new Promise((resolve) => server.close(resolve)) };
+}
+
+test("看图模型 fallback (local mock provider): with the external parser off, unread pages are read from their images; the teacher can still correct them", async ({ page }) => {
+  const READ = "## 3.1 Equations of motion\n\n$$v = u + at$$\n\n$$s = ut + \\frac{1}{2}at^2$$\n\nA car starts at $2\\ \\mathrm{m/s}$ and reaches $20\\ \\mathrm{m/s}$.";
+  const provider = await mockVisionProvider("```markdown\n" + READ + "\n```");
+  try {
+    await login(page);
+    await page.goto("/admin");
+    await page.getByRole("button", { name: "AI 模型 Models" }).click();
+    await page.getByLabel("类型 Type").selectOption("custom");
+    await page.getByLabel("名称 Name").fill("Local vision mock");
+    await page.getByLabel("模型 Model", { exact: true }).fill("mock-chat");
+    await page.getByTestId("vision-model").fill("mock-vl");
+    await page.getByLabel("Base URL（OpenAI 兼容）").fill(provider.baseUrl);
+    await page.getByLabel("API Key").fill("sk-local-mock-key");
+    await page.getByRole("button", { name: /保存并启用/ }).click();
+    await expect(page.locator("tr", { hasText: "Local vision mock" })).toContainText("mock-vl");
+
+    // A model with no known price counts as paid: unusable until paid parsing is allowed or the admin prices it.
+    await page.getByTestId("admin-tab-parsing").click();
+    await expect(page.getByTestId("parsing-state")).toHaveText(/已关闭/);
+    await expect(page.getByTestId("vision-panel")).toContainText("mock-vl");
+    await expect(page.getByTestId("vision-usable")).toHaveText(/未开启/);
+    await page.goto("/new");
+    await page.getByTestId("pdf-input").setInputFiles(await kinematicsCopy("Kinematics vision paid"));
+    await page.waitForURL(/\/new\/[^/]+$/);
+    await expect(page.getByTestId("external-off")).toBeVisible();
+    await expect(page.getByTestId("vision-run")).toHaveCount(0);
+    await expect(page.getByTestId("vision-progress")).toHaveCount(0);
+
+    await page.goto("/admin");
+    await page.getByTestId("admin-tab-parsing").click();
+    await page.getByTestId("vision-price").fill("0");
+    await page.getByTestId("vision-price-save").click();
+    await expect(page.getByTestId("vision-usable")).toHaveText(/可用/);
+    await shot(page, "27-admin-vision");
+
+    // Right after an upload, must-fix pages go to the vision model one by one.
+    await page.goto("/new");
+    await page.getByTestId("pdf-input").setInputFiles(await kinematicsCopy("Kinematics vision"));
+    await page.waitForURL(/\/new\/[^/]+$/);
+    const docId = page.url().split("/").pop()!;
+    await expect(page.getByTestId("vision-done")).toHaveAttribute("data-read", "1");
+    await expect(page.getByTestId("vision-done")).toContainText("核对");
+    await expect(page.getByTestId("must-fix-summary")).toHaveCount(0);
+    expect(provider.asked).toHaveLength(1);
+    expect(provider.asked[0]!.model).toBe("mock-vl");
+    expect(provider.asked[0]!.image).toMatch(/^data:image\/jpeg;base64,\/9j\//);
+    const section = page.getByRole("treeitem").filter({ hasText: "Equations of motion" });
+    await expect(section.getByTestId("chapter-vision")).toHaveText("1 页看图识别");
+    await expect(section.getByTestId("chapter-lossy")).toHaveCount(0);
+    const read = await (await page.request.get(`/api/documents/${docId}/pages/2`)).json();
+    expect(read).toMatchObject({ parser: "vlm:mock-vl/1" });
+    expect(read.text).toContain("$$v = u + at$$");
+    expect(read.text).not.toContain("```");
+
+    await section.locator("input[type=checkbox]").check();
+    await expect(page.getByTestId("vision-pages")).toContainText("看图模型");
+    await shot(page, "28-vision-read");
+    await page.getByTestId("paste-open-vision").click();
+    await page.getByTestId("paste-text").fill("3.1 Equations of motion: v = u + a t; s = u t + a t² / 2. A car accelerating from 2 m/s reaches 20 m/s after nine seconds.");
+    await page.getByTestId("paste-save").click();
+    await expect(page.getByTestId("vision-pages")).toHaveCount(0);
+    await expect(section.getByTestId("chapter-pasted")).toHaveText("1 页老师粘贴");
+    expect((await (await page.request.get(`/api/documents/${docId}/pages/2`)).json()).parser).toBe("paste");
+  } finally {
+    await page.goto("/admin");
+    await page.getByRole("button", { name: "AI 模型 Models" }).click();
+    const row = page.locator("tr", { hasText: "Local vision mock" });
+    if (await row.count()) {
+      await row.getByRole("button", { name: "删除" }).click();
+      await expect(row).toHaveCount(0);
+    }
+    await provider.close();
+  }
 });

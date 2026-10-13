@@ -13,9 +13,9 @@ interface UserRow {
 }
 type Kind = "deepseek" | "glm" | "custom";
 interface AiView {
-  presets: Record<Kind, { label: string; baseUrl: string; models: string[]; docs: string }>;
+  presets: Record<Kind, { label: string; baseUrl: string; models: string[]; visionModels: string[]; docs: string }>;
   stubFallback: boolean;
-  providers: { id: string; kind: Kind; name: string; baseUrl: string; apiKeyHint: string; model: string; enabled: boolean }[];
+  providers: { id: string; kind: Kind; name: string; baseUrl: string; apiKeyHint: string; model: string; visionModel: string; enabled: boolean }[];
   recentCalls: { id: string; capability: string; providerId: string; model: string; status: string; latencyMs: number; inputTokens: number; outputTokens: number; createdAt: number; error: string | null }[];
 }
 
@@ -187,7 +187,14 @@ function AiPanel() {
   const [view, setView] = useState<AiView | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [form, setForm] = useState<{ kind: Kind; name: string; baseUrl: string; apiKey: string; model: string }>({ kind: "deepseek", name: "DeepSeek", baseUrl: "", apiKey: "", model: "deepseek-chat" });
+  const [form, setForm] = useState<{ kind: Kind; name: string; baseUrl: string; apiKey: string; model: string; visionModel: string }>({
+    kind: "deepseek",
+    name: "DeepSeek",
+    baseUrl: "",
+    apiKey: "",
+    model: "deepseek-chat",
+    visionModel: "",
+  });
   const load = useCallback(async () => setView(await api<AiView>("/api/admin/ai")), []);
   useEffect(() => {
     void load();
@@ -224,7 +231,9 @@ function AiPanel() {
         onSubmit={(e) => {
           e.preventDefault();
           void run(async () => {
-            await api("/api/admin/ai/providers", { body: { kind: form.kind, name: form.name, apiKey: form.apiKey, model: form.model, ...(form.baseUrl ? { baseUrl: form.baseUrl } : {}) } });
+            await api("/api/admin/ai/providers", {
+              body: { kind: form.kind, name: form.name, apiKey: form.apiKey, model: form.model, visionModel: form.visionModel, ...(form.baseUrl ? { baseUrl: form.baseUrl } : {}) },
+            });
             setForm({ ...form, apiKey: "" });
             setNotice("已保存并启用，API Key 已加密存储 · Saved and enabled; key encrypted at rest");
           });
@@ -238,7 +247,7 @@ function AiPanel() {
             value={form.kind}
             onChange={(e) => {
               const kind = e.target.value as Kind;
-              setForm({ ...form, kind, name: view.presets[kind].label.split(" ")[0] ?? "", model: view.presets[kind].models[0] ?? "" });
+              setForm({ ...form, kind, name: view.presets[kind].label.split(" ")[0] ?? "", model: view.presets[kind].models[0] ?? "", visionModel: "" });
             }}
           >
             {(Object.keys(view.presets) as Kind[]).map((k) => (
@@ -266,6 +275,16 @@ function AiPanel() {
           <input value={form.baseUrl} onChange={(e) => setForm({ ...form, baseUrl: e.target.value })} placeholder={preset.baseUrl || "https://your-endpoint/v1"} required={form.kind === "custom"} />
         </label>
         <label className="span2">
+          看图模型（可选）Vision model
+          <input list="vision-model-suggestions" value={form.visionModel} onChange={(e) => setForm({ ...form, visionModel: e.target.value })} placeholder={preset.visionModels[0] ?? "—"} data-testid="vision-model" />
+          <datalist id="vision-model-suggestions">
+            {preset.visionModels.map((m) => (
+              <option key={m} value={m} />
+            ))}
+          </datalist>
+          <span className="muted small">浏览器读不出的扫描页、公式页，可以把页面图片交给它识别；同一个提供方、同一个 Key。· Reads page images the browser could not.</span>
+        </label>
+        <label className="span2">
           API Key
           <input type="password" value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} required autoComplete="off" />
         </label>
@@ -288,6 +307,11 @@ function AiPanel() {
                   </td>
                   <td>
                     <code>{p.model || "—"}</code>
+                    {p.visionModel && (
+                      <div className="muted small">
+                        看图 vision: <code>{p.visionModel}</code>
+                      </div>
+                    )}
                   </td>
                   <td className="muted small">{p.baseUrl}</td>
                   <td>
@@ -316,6 +340,17 @@ function AiPanel() {
                       }
                     >
                       改模型
+                    </button>
+                    <button
+                      className="btn ghost small"
+                      onClick={() =>
+                        run(async () => {
+                          const visionModel = prompt("看图模型（留空表示不用）Vision model (empty: none)", p.visionModel);
+                          if (visionModel !== null) await api(`/api/admin/ai/providers/${p.id}`, { method: "PATCH", body: { visionModel: visionModel.trim() } });
+                        })
+                      }
+                    >
+                      改看图模型
                     </button>
                     <button className="btn ghost small" onClick={() => run(async () => void (await api(`/api/admin/ai/providers/${p.id}`, { method: "PATCH", body: { enabled: !p.enabled } })))}>
                       {p.enabled ? "停用" : "改用这个"}
@@ -366,14 +401,23 @@ interface ParsingView {
   tokenHint: string | null;
   envToken: boolean;
   stub: boolean;
-  limits: { bookAutoPages: number; userDayPages: number; siteDayPages: number };
-  today: { site: number; org: number };
+  limits: { bookAutoPages: number; userDayPages: number; siteDayPages: number; bookCostMicroYuan: number };
+  today: { site: number; org: number; monthCostMicroYuan: number };
+  paidEnabled: boolean;
+  monthlyBudgetMicroYuan: number;
+  vision: { model: string; microYuanPerPage: number; source: "admin" | "list" | "unknown" } | null;
 }
+
+/** Micro-yuan as 元 for display. */
+const yuan = (micro: number) => `${(micro / 1_000_000).toFixed(micro % 10_000 ? 4 : 2)} 元`;
+const PRICE_SOURCE = { admin: "管理员填写", list: "列表价", unknown: "未知模型，按最贵的列表价计" } as const;
 
 /** "外部解析服务": whether pages the browser could not read may be sent to MinerU. Off by default. */
 function ParsingPanel() {
   const [view, setView] = useState<ParsingView | null>(null);
   const [token, setToken] = useState("");
+  const [price, setPrice] = useState("");
+  const [budget, setBudget] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const load = useCallback(async () => setView(await api<ParsingView>("/api/admin/parsing")), []);
@@ -393,6 +437,7 @@ function ParsingPanel() {
   };
   if (!view) return <p className="muted">Loading…</p>;
   const noToken = view.mineruMode === "token" && !view.tokenHint && !view.envToken;
+  const visionUsable = !!view.vision && (view.vision.microYuanPerPage === 0 || view.paidEnabled);
 
   return (
     <>
@@ -406,7 +451,7 @@ function ParsingPanel() {
           </span>
         </div>
         <p className="small">
-          浏览器读 PDF 时，扫描页、画成图形的公式和乱码字体读不出来。开启后，这些页会被单独切成一个小 PDF，经本站服务器转发给 <b>MinerU</b>（上海人工智能实验室 OpenDataLab 的在线服务）重新识别，识别出的文字存回这本教材；整本书不会发出去。老师也可以对表格、公式多的章节点“精修本章”。关闭时，老师可以把这些页的文字粘贴进来。
+          浏览器读 PDF 时，扫描页、画成图形的公式和乱码字体读不出来。开启后，这些页会被单独切成一个小 PDF，经本站服务器转发给 <b>MinerU</b>（上海人工智能实验室 OpenDataLab 的在线服务）重新识别，识别出的文字存回这本教材；整本书不会发出去。老师也可以对表格、公式多的章节点“精修本章”。关闭时，这些页交给下面的看图模型（如果配置了），再不行由老师粘贴文字。
         </p>
         <p className="muted small">
           When on, pages the browser could not read are cut into a small PDF and sent through this server to MinerU (OpenDataLab); the rest of the book never leaves the browser. Off by default.
@@ -453,7 +498,79 @@ function ParsingPanel() {
         {noToken && <div className="alert warn">精准接口需要 Token，填好之前老师用不了外部解析服务 · The precise API needs a token</div>}
         {view.stub && <div className="alert info">开发 / 测试环境：外部解析服务用录制好的 MinerU 返回结果，不会真正发出页面 · Stubbed (recorded response)</div>}
         <p className="muted small" data-testid="parsing-usage">
-          今天已送出 {view.today.org} 页（全站 {view.today.site} / {view.limits.siteDayPages}）· 每位老师每天最多 {view.limits.userDayPages} 页 · 每本书自动送出最多 {view.limits.bookAutoPages} 页
+          今天已送出 {view.today.org} 页（MinerU 全站 {view.today.site} / {view.limits.siteDayPages}）· 每位老师每天最多 {view.limits.userDayPages} 页 · 每本书自动送出最多 {view.limits.bookAutoPages} 页
+        </p>
+      </div>
+
+      <div className="card stack" data-testid="vision-panel">
+        <div className="row between">
+          <h2>看图模型兜底 Vision fallback</h2>
+          {view.vision && (
+            <span className={`badge ${visionUsable ? "note" : "warn"}`} data-testid="vision-usable">
+              {visionUsable ? "可用 Usable" : "要付费，未开启 Paid · off"}
+            </span>
+          )}
+        </div>
+        <p className="small">
+          外部解析服务关着、或者它没读出来的页，可以由“AI 模型”里配置的看图模型识别：浏览器把那一页画成图片，经本站服务器发给模型。读出的文字会标上“看图识别”，提醒老师核对公式和数字。没有配置看图模型时，老师粘贴文字补上。
+        </p>
+        {view.vision ? (
+          <>
+            <p className="small">
+              看图模型 <code>{view.vision.model}</code> · 每千页约 <b>{yuan(view.vision.microYuanPerPage * 1000)}</b>（{PRICE_SOURCE[view.vision.source]}）
+            </p>
+            <form
+              className="row wrap"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void save({ visionPriceMicroYuan: Math.round(Number(price) * 1000) }, "价格已保存 · Price saved").then(() => setPrice(""));
+              }}
+            >
+              <label className="check-row">
+                <span>每千页价格（元）Price per 1000 pages</span>
+                <input type="number" min="0" step="0.01" value={price} onChange={(e) => setPrice(e.target.value)} placeholder={String(view.vision.microYuanPerPage / 1000)} data-testid="vision-price" />
+              </label>
+              <button className="btn small" disabled={price.trim() === "" || !(Number(price) >= 0)} data-testid="vision-price-save">
+                保存价格
+              </button>
+              {view.vision.source === "admin" && (
+                <button type="button" className="btn small ghost" onClick={() => void save({ visionPriceMicroYuan: null }, "已恢复列表价 · Back to the list price")}>
+                  恢复列表价
+                </button>
+              )}
+            </form>
+          </>
+        ) : (
+          <div className="alert info" data-testid="vision-none">
+            还没有配置看图模型：在“AI 模型”里给启用的模型填写“看图模型”，例如智谱 <code>glm-4.6v-flash</code>（免费）或百炼 <code>qwen-vl-ocr</code>（约 0.9 元 / 千页）。· No vision model configured.
+          </div>
+        )}
+        <label className="check-row">
+          <input
+            type="checkbox"
+            checked={view.paidEnabled}
+            onChange={(e) => void save({ paidEnabled: e.target.checked }, e.target.checked ? "已允许付费兜底 · Paid parsing allowed" : "已关闭付费兜底 · Paid parsing off")}
+            data-testid="paid-enabled"
+          />
+          <span>允许付费兜底：要花钱的解析（每页价格大于 0）只在这里打开后才会用，并受下面的月度预算和每本书 {yuan(view.limits.bookCostMicroYuan)} 的上限约束 · Allow paid parsing</span>
+        </label>
+        <form
+          className="row wrap"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void save({ monthlyBudgetMicroYuan: Math.round(Number(budget) * 1_000_000) }, "月度预算已保存 · Monthly budget saved").then(() => setBudget(""));
+          }}
+        >
+          <label className="check-row">
+            <span>每月预算（元）Monthly budget</span>
+            <input type="number" min="0" step="1" value={budget} onChange={(e) => setBudget(e.target.value)} placeholder={String(view.monthlyBudgetMicroYuan / 1_000_000)} data-testid="monthly-budget" />
+          </label>
+          <button className="btn small" disabled={budget.trim() === "" || !(Number(budget) >= 0)} data-testid="monthly-budget-save">
+            保存预算
+          </button>
+        </form>
+        <p className="muted small" data-testid="parsing-month">
+          本月已花 {yuan(view.today.monthCostMicroYuan)} / 预算 {yuan(view.monthlyBudgetMicroYuan)}
         </p>
       </div>
     </>

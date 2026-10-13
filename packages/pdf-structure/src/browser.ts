@@ -231,6 +231,32 @@ export function probePage(view: number[], items: TextItem[], text: string, ops: 
   return probe;
 }
 
+/**
+ * Renders pages of one PDF to JPEG data URLs for a vision model: about 1600 px on the long side at quality 0.8
+ * (200–400 KB a page). The document is loaded once for all pages; `close` frees it.
+ */
+export function pageRenderer(file: Blob, opts: { assets?: string; maxSide?: number; quality?: number } = {}) {
+  let loading: ReturnType<typeof getDocument> | null = null;
+  const doc = async () => (loading ??= getDocument({ data: new Uint8Array(await file.arrayBuffer()), ...pdfjsAssetOptions(opts.assets) })).promise;
+  return {
+    async render(no: number): Promise<string> {
+      const page = await (await doc()).getPage(no);
+      const base = page.getViewport({ scale: 1 });
+      const viewport = page.getViewport({ scale: (opts.maxSide ?? 1600) / Math.max(base.width, base.height) });
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(viewport.width);
+      canvas.height = Math.round(viewport.height);
+      await page.render({ canvas, viewport, background: "#ffffff" }).promise;
+      page.cleanup();
+      return canvas.toDataURL("image/jpeg", opts.quality ?? 0.8);
+    },
+    async close(): Promise<void> {
+      await loading?.destroy();
+      loading = null;
+    },
+  };
+}
+
 export interface ParseOptions {
   onProgress?: (done: number, total: number) => void;
   /** Base URL (or, under Node, directory) of the pdf.js CMaps and standard fonts. */

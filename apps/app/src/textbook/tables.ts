@@ -76,14 +76,20 @@ export const parserSettings = sqliteTable("parser_settings", {
   /** Sealed with AI_CONFIG_KEY like ai_providers.api_key_sealed; falls back to the MINERU_API_TOKEN secret. */
   mineruTokenSealed: text("mineru_token_sealed"),
   mineruTokenHint: text("mineru_token_hint"),
+  /** "允许付费兜底": parsers that cost money (cost per page > 0) run only when on, and only within the monthly budget. */
+  paidEnabled: integer("paid_enabled", { mode: "boolean" }).notNull().default(false),
+  /** Per organisation and calendar month (China), in micro-yuan (1 元 = 1,000,000). */
+  monthlyBudgetMicroYuan: integer("monthly_budget_micro_yuan").notNull().default(0),
+  /** Price of the vision model per page in micro-yuan, when the admin entered one; else the known list price (or the dearest one for unknown models). */
+  visionPriceMicroYuan: integer("vision_price_micro_yuan"),
   updatedAt: integer("updated_at").notNull().$defaultFn(now),
   updatedBy: text("updated_by").references(() => users.id),
 });
 
 /**
- * One row per sub-PDF sent to an external parser: the job's state, and the usage the guardrails count
- * (pages per book, per teacher per day, site-wide per day; cost). Pages reused from a copy of the same
- * file are not sent and not counted.
+ * One row per sub-PDF sent to an external parser, or per page image sent to the vision model: the job's state,
+ * and the usage the guardrails count (pages per book, per teacher per day, MinerU pages site-wide per day; cost).
+ * Pages reused from a copy of the same file are not sent and not counted.
  */
 export const parseUsage = sqliteTable(
   "parse_usage",
@@ -97,7 +103,8 @@ export const parseUsage = sqliteTable(
     reason: text("reason", { enum: ["auto", "refine"] }).notNull(),
     pages: text("pages", { mode: "json" }).$type<number[]>().notNull(),
     pageCount: integer("page_count").notNull(),
-    costFen: integer("cost_fen").notNull().default(0),
+    /** Micro-yuan: a vision page can cost less than one fen (qwen-vl-ocr ≈ 900). */
+    costMicroYuan: integer("cost_micro_yuan").notNull().default(0),
     state: text("state", { enum: ["submitted", "uploaded", "parsed", "done", "failed"] }).notNull().default("submitted"),
     taskId: text("task_id").notNull(),
     /** The parser's signed upload URL: the Worker streams the sub-PDF to it; never sent to the browser. */

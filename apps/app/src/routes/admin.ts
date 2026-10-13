@@ -9,13 +9,16 @@ import { HttpError, parseJson } from "../http.ts";
 import { generatePassword, hashPassword, passwordProblem } from "../auth/password.ts";
 import { destroyUserSessions, requireAdmin, requireUser } from "../auth/session.ts";
 import { db } from "../db/index.ts";
-import { effectiveMode, PARSE_LIMITS, parserSettingsOf, parseUsageToday, saveParserSettings } from "../textbook/parsers/settings.ts";
+import { effectiveMode, PARSE_LIMITS, parserSettingsOf, parseUsageToday, saveParserSettings, visionPriceOf } from "../textbook/parsers/settings.ts";
 
 const Username = z
   .string()
   .trim()
   .toLowerCase()
   .regex(/^[a-z0-9][a-z0-9._-]{2,31}$/, "3-32 chars: letters, digits, . _ -");
+
+/** "" removes it. */
+const VisionModel = z.string().trim().max(100);
 
 function publicUser(u: typeof users.$inferSelect) {
   return { id: u.id, username: u.username, displayName: u.displayName, role: u.role, mustChangePassword: u.mustChangePassword, disabled: !!u.disabledAt, createdAt: u.createdAt };
@@ -99,14 +102,22 @@ export const adminRoutes = new Hono<AppBindings>()
     return c.json({
       presets: PROVIDER_PRESETS,
       stubFallback: c.env.AI_ALLOW_STUB === "true",
-      providers: providers.map((p) => ({ id: p.id, kind: p.kind, name: p.name, baseUrl: p.baseUrl, apiKeyHint: p.apiKeyHint, model: p.model, enabled: p.enabled })),
+      providers: providers.map((p) => ({ id: p.id, kind: p.kind, name: p.name, baseUrl: p.baseUrl, apiKeyHint: p.apiKeyHint, model: p.model, visionModel: p.visionModel, enabled: p.enabled })),
       recentCalls: recent,
     });
   })
   .post("/ai/providers", async (c) => {
     const body = await parseJson(
       c,
-      z.object({ kind: ProviderKind, name: z.string().trim().min(1).max(64), baseUrl: z.string().url().optional(), apiKey: z.string().trim().min(8), model: z.string().trim().min(1).max(100), enabled: z.boolean().default(true) }),
+      z.object({
+        kind: ProviderKind,
+        name: z.string().trim().min(1).max(64),
+        baseUrl: z.string().url().optional(),
+        apiKey: z.string().trim().min(8),
+        model: z.string().trim().min(1).max(100),
+        visionModel: VisionModel.default(""),
+        enabled: z.boolean().default(true),
+      }),
     );
     const baseUrl = body.baseUrl || PROVIDER_PRESETS[body.kind].baseUrl;
     if (!baseUrl) throw new HttpError(400, "VALIDATION", "Custom providers need a base URL · 自定义提供方需要填写 Base URL");
@@ -114,7 +125,7 @@ export const adminRoutes = new Hono<AppBindings>()
     const id = newId("aip");
     await db(c.env)
       .insert(aiProviders)
-      .values({ id, orgId: me.orgId, kind: body.kind, name: body.name, baseUrl, model: body.model, apiKeySealed: await sealSecret(body.apiKey, secret(c.env, "AI_CONFIG_KEY")), apiKeyHint: maskSecret(body.apiKey), enabled: body.enabled });
+      .values({ id, orgId: me.orgId, kind: body.kind, name: body.name, baseUrl, model: body.model, visionModel: body.visionModel, apiKeySealed: await sealSecret(body.apiKey, secret(c.env, "AI_CONFIG_KEY")), apiKeyHint: maskSecret(body.apiKey), enabled: body.enabled });
     if (body.enabled) await disableOthers(c.env, me.orgId, id);
     await db(c.env).insert(auditLog).values({ orgId: me.orgId, actorId: me.id, action: "admin.ai_provider_created", target: id });
     return c.json({ id }, 201);
@@ -122,7 +133,14 @@ export const adminRoutes = new Hono<AppBindings>()
   .patch("/ai/providers/:id", async (c) => {
     const body = await parseJson(
       c,
-      z.object({ name: z.string().trim().min(1).max(64).optional(), baseUrl: z.string().url().optional(), apiKey: z.string().trim().min(8).optional(), model: z.string().trim().min(1).max(100).optional(), enabled: z.boolean().optional() }),
+      z.object({
+        name: z.string().trim().min(1).max(64).optional(),
+        baseUrl: z.string().url().optional(),
+        apiKey: z.string().trim().min(8).optional(),
+        model: z.string().trim().min(1).max(100).optional(),
+        visionModel: VisionModel.optional(),
+        enabled: z.boolean().optional(),
+      }),
     );
     const me = c.get("user");
     const id = c.req.param("id");
@@ -130,6 +148,7 @@ export const adminRoutes = new Hono<AppBindings>()
     if (body.name) patch.name = body.name;
     if (body.baseUrl) patch.baseUrl = body.baseUrl;
     if (body.model) patch.model = body.model;
+    if (body.visionModel !== undefined) patch.visionModel = body.visionModel;
     if (body.enabled !== undefined) patch.enabled = body.enabled;
     if (body.apiKey) {
       patch.apiKeySealed = await sealSecret(body.apiKey, secret(c.env, "AI_CONFIG_KEY"));
@@ -160,7 +179,12 @@ export const adminRoutes = new Hono<AppBindings>()
    */
   .get("/parsing", async (c) => {
     const orgId = c.get("user").orgId;
-    const [settings, today] = await Promise.all([parserSettingsOf(c.env, orgId), parseUsageToday(c.env, orgId)]);
+    const [settings, today, provider] = await Promise.all([
+      parserSettingsOf(c.env, orgId),
+      parseUsageToday(c.env, orgId),
+      db(c.env).select({ visionModel: aiProviders.visionModel }).from(aiProviders).where(and(eq(aiProviders.orgId, orgId), eq(aiProviders.enabled, true))).limit(1),
+    ]);
+    const visionModel = provider[0]?.visionModel || null;
     return c.json({
       externalEnabled: settings.externalEnabled,
       mineruMode: settings.mineruMode,
@@ -169,14 +193,31 @@ export const adminRoutes = new Hono<AppBindings>()
       stub: effectiveMode(c.env, settings) === "stub",
       limits: PARSE_LIMITS,
       today,
+      paidEnabled: settings.paidEnabled,
+      monthlyBudgetMicroYuan: settings.monthlyBudgetMicroYuan,
+      vision: visionModel ? { model: visionModel, ...visionPriceOf(visionModel, settings) } : null,
     });
   })
+  /** Money in micro-yuan (1 元 = 1,000,000). */
   .put("/parsing", async (c) => {
-    const body = await parseJson(c, z.object({ externalEnabled: z.boolean().optional(), mineruMode: z.enum(["agent", "token"]).optional(), token: z.string().trim().min(8).max(4000).nullable().optional() }));
+    const body = await parseJson(
+      c,
+      z.object({
+        externalEnabled: z.boolean().optional(),
+        mineruMode: z.enum(["agent", "token"]).optional(),
+        token: z.string().trim().min(8).max(4000).nullable().optional(),
+        paidEnabled: z.boolean().optional(),
+        monthlyBudgetMicroYuan: z.number().int().min(0).max(10_000 * 1_000_000).optional(),
+        visionPriceMicroYuan: z.number().int().min(0).max(1_000_000).nullable().optional(),
+      }),
+    );
     const me = c.get("user");
-    const token = body.token === undefined ? undefined : body.token === null ? null : { sealed: await sealSecret(body.token, secret(c.env, "AI_CONFIG_KEY")), hint: maskSecret(body.token) };
-    await saveParserSettings(c.env, me, { externalEnabled: body.externalEnabled, mineruMode: body.mineruMode, token });
-    await db(c.env).insert(auditLog).values({ orgId: me.orgId, actorId: me.id, action: "admin.parser_settings", target: body.externalEnabled === undefined ? "settings" : body.externalEnabled ? "external_on" : "external_off" });
+    const { token: plain, ...rest } = body;
+    const token = plain === undefined ? undefined : plain === null ? null : { sealed: await sealSecret(plain, secret(c.env, "AI_CONFIG_KEY")), hint: maskSecret(plain) };
+    await saveParserSettings(c.env, me, { ...rest, token });
+    const target =
+      body.externalEnabled !== undefined ? (body.externalEnabled ? "external_on" : "external_off") : body.paidEnabled !== undefined ? (body.paidEnabled ? "paid_on" : "paid_off") : "settings";
+    await db(c.env).insert(auditLog).values({ orgId: me.orgId, actorId: me.id, action: "admin.parser_settings", target });
     return c.json({ ok: true });
   });
 

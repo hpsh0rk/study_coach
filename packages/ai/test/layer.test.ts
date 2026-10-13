@@ -99,6 +99,43 @@ describe("AI layer", () => {
   });
 });
 
+describe("vision calls", () => {
+  const image = "data:image/jpeg;base64,/9j/4AAQSkZJRg==";
+  const vreq = { capability: "page.read" as const, promptVersion: "p@1", instructions: "Transcribe.", image, ctx };
+  const capture = () => {
+    const bodies: Record<string, any>[] = [];
+    const fetchImpl: FetchLike = async (_url, init) => {
+      bodies.push(JSON.parse(String(init.body)));
+      return okResponse("$v = u + at$");
+    };
+    return { bodies, fetchImpl };
+  };
+
+  it("sends the image to the provider's vision model and returns its text, metered", async () => {
+    const { bodies, fetchImpl } = capture();
+    const { ai, records } = setup({ active: { provider: { ...provider("q"), kind: "custom" }, model: "chat", visionModel: "qwen-vl-ocr" } }, fetchImpl);
+    expect((await ai.callVision(vreq)).text).toBe("$v = u + at$");
+    expect(bodies[0]).toMatchObject({ model: "qwen-vl-ocr", temperature: 0, messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: image } }, { type: "text", text: "Transcribe." }] }] });
+    expect(bodies[0]!.response_format).toBeUndefined();
+    expect(records[0]).toMatchObject({ capability: "page.read", status: "ok", inputTokens: 10 });
+  });
+
+  it("GLM gets bare base64 and no thinking", async () => {
+    const { bodies, fetchImpl } = capture();
+    const { ai } = setup({ active: { provider: { ...provider("g"), kind: "glm" }, model: "glm-4.5", visionModel: "glm-4.6v-flash" } }, fetchImpl);
+    await ai.callVision(vreq);
+    expect(bodies[0]!.messages[0].content[0].image_url.url).toBe("/9j/4AAQSkZJRg==");
+    expect(bodies[0]!.thinking).toEqual({ type: "disabled" });
+  });
+
+  it("is never stubbed: no vision model, no call", async () => {
+    const { bodies, fetchImpl } = capture();
+    await expect(setup({ active: null }, fetchImpl).ai.callVision(vreq)).rejects.toThrow(/no vision model/);
+    await expect(setup(only("a"), fetchImpl).ai.callVision(vreq)).rejects.toThrow(/no vision model/);
+    expect(bodies).toHaveLength(0);
+  });
+});
+
 describe("secrets", () => {
   it("round-trips sealed API keys", async () => {
     const sealed = await sealSecret("sk-abc", "k1");

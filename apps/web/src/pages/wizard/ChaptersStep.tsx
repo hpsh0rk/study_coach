@@ -5,6 +5,7 @@ import {
   isEmptyPage,
   isExternalParser,
   isMustFix,
+  isVisionParser,
   labelOf,
   MUST_FIX_KINDS,
   normalizeRanges,
@@ -22,8 +23,10 @@ import { OUTLINE_SOURCE_CHARS, scopeAdvice } from "@kj/pedagogy";
 import type { ChapterNode, PageKind, PageRange } from "@kj/schema";
 import { ApiError } from "../../api.ts";
 import { lessonApi, type LessonView, type UnitPreview } from "../../lessonApi.ts";
-import { documentApi, type DocumentRow, type ExternalParserInfo, type PastedPage } from "../../textbook/api.ts";
+import { documentApi, type DocumentRow, type ExternalParserInfo, type PastedPage, type VisionParserInfo } from "../../textbook/api.ts";
 import { parseExternally, pdfCutter, rememberedFile, rememberFile, type ExternalOutcome } from "../../textbook/external.ts";
+import { pageRenderer } from "../../textbook/pdf.ts";
+import { readWithVision } from "../../textbook/vision.ts";
 import { sha256Hex, type IngestOutcome } from "../../textbook/ingest.ts";
 import { Stepper, StepIntro, type StepKey } from "./Stepper.tsx";
 
@@ -125,13 +128,21 @@ const LOSSY: Partial<Record<PageKind, string>> = { "formula-lost": "公式没读
 const autoSent = new Set<string>();
 const AUTO_LIMIT = 300;
 
-type ExternalRun = { kind: "running"; done: number; total: number } | ({ kind: "done" } & ExternalOutcome) | { kind: "error"; message: string };
+type ParseRun = { kind: "running"; done: number; total: number } | ({ kind: "done" } & ExternalOutcome) | { kind: "error"; message: string };
 
-function ExternalStatus({ run }: { run: ExternalRun }) {
+const VIA = {
+  external: { who: "外部解析服务", running: "正在重新读取", en: "the external parser", check: "" },
+  vision: { who: "看图模型", running: "正在识别页面图片", en: "the vision model", check: "，读出的公式和数字请对照原书核对" },
+} as const;
+
+/** Progress and outcome of re-reading pages: `external` (MinerU) or `vision` (the provider's vision model). Test ids carry the prefix. */
+function ParseStatus({ run, via }: { run: ParseRun; via: keyof typeof VIA }) {
+  const v = VIA[via];
   if (run.kind === "running")
     return (
-      <div className="alert info" data-testid="external-progress">
-        外部解析服务正在重新读取 {run.done} / {run.total} 页…（只发送这几页，不发送整本书）· Re-reading pages with the external parser
+      <div className="alert info" data-testid={`${via}-progress`}>
+        {v.who}
+        {v.running} {run.done} / {run.total} 页…（只发送这几页，不发送整本书）· Re-reading pages with {v.en}
         <div className="progress">
           <div style={{ width: `${Math.round((run.done / Math.max(1, run.total)) * 100)}%` }} />
         </div>
@@ -139,16 +150,16 @@ function ExternalStatus({ run }: { run: ExternalRun }) {
     );
   if (run.kind === "error")
     return (
-      <div className="alert error" data-testid="external-error">
+      <div className="alert error" data-testid={`${via}-error`}>
         {run.message}
       </div>
     );
   const read = new Set(run.saved.map((p) => p.no)).size;
   return (
-    <div className={`alert ${run.missed.length ? "warn" : "info"}`} data-testid="external-done" data-read={read} data-missed={run.missed.length}>
-      外部解析服务读好了 {read} 页
-      {run.missed.length > 0 && `，${run.missed.length} 页没读出来，选到这些页时可以粘贴文字补上`}
-      {run.stopped && `（${run.stopped}）`}。· Re-read {read} page(s){run.missed.length > 0 && `; ${run.missed.length} not read`}.
+    <div className={`alert ${run.missed.length ? "warn" : "info"}`} data-testid={`${via}-done`} data-read={read} data-missed={run.missed.length}>
+      {v.who}读好了 {read} 页{read > 0 && v.check}
+      {run.missed.length > 0 && `；${run.missed.length} 页没读出来，选到这些页时可以粘贴文字补上`}
+      {run.stopped && `（${run.stopped}）`}。· Re-read {read} page(s) with {v.en}{run.missed.length > 0 && `; ${run.missed.length} not read`}.
     </div>
   );
 }
@@ -171,7 +182,9 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
   const [pageFlags, setPageFlags] = useState<Record<number, PageFlag[]>>({});
   const [pageKinds, setPageKinds] = useState<Record<number, PageKind>>({});
   const [external, setExternal] = useState<ExternalParserInfo | null>(null);
-  const [extRun, setExtRun] = useState<ExternalRun | null>(null);
+  const [extRun, setExtRun] = useState<ParseRun | null>(null);
+  const [vision, setVision] = useState<VisionParserInfo | null>(null);
+  const [visRun, setVisRun] = useState<ParseRun | null>(null);
   const pickFor = useRef<((file: File) => void) | null>(null);
   const filePicker = useRef<HTMLInputElement>(null);
   const [pasting, setPasting] = useState<PageRange | null>(null);
@@ -196,6 +209,7 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
         setPageFlags(r.pageFlags);
         setPageKinds(r.pageKinds);
         setExternal(r.externalParser);
+        setVision(r.visionParser);
         setCollapsed(new Set(r.chapters.filter((c) => c.level >= 2 && r.chapters.some((k) => k.parentId === c.id)).map((c) => c.id)));
         if (lesson && !lesson.lesson.scope.chapterIds.length) setRangeText(fmtRanges(lesson.lesson.scope.ranges, map));
       })
@@ -224,7 +238,10 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
     return count ? [{ kind, count }] : [];
   });
   const lossyRuns = runsOf(pagesInRanges(ranges).filter((p) => unfixed(p) && !isEmptyPage(pageWords[p - 1] ?? 0)));
-  const externalIn = (c: ChapterNode) => pagesOf(c).filter((p) => isExternalParser(pageParsers[p]) && pageParsers[p] !== PASTE_PARSER).length;
+  const externalIn = (c: ChapterNode) => pagesOf(c).filter((p) => isExternalParser(pageParsers[p])).length;
+  const visionIn = (c: ChapterNode) => pagesOf(c).filter((p) => isVisionParser(pageParsers[p])).length;
+  const visionRuns = runsOf(pagesInRanges(ranges).filter((p) => isVisionParser(pageParsers[p])));
+  const reading = extRun?.kind === "running" || visRun?.kind === "running";
   // "精修本章": pages the text layer read but not well (formula-heavy, tables), plus must-fix ones still unread.
   const refinable = (c: ChapterNode) => pagesOf(c).filter((p) => unfixed(p) || (REFINE_KINDS.includes(pageKinds[p]!) && (pageParsers[p] ?? PDFJS_PARSER) === PDFJS_PARSER));
   const unfixedPages = Object.keys(pageKinds)
@@ -273,6 +290,23 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
     );
     applyFacts(out.saved);
     setExtRun({ kind: "done", ...out });
+    if (out.missed.length) await runVision(out.missed, reason, file);
+  }
+
+  /** The fallback: page images through the provider's vision model, one page at a time. */
+  async function runVision(nos: number[], reason: "auto" | "refine", file: Blob) {
+    if (!vision || !nos.length) return;
+    setVisRun({ kind: "running", done: 0, total: nos.length });
+    const renderer = pageRenderer(file);
+    try {
+      const out = await readWithVision(nos, { render: (no) => renderer.render(no), read: (no, image) => documentApi.parseImage(documentId, no, image, reason) }, (done, total) =>
+        setVisRun({ kind: "running", done, total }),
+      );
+      applyFacts(out.saved);
+      setVisRun({ kind: "done", ...out });
+    } finally {
+      await renderer.close();
+    }
   }
 
   /** The book's file: kept from the upload in this tab, or picked again (checked against the stored hash). */
@@ -281,7 +315,7 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
     if (kept) return then(kept);
     pickFor.current = async (file) => {
       if (doc?.fileSha256 && (await sha256Hex(await file.arrayBuffer())) !== doc.fileSha256) {
-        return setExtRun({ kind: "error", message: "选的不是这本教材的 PDF，请选上传时的同一个文件 · That is not the same PDF" });
+        return (external ? setExtRun : setVisRun)({ kind: "error", message: "选的不是这本教材的 PDF，请选上传时的同一个文件 · That is not the same PDF" });
       }
       rememberFile(documentId, file);
       then(file);
@@ -289,13 +323,15 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
     filePicker.current?.click();
   }
 
-  // Right after an upload in this tab, must-fix pages go to the external parser without asking (when it is on).
+  // Right after an upload in this tab, must-fix pages are re-read without asking: by the external parser when it is
+  // on (the vision model then takes what it missed), else by the vision model when one is configured.
   useEffect(() => {
     const file = rememberedFile(documentId);
-    if (!external || !file || autoSent.has(documentId) || !unfixedPages.length) return;
+    if ((!external && !vision) || !file || autoSent.has(documentId) || !unfixedPages.length) return;
     autoSent.add(documentId);
-    void runExternal(unfixedPages.slice(0, AUTO_LIMIT), "auto", file);
-  }, [external, documentId, unfixedPages.length]);
+    const nos = unfixedPages.slice(0, AUTO_LIMIT);
+    void (external ? runExternal(nos, "auto", file) : runVision(nos, "auto", file));
+  }, [external, vision, documentId, unfixedPages.length]);
 
   // First line of the first and last typed page, so teachers can check the numbers match their book.
   useEffect(() => {
@@ -416,7 +452,7 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
             <div className="alert info" data-testid="must-fix-summary" data-count={bookLossy.reduce((n, k) => n + k.count, 0)}>
               这本书有 {bookLossy.reduce((n, k) => n + k.count, 0)} 页可能没读全：{bookLossy.map((k) => `${LOSSY[k.kind]} ${k.count} 页`).join(" · ")}。浏览器只能读出文字层，扫描图和画成图形的公式读不到。
               {external ? (
-                extRun?.kind !== "running" && (
+                !reading && (
                   <span>
                     {" "}
                     可以用外部解析服务重新读这些页（只发送这几页），或选到这些页时粘贴文字补上。
@@ -425,16 +461,30 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
                     </button>
                   </span>
                 )
+              ) : vision ? (
+                <>
+                  <span data-testid="external-off"> 外部解析服务没有开启。</span>
+                  {!reading && (
+                    <span>
+                      可以用看图模型（{vision.model}）识别这些页的图片（读出的数字要核对），或选到这些页时粘贴文字补上。
+                      <button className="btn small" onClick={() => withFile((f) => void runVision(unfixedPages.slice(0, AUTO_LIMIT), "auto", f))} data-testid="vision-run">
+                        用看图模型读这 {Math.min(AUTO_LIMIT, unfixedPages.length)} 页
+                      </button>
+                    </span>
+                  )}
+                </>
               ) : (
                 <span data-testid="external-off">
                   {" "}
-                  选到这些页时可以粘贴文字补上；管理员在后台开启“外部解析服务”后，这些页可以送去自动识别。
+                  选到这些页时可以粘贴文字补上；管理员在后台开启“外部解析服务”或配置“看图模型”后，这些页可以自动识别。
                 </span>
               )}{" "}
-              · Some pages were not fully read (scans, formulas drawn as outlines){external ? ": re-read them with the external parser, or paste their text." : "; paste their text where you need it."}
+              · Some pages were not fully read (scans, formulas drawn as outlines)
+              {external ? ": re-read them with the external parser, or paste their text." : vision ? ": read their images with the vision model, or paste their text." : "; paste their text where you need it."}
             </div>
           )}
-          {extRun && <ExternalStatus run={extRun} />}
+          {extRun && <ParseStatus run={extRun} via="external" />}
+          {visRun && <ParseStatus run={visRun} via="vision" />}
           <input
             ref={filePicker}
             type="file"
@@ -479,6 +529,18 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
               <div className="row wrap">
                 {lossyRuns.map((r) => (
                   <button key={r.start} className="btn small" onClick={() => setPasting(r)} data-testid="paste-open-lossy">
+                    为 p. {r.start === r.end ? labelOf(labels, r.start) : `${labelOf(labels, r.start)}–${labelOf(labels, r.end)}`} 粘贴文字
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {pages > 0 && visionRuns.length > 0 && (
+            <div className="alert info" data-testid="vision-pages">
+              第 {fmtRanges(visionRuns, labels)} 页的文字是看图模型从页面图片识别的，公式和数字可能有误，请对照原书核对；有错可以粘贴正确的文字替换。· Read from page images by the vision model: check formulas and numbers; paste the correct text if needed.
+              <div className="row wrap">
+                {visionRuns.map((r) => (
+                  <button key={r.start} className="btn small" onClick={() => setPasting(r)} data-testid="paste-open-vision">
                     为 p. {r.start === r.end ? labelOf(labels, r.start) : `${labelOf(labels, r.start)}–${labelOf(labels, r.end)}`} 粘贴文字
                   </button>
                 ))}
@@ -585,13 +647,18 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
                           {externalIn(c)} 页外部解析
                         </span>
                       )}
+                      {visionIn(c) > 0 && (
+                        <span className="badge warn" data-testid="chapter-vision" title="这些页由看图模型从页面图片识别，公式和数字可能有误，请核对 · Read by the vision model: check the numbers">
+                          {visionIn(c)} 页看图识别
+                        </span>
+                      )}
                       {flaggedIn(c).length > 0 && (
                         <span className="badge warn" data-testid="chapter-flagged" title="页面里有像“忽略之前的指令”这样的文字：生成时只当作教材内容，分享前请检查幻灯片 · Instruction-like text on these pages">
                           p.{flaggedIn(c).map((p) => labelOf(labels, p)).join(", ")} 含像指令的文字
                         </span>
                       )}
                     </label>
-                    {external && extRun?.kind !== "running" && refinable(c).some((p) => REFINE_KINDS.includes(pageKinds[p]!)) && (
+                    {external && !reading && refinable(c).some((p) => REFINE_KINDS.includes(pageKinds[p]!)) && (
                       <button
                         className="btn small ghost"
                         title="这一节的表格和公式读得不完整：只把这几页送去外部解析服务重新识别 · Re-read this section's tables and formulas"

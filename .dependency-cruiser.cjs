@@ -98,7 +98,7 @@ module.exports = {
     },
     {
       name: "only-parser-adapters-call-ai",
-      comment: "Inside the textbook module only the parser adapters (textbook/parsers) use @kj/ai: sealed parser tokens now, a vision-model fallback later.",
+      comment: "Inside the textbook module only the parser adapters (textbook/parsers) use @kj/ai: sealed parser tokens, and the vision-model fallback (parsers/vision.ts), which gets the request's model layer from the documents route.",
       severity: "error",
       from: { path: "^apps/app/src/textbook/", pathNot: "^apps/app/src/textbook/parsers/" },
       to: { path: "^packages/ai/" },

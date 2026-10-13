@@ -7,7 +7,10 @@ import { requireUser } from "../auth/session.ts";
 import { lessonsUsing } from "../store.ts";
 import { chapterTree, lookupTextbook, ownedTextbook, page, pageMeta, textbookList } from "../textbook/index.ts";
 import { createTextbook, PAGE_BATCH, pastePages, putPages, setTextbookArchived } from "../textbook/write.ts";
+import { makeAi, visionModelOf } from "../ai.ts";
 import { createParseJob, externalParserInfo, jobResult, pollJob, saveJobPages, uploadJobFile } from "../textbook/parsers/jobs.ts";
+import { parserSettingsOf } from "../textbook/parsers/settings.ts";
+import { MAX_IMAGE_CHARS, readPageImage, visionParserInfo } from "../textbook/parsers/vision.ts";
 
 export const MAX_PAGES = 600;
 export { PAGE_BATCH };
@@ -59,7 +62,14 @@ export const documentRoutes = new Hono<AppBindings>()
   })
   .get("/:id", async (c) => {
     const doc = await ownedTextbook(c.env, c.get("user"), c.req.param("id"), { archived: true });
-    const [tree, meta, externalParser] = await Promise.all([chapterTree(c.env, doc.id), pageMeta(c.env, doc), externalParserInfo(c.env, c.get("user").orgId)]);
+    const orgId = c.get("user").orgId;
+    const [tree, meta, externalParser, settings, visionModel] = await Promise.all([
+      chapterTree(c.env, doc.id),
+      pageMeta(c.env, doc),
+      externalParserInfo(c.env, orgId),
+      parserSettingsOf(c.env, orgId),
+      visionModelOf(c.env, orgId),
+    ]);
     return c.json({
       document: doc,
       chapters: tree,
@@ -70,6 +80,7 @@ export const documentRoutes = new Hono<AppBindings>()
       pageFlags: meta.flags,
       pageKinds: meta.kinds,
       externalParser,
+      visionParser: visionParserInfo(settings, visionModel),
     });
   })
   /**
@@ -99,6 +110,17 @@ export const documentRoutes = new Hono<AppBindings>()
     const doc = await ownedTextbook(c.env, c.get("user"), c.req.param("id"), { archived: true });
     const body = await parseJson(c, z.object({ pages: z.array(z.object({ no: z.number().int().min(1), text: z.string().max(40_000) })).max(50) }));
     return c.json({ pages: await saveJobPages(c.env, c.get("user"), doc, c.req.param("job"), body.pages) });
+  })
+  /**
+   * Fallback reader: one page image (rendered by the browser) through the provider's vision model, when
+   * the external parser is off or missed the page. Text is stored as `vlm:<model>/1` for the teacher to check.
+   */
+  .post("/:id/parse-image", async (c) => {
+    const doc = await ownedTextbook(c.env, c.get("user"), c.req.param("id"), { archived: true });
+    if (Number(c.req.header("content-length") ?? 0) > MAX_IMAGE_CHARS + 1_000) throw new HttpError(413, "TOO_LARGE", "页面图片太大 · Page image too large");
+    const body = await parseJson(c, z.object({ no: z.number().int().min(1).max(doc.pageCount), image: z.string().max(MAX_IMAGE_CHARS), reason: z.enum(["auto", "refine"]).default("auto") }));
+    const user = c.get("user");
+    return c.json(await readPageImage(c.env, user, doc, makeAi(c.env, user.orgId), await visionModelOf(c.env, user.orgId), body));
   })
   .get("/:id/pages/:no", async (c) => {
     const doc = await ownedTextbook(c.env, c.get("user"), c.req.param("id"), { archived: true });

@@ -475,6 +475,7 @@ export function createNoisyAi(noise: NoiseConfig, runKey: string, meter: Meter, 
       attempts.set(spec, attempt + 1);
       return reqScope.run({ req: req as StructuredRequest<unknown>, spec, attempt }, () => base.callStructured(req));
     },
+    callVision: base.callVision,
   };
   return { ai, log, requests: () => requests };
 }
