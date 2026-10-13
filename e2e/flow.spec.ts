@@ -811,7 +811,7 @@ test("看图模型 fallback (local mock provider): with the external parser off,
     await form.getByLabel("名称 Name").fill("Local vision mock");
     await form.getByLabel("模型 Model", { exact: true }).fill("mock-chat");
     await form.getByTestId("vision-model").fill("mock-vl");
-    await form.getByLabel("Base URL（OpenAI 兼容）").fill(provider.baseUrl);
+    await form.getByTestId("model-base-url").fill(provider.baseUrl);
     await form.getByLabel("API Key").fill("sk-local-mock-key");
     await form.getByRole("button", { name: /保存并启用/ }).click();
     await expect(page.locator("tr:not([data-testid^=setup])", { hasText: "Local vision mock" })).toContainText("mock-vl");
@@ -946,6 +946,81 @@ test("单独的看图模型 (local mock): with no vision model on the text side,
  * A self-hosted MinerU 4 server (`mineru-kit api-server --api-key …`) on this machine: /v1/health, then /v1/tasks
  * with the raw sub-PDF, its status and its JSON result. Every content page comes back with the same Markdown.
  */
+/** A Messages-dialect gateway (POST /v1/messages, SSE) that only answers with the right Bearer key and x-source header. */
+async function mockMessagesGateway() {
+  const asked: { url: string; auth?: string; source?: string; body: Record<string, unknown> }[] = [];
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      const parsed = JSON.parse(body || "{}");
+      asked.push({ url: req.url ?? "", auth: req.headers.authorization, source: req.headers["x-source"] as string | undefined, body: parsed });
+      if (req.url !== "/v1/messages" || req.headers.authorization !== "Bearer sk-gateway-key" || req.headers["x-source"] !== "tensorhawk") {
+        res.statusCode = 401;
+        res.end('{"error":"unauthorized"}');
+        return;
+      }
+      res.setHeader("content-type", "text/event-stream");
+      const send = (e: Record<string, unknown>) => res.write(`event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`);
+      send({ type: "message_start", message: { model: parsed.model, usage: { input_tokens: 9, output_tokens: 1 } } });
+      for (const piece of ['{"ok"', ":true}"]) send({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: piece } });
+      send({ type: "message_delta", usage: { output_tokens: 4 } });
+      send({ type: "message_stop" });
+      res.end();
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as { port: number };
+  return { baseUrl: `http://127.0.0.1:${port}`, asked, close: () => new Promise((resolve) => server.close(resolve)) };
+}
+
+test("Messages 协议 (local mock gateway): protocol, max_tokens and a custom header are saved in 后台 and streamed on 测试连接", async ({ page }) => {
+  const gateway = await mockMessagesGateway();
+  try {
+    await login(page);
+    await page.goto("/admin");
+    await page.getByTestId("admin-tab-ai").click();
+    const form = page.getByTestId("add-model-form");
+    await form.getByLabel("类型 Type").selectOption("custom");
+    await form.getByLabel("名称 Name").fill("Gateway mock");
+    await form.getByLabel("模型 Model", { exact: true }).fill("glm-5.3-flash");
+    await form.getByTestId("model-protocol").selectOption("messages");
+    await form.getByTestId("model-base-url").fill(gateway.baseUrl);
+    await form.getByTestId("model-max-tokens").fill("31200");
+    await form.getByTestId("model-headers").fill("x-source: tensorhawk");
+    await form.getByLabel("API Key").fill("sk-gateway-key");
+    await shot(page, "36-admin-messages-form");
+    await form.getByRole("button", { name: /保存并启用/ }).click();
+    const row = page.locator("tr:not([data-testid^=setup])", { hasText: "Gateway mock" });
+    await expect(row.getByTestId("protocol-summary")).toContainText("Messages /v1/messages · max_tokens 31200 · 请求头 x-source:");
+    await expect(row).not.toContainText("tensorhawk");
+
+    await row.getByRole("button", { name: /测试连接/ }).click();
+    await expect(page.locator(".alert.success")).toContainText("Gateway mock / glm-5.3-flash");
+    expect(gateway.asked.at(-1)).toMatchObject({ url: "/v1/messages", auth: "Bearer sk-gateway-key", source: "tensorhawk", body: { model: "glm-5.3-flash", max_tokens: 31200, stream: true } });
+
+    await row.getByTestId("advanced-toggle").click();
+    await expect(page.getByTestId("edit-headers")).toHaveValue("x-source:");
+    await page.getByTestId("edit-max-tokens").fill("8000");
+    await page.getByTestId("advanced-save").click();
+    await expect(row.getByTestId("protocol-summary")).toContainText("max_tokens 8000 · 请求头 x-source:");
+    await row.getByRole("button", { name: /测试连接/ }).click();
+    await expect(page.locator(".alert.success")).toBeVisible();
+    expect(gateway.asked.at(-1)).toMatchObject({ source: "tensorhawk", body: { max_tokens: 8000 } });
+    await shotOf(row, "37-admin-messages-row");
+  } finally {
+    await page.goto("/admin");
+    await page.getByTestId("admin-tab-ai").click();
+    await expect(page.getByTestId("add-model-form")).toBeVisible();
+    const row = page.locator("tr:not([data-testid^=setup])", { hasText: "Gateway mock" });
+    if (await row.count()) {
+      await row.getByRole("button", { name: "删除" }).click();
+      await expect(row).toHaveCount(0);
+    }
+    await gateway.close();
+  }
+});
+
 async function mockSelfhostMinerU(key: string) {
   const asked: { path: string; query: string; auth: string | undefined; pages?: number }[] = [];
   const tasks = new Map<string, number>();
