@@ -30,11 +30,18 @@ const AGENT_API = "https://mineru.net/api/v1/agent";
 const TOKEN_API = "https://mineru.net/api/v4";
 const FILE_NAME = "pages.pdf";
 
-/** Upload and result URLs come from MinerU's responses; the Worker only follows them to MinerU's own hosts. */
+/**
+ * Upload and result URLs come from MinerU's responses; the Worker only follows them to MinerU's own hosts.
+ * Signed upload URLs point at MinerU's Aliyun OSS bucket (`mineru.oss-cn-shanghai.aliyuncs.com`); results at openxlab.
+ */
 export function isMineruHost(url: string): boolean {
   try {
     const u = new URL(url);
-    return u.protocol === "https:" && (u.hostname === "mineru.net" || u.hostname.endsWith(".mineru.net") || u.hostname.endsWith(".openxlab.org.cn"));
+    const host = u.hostname;
+    return (
+      u.protocol === "https:" &&
+      (host === "mineru.net" || host.endsWith(".mineru.net") || host.endsWith(".openxlab.org.cn") || /^mineru\.oss-[a-z0-9-]+\.aliyuncs\.com$/.test(host))
+    );
   } catch {
     return false;
   }
@@ -322,7 +329,7 @@ export function stubParser(): ExternalParser {
   return {
     ...real,
     async submit() {
-      return { taskId: `stub-${crypto.randomUUID()}`, uploadUrl: "https://oss-mineru.openxlab.org.cn/stub" };
+      return { taskId: `stub-${crypto.randomUUID()}`, uploadUrl: "https://mineru.oss-cn-shanghai.aliyuncs.com/stub" };
     },
     async upload(_url, body) {
       await body.pipeTo(new WritableStream());

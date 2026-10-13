@@ -99,6 +99,19 @@ describe("external parsing in the browser", () => {
     expect(out.stopped).toContain("额度");
   });
 
+  it("a job the parser could not take is missed, the run goes on, and the reason is kept for the teacher", async () => {
+    let n = 0;
+    const { deps } = fakes();
+    const create = deps.create;
+    deps.create = async (pages, ocr) => {
+      if (++n === 1) throw new ApiError(502, "PARSER_FAILED", "外部解析服务出错：unexpected URL");
+      return create(pages, ocr);
+    };
+    const out = await parseExternally([1, 2, 3].map((no) => ({ no, kind: "formula-lost" as const })), { ...info, maxPagesPerJob: 2 }, deps);
+    expect(out).toMatchObject({ missed: [1, 2], stopped: null, failure: "外部解析服务出错：unexpected URL" });
+    expect(out.saved.map((p) => p.no)).toEqual([3]);
+  });
+
   it("reads the precise API's zip (full.md inside)", async () => {
     const zip = zipSync({ "pages/full.md": strToU8(md(2)), "pages/images/a.jpg": new Uint8Array([1, 2]) });
     expect(await readResult(zip.buffer as ArrayBuffer, "zip", 2)).toEqual(["$$ v_1 = u + a t $$", "$$ v_2 = u + a t $$"]);
