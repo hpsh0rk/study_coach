@@ -95,9 +95,23 @@ export class ProviderError extends Error {
     message: string,
     readonly status?: number,
     readonly retriable = true,
+    /** The message quotes the gateway's own error text (some echo part of the key): it goes to `ai_calls.error` only. */
+    readonly fromGateway = false,
   ) {
     super(message);
     this.name = "ProviderError";
+  }
+
+  /** What a teacher may see: the status and what to do, never the gateway's text. */
+  get publicMessage(): string {
+    if (!this.fromGateway) return this.message;
+    const s = this.status;
+    if (s === undefined) return "连不上 AI 模型服务，请稍后再试 · Could not reach the AI provider";
+    if (s === 401 || s === 403) return `AI 模型拒绝了请求（HTTP ${s}），请联系管理员检查后台的 API Key · The AI provider refused the request`;
+    if (s === 404) return "AI 模型服务找不到这个模型或地址（HTTP 404），请联系管理员检查后台的模型名和 Base URL · Model or address not found";
+    if (s === 429) return "AI 模型正忙（限流），请稍后再试 · The AI provider is rate-limited; try again later";
+    if (s < 400) return "AI 模型的回复中断了，请稍后再试 · The AI provider's reply broke off";
+    return `AI 模型服务出错（HTTP ${s}），请稍后再试 · The AI provider failed`;
   }
 }
 
@@ -189,7 +203,7 @@ async function collectOpenai(res: Response): Promise<Collected> {
   for await (const ev of readSse(res.body!)) {
     if (ev.data === "[DONE]") break;
     const d = JSON.parse(ev.data) as { model?: string; choices?: { delta?: { content?: string | null } }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } | null; error?: { message?: string } };
-    if (d.error) throw new ProviderError(d.error.message ?? "stream error", res.status, true);
+    if (d.error) throw new ProviderError(d.error.message ?? "stream error", res.status, true, true);
     take(d);
     out.text += d.choices?.[0]?.delta?.content ?? "";
   }
@@ -217,7 +231,7 @@ async function collectMessages(res: Response): Promise<Collected> {
       error?: { message?: string };
     };
     const type = d.type ?? ev.event;
-    if (type === "error") throw new ProviderError(d.error?.message ?? "stream error", res.status, true);
+    if (type === "error") throw new ProviderError(d.error?.message ?? "stream error", res.status, true, true);
     if (type === "message_start") {
       out.model = d.message?.model;
       out.inputTokens = d.message?.usage?.input_tokens ?? 0;
@@ -255,18 +269,18 @@ export async function chatCompletion(provider: ProviderConfig, req: ChatRequest,
       signal: AbortSignal.timeout(req.timeoutMs ?? 60_000),
     });
   } catch (err) {
-    throw new ProviderError(`network error calling ${provider.name}: ${(err as Error).message}`);
+    throw new ProviderError(`network error calling ${provider.name}: ${(err as Error).message}`, undefined, true, true);
   }
   if (!res.ok) {
     const text = (await res.text()).slice(0, 500);
-    throw new ProviderError(`${provider.name} HTTP ${res.status}: ${text}`, res.status, res.status >= 500 || res.status === 429);
+    throw new ProviderError(`${provider.name} HTTP ${res.status}: ${text}`, res.status, res.status >= 500 || res.status === 429, true);
   }
   try {
     collected = messagesProtocol ? await collectMessages(res) : await collectOpenai(res);
   } catch (err) {
     if (err instanceof ProviderError) throw err;
-    throw new ProviderError(`${provider.name}: stream broke off: ${(err as Error).message}`, res.status, true);
+    throw new ProviderError(`${provider.name}: stream broke off: ${(err as Error).message}`, res.status, true, true);
   }
-  if (!collected.text) throw new ProviderError(`${provider.name}: empty completion`, res.status, true);
+  if (!collected.text) throw new ProviderError(`${provider.name}: empty completion`, res.status, true, true);
   return { text: collected.text, model: collected.model ?? req.model, usage: { inputTokens: collected.inputTokens, outputTokens: collected.outputTokens } };
 }

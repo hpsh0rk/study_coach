@@ -15,7 +15,7 @@ export const app = new Hono<AppBindings>();
 
 app.onError((err, c) => {
   if (err instanceof HttpError) return c.json({ error: { code: err.code, message: err.message, detail: err.detail } }, err.status);
-  if (err instanceof ProviderError) return c.json({ error: { code: "AI_PROVIDER", message: err.message } }, 502);
+  if (err instanceof ProviderError) return c.json({ error: { code: "AI_PROVIDER", message: err.publicMessage } }, 502);
   console.error("unhandled", err);
   return c.json({ error: { code: "INTERNAL", message: "Something went wrong · 服务器错误" } }, 500);
 });
