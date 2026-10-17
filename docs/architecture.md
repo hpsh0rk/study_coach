@@ -52,7 +52,7 @@ Worker（Hono，apps/app）
  ├─ textbook（教材模块：documents / pages / chapters 的唯一读写入口；index.ts 读接口、write.ts 写接口只给 routes/documents.ts、tables.ts 表定义）
  └─ store（课的 D1 仓储与读模型：快照、复用、聚合查询、lessonView、分享视图；读教材只经 textbook/index.ts）；db/index.ts（drizzle 句柄）
 D1：orgs, users, sessions, login_attempts, ai_providers, ai_calls, audit_log,
-    documents, pages, chapters, lessons, outline_versions, slides, share_links
+    documents, pages, chapters, lessons, outline_versions, slides, slide_locks, share_links
 静态资源：SPA、字体（Arimo、Noto Sans SC）、KaTeX、内置实验 /sims/*.html
 ```
 
@@ -192,6 +192,7 @@ PipelineOptions = { budgetsInPrompt, outlineCheckRetry, slideCheckRetry, truncat
 | `lessons` | id, org_id, owner_id, document_id, title, scope, params, theme, drafting_until, archived_at | `drafting_until`：起草锁（§1）；`archived_at`：软删除（迁移 0004），`ownedLesson` 和列表都看不到 |
 | `outline_versions` | id, lesson_id, version, outline, params, scope, spec_count, rev, ack_over_budget, confirmed_at | UNIQUE(lesson_id, version)；触发器 `outline_versions_confirmed_no_update` / `_no_delete`；`rev` 乐观锁 |
 | `slides` | id, lesson_id, outline_version_id, spec_id, spec_hash（= slideKey）, layout, page_type, minutes, content, notes, sources, warnings, unverified, provider_id, prev_content, prev_notes | UNIQUE(outline_version_id, spec_id)；INDEX(lesson_id, spec_hash)；触发器 `slides_require_confirmed_insert` |
+| `slide_locks` | outline_version_id, spec_id, until | 迁移 0018（设计评审 A10）：生成一页时先占这一行（`until` = 现在 + 150 秒，过期的可以直接抢），生成完删掉；占不到 → 409 `SLIDE_IN_PROGRESS`。拿到锁后再查一次已有的页，两个标签页同时点“生成”只调用一次模型 |
 | `share_links` | id, token_hash, lesson_id, version_id, reviewed_at, answers, created_by, revoked_at | 每课最多一条有效链接；token = HMAC(密钥, 链接 id)，库里只存其 sha256；`answers` = `hidden`（课前预习，默认，迁移 0005 之前的链接也按它处理）/ `shown`（课后复习） |
 | `ai_providers` | id, org_id, purpose, kind, name, base_url, api_key_sealed, api_key_hint, model, enabled | 每个组织每种 `purpose` 最多一个 enabled（启用一个会停用同一种的其他）。`purpose`（迁移 0012）：`text` 写大纲和幻灯片；`vision` 只读页面图片（`model` 就是看图模型），用它自己的 Key，例如文字用 DeepSeek、看图用智谱 GLM-4.6V-Flash 或百炼 qwen-vl-ocr；同一家同一个 Key 就是两行。看图只有这一种配法（设计评审 O3）：迁移 0017 把文字提供方上的 `vision_model` 拆成一行 `vision`（同地址、Key、请求头和协议；原来由它读图的才启用），再删掉这一列。读图用启用的 `vision` 行（`visionModelOf`）；`/me` 的 `ai` 模式只看 `text` |
 | `parser_settings` | org_id, external_choice, mineru_mode, selfhost_url_sealed, selfhost_url_hint, selfhost_key_sealed, selfhost_key_hint, paid_enabled, updated_at, updated_by | 迁移 0009 / 0010 / 0011 / 0015 / 0016。管理员开关“外部解析服务”`external_choice`（迁移 0011 替换 `external_enabled`；迁移 0016 把和 `auto` 行为一样的 `on` 并入 `auto`）：`auto`（默认，没有这一行也是它）= 选中的接口配置好就开启，`off` = 任何页都不离开浏览器。`mineru_mode`：`agent`（MinerU 免 Token 轻量接口，每份 ≤ 20 页 / 10 MB，即 10 页内容 + 10 页分隔页；不需要配置，所以默认就开启）或 `selfhost`（MinerU 4+ 自部署，`/v1` 接口：地址必填、API Key 可选，都加密存，地址也当机密只回显掩码；没有地址 = 未配置）。精准接口（`token`，从没在真机上验证过）和自部署的 MinerU 3.x `/tasks` 方言按设计评审 O1 删掉了：迁移 0015 把选了 `token` 的组织改回 `agent` 并删掉 Token 列。环境变量 `PARSER_MINERU_MODE` 是新组织的默认接口，`stub` 只给测试和 E2E（回放录制的 MinerU 返回，生产环境拒绝），只替换在线接口：自部署始终请求管理员填的地址（E2E 用本机 mock 服务）。“允许付费兜底”`paid_enabled`（迁移 0010，默认关）：关着时只用免费看图模型（`FREE_VISION_MODELS`，目前 `glm-4.6v-flash`），其他看图模型一律当作可能收费、不用；开了就用管理员选的看图模型，花费由模型服务商的账户管。每月预算和每页价格按设计评审 O2 删掉了（迁移 0016） |
@@ -325,7 +326,7 @@ PipelineOptions = { budgetsInPrompt, outlineCheckRetry, slideCheckRetry, truncat
 | PUT | `/api/lessons/:id/outline-versions/:vid` | `{outline, rev}` 保存老师编辑；已确认 → 409 `OUTLINE_VERSION_IMMUTABLE`；rev 过期 → 409 `OUTLINE_CHANGED` |
 | POST | `/api/lessons/:id/outline-versions/:vid/confirm` | `{ackOverBudget?, rev?}`；超预算未确认 → 409 `OVER_BUDGET_ACK_REQUIRED`；返回复用后的页面 |
 | POST | `/api/lessons/:id/outline-versions/:vid/revise` | 以已确认版本为底稿新建草稿（复制它的参数与范围快照） |
-| POST | `/api/lessons/:id/outline-versions/:vid/slides/:specId/generate` | `{regenerate?}` → `{slide, reused}`；兜底页也过不了槽位 schema → 502 `SLIDE_INVALID` |
+| POST | `/api/lessons/:id/outline-versions/:vid/slides/:specId/generate` | `{regenerate?}` → `{slide, reused}`；兜底页也过不了槽位 schema → 502 `SLIDE_INVALID`；这一页正在别的标签页里生成 → 409 `SLIDE_IN_PROGRESS`（不调用模型；浏览器每 4 秒再问一次，拿到那一份） |
 | PATCH | `/api/lessons/:id/slides/:slideId` | `{content?, notes?}`；槽位或图示校验失败 → 422 `INVALID_CONTENT`（`detail: [{path, message}]`，message 为中文）；返回重新核对后的 `unverified` |
 | POST | `/api/lessons/:id/slides/:slideId/undo` | 一步撤销；无可撤销 → 409 `NOTHING_TO_UNDO` |
 | GET | `/api/lessons/:id/deck` | 导出 deck JSON（版本快照的参数与范围，含讲稿与待核实；离线导出也用它）；`?audience=student` 与分享链接同样剥离讲稿和误区标签，并且默认剥离答案（`&answers=shown` 保留）；`lesson.answers` 标明模式 |

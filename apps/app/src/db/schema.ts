@@ -1,4 +1,4 @@
-import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { documents } from "../textbook/tables.ts";
 import { now, orgs, users } from "./accounts.ts";
 
@@ -66,6 +66,17 @@ export const outlineVersions = sqliteTable(
     createdAt: integer("created_at").notNull().$defaultFn(now),
   },
   (t) => [uniqueIndex("outline_versions_lesson_version_uq").on(t.lessonId, t.version)],
+);
+
+/** Held while a slide is being written, so a second tab does not call (and pay for) the model again; expires on its own. */
+export const slideLocks = sqliteTable(
+  "slide_locks",
+  {
+    outlineVersionId: text("outline_version_id").notNull(),
+    specId: text("spec_id").notNull(),
+    until: integer("until").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.outlineVersionId, t.specId] })],
 );
 
 export const slides = sqliteTable(

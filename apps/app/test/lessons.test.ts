@@ -290,6 +290,23 @@ describe("slide reuse, editing and snapshots", () => {
     expect(await aiCalls(lessonId)).toBe(calls + 1);
   });
 
+  it("a slide another tab is writing is not written again (409, no model call); an expired lock does not block", async () => {
+    const { lessonId, v } = await confirmedLesson();
+    const spec = v.outline.slides[1];
+    const url = `/api/lessons/${lessonId}/outline-versions/${v.id}/slides/${spec.id}/generate`;
+    await e.DB.prepare("INSERT INTO slide_locks (outline_version_id, spec_id, until) VALUES (?, ?, ?)").bind(v.id, spec.id, Date.now() + 60_000).run();
+    const calls = await aiCalls(lessonId);
+    const busy = await teacher.req("POST", url);
+    expect(busy.status).toBe(409);
+    expect(busy.json.error.code).toBe("SLIDE_IN_PROGRESS");
+    expect(await aiCalls(lessonId)).toBe(calls);
+
+    await e.DB.prepare("UPDATE slide_locks SET until = ? WHERE outline_version_id = ?").bind(Date.now() - 1, v.id).run();
+    expect((await teacher.req("POST", url)).json.reused).toBe(false);
+    expect(await aiCalls(lessonId)).toBe(calls + 1);
+    expect(await e.DB.prepare("SELECT COUNT(*) AS n FROM slide_locks WHERE outline_version_id = ?").bind(v.id).first("n")).toBe(0);
+  });
+
   it("edits slots with validation, regenerates on request and undoes one level", async () => {
     const { lessonId, v } = await confirmedLesson();
     const spec = v.outline.slides.find((s: any) => s.layout === "statement") ?? v.outline.slides[1];
