@@ -59,7 +59,7 @@ module.exports = {
   ],
   options: {
     doNotFollow: { path: "node_modules" },
-    exclude: { path: "(^|/)(dist|\\.wrangler|test-results|playwright-report)/|^apps/web/public/offline/" },
+    exclude: { path: "(^|/)(dist|\\.next|\\.wrangler|test-results|playwright-report)/|^apps/web/public/offline/" },
     tsPreCompilationDeps: true,
     tsConfig: { fileName: "tsconfig.base.json" },
     enhancedResolveOptions: { exportsFields: ["exports"], conditionNames: ["import", "default", "types"], extensions: [".ts", ".tsx", ".js", ".mjs"] },
