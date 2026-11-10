@@ -645,6 +645,14 @@ test("Chinese CID-font PDF: text is extracted, scanned pages are flagged and can
   await other.getByRole("button", { name: "保存修改 Save" }).click();
   await expect(other.getByTestId("outline-error")).toContainText("另一个标签页");
   await shot(other, "09-outline-conflict");
+  await other.getByTestId("outline-reload").click();
+  await expect(other.getByTestId("outline-draft-recovery")).toBeVisible();
+  await expect(other.getByTestId("outline-row").first().getByLabel("标题 Title")).toHaveValue("标签页 A 的标题");
+  await other.getByTestId("outline-restore-draft").click();
+  await expect(other.getByTestId("outline-row").first().getByLabel("标题 Title")).toHaveValue("标签页 B 的标题");
+  await other.getByRole("button", { name: "保存修改 Save" }).click();
+  await expect(other.getByRole("button", { name: "已保存 Saved" })).toBeVisible();
+  await other.getByTestId("outline-row").first().getByLabel("标题 Title").fill("标签页 B 尚未保存的标题");
 
   // Unsaved edits: in-app links ask first, closing the tab warns.
   let asked = "";
@@ -664,7 +672,7 @@ test("Chinese CID-font PDF: text is extracted, scanned pages are flagged and can
   await other.evaluate(() => history.back());
   await expect.poll(() => askedBack).toContain("还没保存");
   await expect(other).toHaveURL(/\/outline$/);
-  await expect(other.getByTestId("outline-row").first().getByLabel("标题 Title")).toHaveValue("标签页 B 的标题");
+  await expect(other.getByTestId("outline-row").first().getByLabel("标题 Title")).toHaveValue("标签页 B 尚未保存的标题");
 
   // The minutes box keeps what is typed and clamps only on blur.
   const minutes = other.getByTestId("outline-row").first().getByLabel("分钟 Minutes");
@@ -679,7 +687,7 @@ test("Chinese CID-font PDF: text is extracted, scanned pages are flagged and can
   expect(await closing).toBe("beforeunload");
 
   await page.reload();
-  await expect(page.getByTestId("outline-row").first().getByLabel("标题 Title")).toHaveValue("标签页 A 的标题");
+  await expect(page.getByTestId("outline-row").first().getByLabel("标题 Title")).toHaveValue("标签页 B 的标题");
 });
 
 test("formulas drawn as outlines: the chapters step shows the gap, and pasting closes it", async ({ page }) => {

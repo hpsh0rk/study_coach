@@ -8,12 +8,17 @@ import { ApiError } from "../../api.ts";
 import { UnverifiedBadge } from "../../components/Unverified.tsx";
 import { lessonApi, type LessonView, type VersionView } from "../../lessonApi.ts";
 import { DraftingProgress } from "./drafting.tsx";
+import { clearOutlineDraft, loadOutlineDraft, saveOutlineDraft } from "./outlineLocalDraft.ts";
 import { Stepper, StepIntro, type StepKey } from "./Stepper.tsx";
 import { UNSAVED_MESSAGE, useUnsavedGuard } from "./unsaved.ts";
 
 const VISUAL_LABEL: Record<VisualKind, string> = { none: "无 None", chart: "图表 Chart", function: "函数图 Plot", flow: "流程 Flow", formula: "公式 Formula", sim: "模拟实验 Sim", table: "表格 Table" };
 /** On layouts that always show a visual, "none" renders the 图示待补 placeholder. */
 const visualLabel = (v: VisualKind, spec: SlideSpec) => (v === "none" && LAYOUTS[spec.layout].visual === "required" ? "图示待补 Visual to add" : VISUAL_LABEL[v]);
+const cleanedOutline = (outline: Outline): Outline => ({
+  ...outline,
+  slides: outline.slides.map((s) => ({ ...s, title: s.title.trim() || "Untitled", keyPoints: s.keyPoints.map((k) => k.trim()).filter(Boolean) })),
+});
 
 function TimeBudget({ outline, minutes }: { outline: Outline; minutes: number }) {
   const t = outlineTiming(outline, { minutes });
@@ -190,6 +195,7 @@ export function OutlineStep({ view, reached, onChanged }: { view: LessonView; re
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [conflict, setConflict] = useState(false);
+  const [recoverableDraft, setRecoverableDraft] = useState<Outline | null>(null);
   const [needAck, setNeedAck] = useState<string | null>(null);
   const [draftingSince, setDraftingSince] = useState<number | null>(view.drafting?.startedAt ?? null);
   const params = version?.params ?? view.lesson.params;
@@ -202,7 +208,13 @@ export function OutlineStep({ view, reached, onChanged }: { view: LessonView; re
     setOutline(current?.outline ?? null);
     setDirty(false);
     setConflict(false);
-  }, [current]);
+    if (current) {
+      const local = loadOutlineDraft(window.localStorage, view.lesson.id, current.id);
+      setRecoverableDraft(local && JSON.stringify(local) !== JSON.stringify(current.outline) ? local : null);
+    } else {
+      setRecoverableDraft(null);
+    }
+  }, [current, view.lesson.id]);
   useEffect(() => setDraftingSince(view.drafting?.startedAt ?? null), [view.drafting]);
   const drafted = useCallback(async () => {
     setDraftingSince(null);
@@ -229,8 +241,11 @@ export function OutlineStep({ view, reached, onChanged }: { view: LessonView; re
       if (e instanceof ApiError && e.code === "OVER_BUDGET_ACK_REQUIRED") setNeedAck(e.message);
       else if (e instanceof ApiError && e.code === "DRAFT_IN_PROGRESS") setDraftingSince((s) => s ?? Date.now());
       else {
-        setConflict(e instanceof ApiError && (e.code === "OUTLINE_CHANGED" || e.code === "OUTLINE_VERSION_IMMUTABLE"));
-        setError(e instanceof ApiError ? e.message : (e as Error).message);
+        const changed = e instanceof ApiError && e.code === "OUTLINE_CHANGED";
+        const immutable = e instanceof ApiError && e.code === "OUTLINE_VERSION_IMMUTABLE";
+        if (changed && version && outline) saveOutlineDraft(window.localStorage, view.lesson.id, version.id, cleanedOutline(outline));
+        setConflict(changed || immutable);
+        setError(changed ? `${e.message} 你的修改已保存在这台设备上。` : e instanceof ApiError ? e.message : (e as Error).message);
       }
       return undefined;
     } finally {
@@ -240,8 +255,10 @@ export function OutlineStep({ view, reached, onChanged }: { view: LessonView; re
 
   async function save(): Promise<VersionView | null> {
     if (!version || !outline) return null;
-    const cleaned = { ...outline, slides: outline.slides.map((s) => ({ ...s, title: s.title.trim() || "Untitled", keyPoints: s.keyPoints.map((k) => k.trim()).filter(Boolean) })) };
+    const cleaned = cleanedOutline(outline);
     const r = await lessonApi.save(view.lesson.id, version.id, cleaned, version.rev);
+    clearOutlineDraft(window.localStorage, view.lesson.id, version.id);
+    setRecoverableDraft(null);
     setVersion(r.version);
     setOutline(r.version.outline);
     setDirty(false);
@@ -308,6 +325,32 @@ export function OutlineStep({ view, reached, onChanged }: { view: LessonView; re
     <div className="wizard">
       <Stepper current="outline" reached={reached} lessonId={view.lesson.id} />
       <StepIntro step="outline" />
+      {recoverableDraft && !readOnly && (
+        <div className="alert info" data-testid="outline-draft-recovery">
+          <p>已保留冲突前的本机草稿。你可以在最新版上恢复自己的修改。· Your local edits were kept and can be restored over the latest version.</p>
+          <button
+            className="btn small"
+            onClick={() => {
+              setOutline(recoverableDraft);
+              setRecoverableDraft(null);
+              setDirty(true);
+            }}
+            data-testid="outline-restore-draft"
+          >
+            恢复我的修改 · Restore my edits
+          </button>
+          <button
+            className="btn small ghost"
+            onClick={() => {
+              clearOutlineDraft(window.localStorage, view.lesson.id, version.id);
+              setRecoverableDraft(null);
+            }}
+            data-testid="outline-discard-draft"
+          >
+            放弃草稿 · Discard draft
+          </button>
+        </div>
+      )}
       {copied && (
         <div className="alert info" data-testid="copied-hint">
           已复制到新学期：大纲和 {view.slides.length} 页幻灯片（包括你手动改过的）都沿用了。
@@ -392,7 +435,7 @@ export function OutlineStep({ view, reached, onChanged }: { view: LessonView; re
           {conflict && (
             <div>
               <button className="btn small" onClick={reload} data-testid="outline-reload">
-                放弃我的修改，载入最新版 · Discard my edits and reload
+                保留草稿，载入最新版 · Keep draft and reload
               </button>
             </div>
           )}
