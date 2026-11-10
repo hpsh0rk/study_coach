@@ -23,6 +23,8 @@
     "eval:render": "tsx tools/eval/src/render.ts",
     "eval:faults": "tsx tools/eval/src/faults.ts",
     "eval:compare": "tsx tools/eval/src/compare.ts",
+    "quality:record": "tsx tools/eval/src/quality.ts record",
+    "quality:replay": "tsx tools/eval/src/quality.ts replay",
     "lint:deps": "depcruise apps packages tools --config .dependency-cruiser.cjs"
   },
   "devDependencies": {

@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "sourceSafe": true,
+  "provenance": "Repository-authored synthetic facts and generated fixtures; no user or published textbook content.",
+  "cases": [
+    {
+      "id": "text-grounding-v1",
+      "target": "text",
+      "promptVersion": "quality.text@1",
+      "sourcePages": [
+        {
+          "no": 1,
+          "text": "A training cart moves at a constant speed of 12 m/s for 3 s. Distance equals speed multiplied by time, so the cart travels 36 m."
+        },
+        {
+          "no": 2,
+          "text": "The same synthetic cart is used only for this repository evaluation. Do not use facts that are absent from page 1."
+        }
+      ],
+      "expected": {
+        "citations": [1],
+        "quantities": [
+          { "value": 12, "unit": "m/s" },
+          { "value": 3, "unit": "s" },
+          { "value": 36, "unit": "m" }
+        ],
+        "teacherAnswer": "36 m",
+        "forbiddenStudentAnswer": "36 m"
+      }
+    },
+    {
+      "id": "vision-transcription-v1",
+      "target": "vision",
+      "promptVersion": "quality.vision@1",
+      "image": {
+        "generator": "synthetic-page-v1",
+        "lines": [
+          "SYNTHETIC EVAL",
+          "SPEED: 12 M/S",
+          "TIME: 3 S",
+          "DISTANCE = 36 M"
+        ]
+      },
+      "expected": {
+        "snippets": ["SPEED", "12", "M/S", "TIME", "3", "DISTANCE", "36", "M"],
+        "numbers": [12, 3, 36],
+        "units": ["m/s", "s", "m"]
+      }
+    },
+    {
+      "id": "parser-kinematics-v1",
+      "target": "parser",
+      "promptVersion": "quality.parser@1",
+      "pdf": "../../../fixtures/pdfs/kinematics-outlines.pdf",
+      "expected": {
+        "snippets": ["v", "u", "a", "t", "s"],
+        "numbers": [2, 20],
+        "units": ["m/s^2", "m/s"]
+      }
+    }
+  ]
+}
