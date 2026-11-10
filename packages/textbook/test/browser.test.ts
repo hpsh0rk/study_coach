@@ -6,7 +6,7 @@ import type { PageKind } from "@kj/schema";
 import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 import { beforeAll, describe, expect, it } from "vitest";
 import { GlobalWorkerOptions, parsePdf } from "../src/browser.ts";
-import { badCharRatio, buildChapterTree, MANUAL_PARSER, mathScore, MUST_FIX_KINDS, REFINE_KINDS, routePages } from "../src/index.ts";
+import { badCharRatio, buildChapterTree, labelOf, MANUAL_PARSER, mathScore, MUST_FIX_KINDS, pagesInRanges, rangesForChapters, REFINE_KINDS, routePages, sourceForRanges } from "../src/index.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pdfjsDir = dirname(createRequire(import.meta.url).resolve("pdfjs-dist/package.json"));
@@ -42,6 +42,49 @@ describe("parsePdf", () => {
   it("still reads the Latin fixture", async () => {
     const parsed = await parsePdf(fixture("waves-mini.pdf"), "fallback", { assets: `${pdfjsDir}/` });
     expect(parsed.pages[1]!.text).toContain("A wave transfers energy");
+  });
+
+  it("matches the reviewed chapter-scope golden from the repository PDF", async () => {
+    const parsed = await parsePdf(fixture("waves-mini.pdf"), "fallback", { assets: `${pdfjsDir}/` });
+    const tree = buildChapterTree(parsed.toc, parsed.pageCount, parsed.pages);
+    expect(tree.map(({ id, parentId, level, title, pageStart, pageEnd }) => ({ id, parentId, level, title, pageStart, pageEnd }))).toEqual([
+      { id: "c0", parentId: null, level: 1, title: "Chapter 1 Waves", pageStart: 1, pageEnd: 5 },
+      { id: "c1", parentId: "c0", level: 2, title: "1.1 Describing waves", pageStart: 2, pageEnd: 2 },
+      { id: "c2", parentId: "c0", level: 2, title: "1.2 Wave speed", pageStart: 3, pageEnd: 4 },
+      { id: "c3", parentId: "c0", level: 2, title: "1.3 The electromagnetic spectrum", pageStart: 5, pageEnd: 5 },
+      { id: "c4", parentId: null, level: 1, title: "Chapter 2 Sound", pageStart: 6, pageEnd: 8 },
+      { id: "c5", parentId: "c4", level: 2, title: "2.1 Sound waves", pageStart: 7, pageEnd: 7 },
+      { id: "c6", parentId: "c4", level: 2, title: "2.2 Echoes and ultrasound", pageStart: 8, pageEnd: 8 },
+    ]);
+
+    const waveSpeed = tree.find((chapter) => chapter.title === "1.2 Wave speed")!;
+    const ranges = rangesForChapters(tree, [waveSpeed.id], parsed.pageCount);
+    const included = pagesInRanges(ranges);
+    const excluded = parsed.pages.map((page) => page.no).filter((no) => !included.includes(no));
+    expect({ ranges, included, excluded }).toEqual({
+      ranges: [{ start: 3, end: 4 }],
+      included: [3, 4],
+      excluded: [1, 2, 5, 6, 7, 8],
+    });
+
+    const source = sourceForRanges(parsed.pages, ranges, 100_000);
+    expect(source.included).toEqual([3, 4]);
+    expect(source.omitted).toEqual([]);
+    const lines = source.text.split("\n");
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(/^\[p\.3\] 1\.2 Wave speed The wave speed is the distance travelled/);
+    expect(lines[1]).toMatch(/^\[p\.4\] 1\.2 Wave speed \(continued\) You can measure/);
+    expect(lines[1]).toMatch(/calculate a mean\. 4$/);
+    expect(source.text).not.toContain("1.3 The electromagnetic spectrum");
+
+    // The visible printed footer and the resolver both identify every physical PDF page 1:1.
+    expect(
+      parsed.pages.map((page) => ({
+        pdfIndex: page.no,
+        printed: page.text.match(/(?:^|\n)(\d+)$/)?.[1],
+        resolved: labelOf(parsed.pages, page.no),
+      })),
+    ).toEqual(Array.from({ length: 8 }, (_, i) => ({ pdfIndex: i + 1, printed: String(i + 1), resolved: String(i + 1) })));
   });
 
   it("drops white text on pages that carry an injected instruction, and unreadably small text everywhere", async () => {
