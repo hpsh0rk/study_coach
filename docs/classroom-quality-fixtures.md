@@ -62,6 +62,24 @@ The follow-up keeps that gallery gate (`224/224` after adding the reviewed wave-
 The baseline run was green and the expanded matrix found no production defect. Only test/dev fixture surfaces changed; runtime behavior was not altered.
 The completed branch passes `362/362` unit/API tests and `15/15` Playwright tests; the latter includes bidirectional presenter sync and the zero-network offline run.
 
+## Frozen student payloads
+
+Student preview order/match activities use a stable seed from the frozen outline version and slide spec. Repeating the same preview/share/file serialization therefore produces the same canonical JSON and hash, while still moving every ordered card and every matched partner away from its answer position.
+
+Before this gate, 100 serializations of one frozen deck produced 35 payload hashes (the order and match slides each had 6 possible hashes). Afterward, preview, review and teacher payloads each produce 1 hash for repeated serialization.
+
+The audience boundary now seeds and checks answer-bearing data in:
+
+- speaker notes, warnings and verification details;
+- quiz explanations and misconception diagnostics;
+- question answers and faded final steps, including malformed faded slides missing `fadeFrom`;
+- experiment explanation/outcome;
+- correct order and correct match pairings.
+
+The same fixtures are checked in canonical JSON, rendered preview DOM/attributes and offline embedded JSON. The embedded JSON is stable and escapes script-closing text; the whole HTML file is not byte-hash-gated because it also contains built runtime, CSS and font bytes.
+
+On the final stacked deck, the hash gate serializes every current classroom replay slide—including the SC-27 wave-string investigation—plus the order/match audience probes. The stacked branch passes `376/376` unit/API tests and `15/15` Playwright tests.
+
 ## Deliberate limits
 
 These fixtures prove closed-world canaries and seeded mutations, not open-ended teaching quality. A real model or teacher is still required for:
@@ -71,3 +89,5 @@ These fixtures prove closed-world canaries and seeded mutations, not open-ended 
 - whether prerequisites, difficulty progression, remediation and objective coverage are pedagogically appropriate;
 - whether a generated lesson is accurate, level-appropriate and teachable without reordering;
 - classroom usability of polls, pacing and projection on real hardware.
+
+Stable shuffling is reproducibility, not a cryptographic secrecy boundary. Exact canaries and structural answer checks do not prove that a paraphrased stem, option or explanation cannot give the answer away.

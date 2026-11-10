@@ -103,22 +103,14 @@ interface OfflineFile {
 
 export type OfflineAudience = "teacher" | "student";
 
-/**
- * One self-contained HTML file: deck + player runtime + catalog sims + the font chunks it needs. No network at all when opened.
- * `student`: the server strips notes and misconception labels (as for the share link), and answers unless `answers` is `shown`. `teacher`: notes open only in a separate presenter window.
- */
-async function buildOfflineHtml(lessonId: string, audience: OfflineAudience, answers: AnswerMode): Promise<OfflineFile> {
-  const deck = (await lessonApi.deck(lessonId, audience, answers)) as unknown as {
-    lesson: { title: string; theme: ThemeId; pageLabels: Record<number, string>; language: TeachingLanguage; answers: AnswerMode };
-    slides: Slide[];
-  };
-  const [js, css] = await Promise.all([text("/offline/runtime.js"), text("/offline/runtime.css")]);
-  const sims: Record<string, string> = {};
-  for (const id of simIds(deck.slides)) {
-    const entry = resolveEmbed(id);
-    if (entry) sims[id] = await text(entry.src);
-  }
-  const data: OfflineDeck = {
+interface OfflineSourceDeck {
+  lesson: { title: string; theme: ThemeId; pageLabels: Record<number, string>; language: TeachingLanguage; answers: AnswerMode };
+  slides: Slide[];
+}
+
+/** Canonical data embedded in the offline file; student notes are removed even if the caller supplied them. */
+export function offlineDeckData(deck: OfflineSourceDeck, audience: OfflineAudience, sims: Record<string, string> = {}): OfflineDeck {
+  return {
     title: deck.lesson.title,
     audience,
     answers: deck.lesson.answers,
@@ -128,7 +120,27 @@ async function buildOfflineHtml(lessonId: string, audience: OfflineAudience, ans
     slides: deck.slides.map((s) => ({ content: s.content, sources: s.sources, notes: audience === "student" ? "" : s.notes, pageType: s.pageType })),
     sims,
   };
-  const json = JSON.stringify(data);
+}
+
+/** Stable JSON text for the embedded script; `<` is escaped so slide text cannot close the script tag. */
+export function serializeOfflineDeck(data: OfflineDeck): string {
+  return JSON.stringify(data).replace(/</g, "\\u003c");
+}
+
+/**
+ * One self-contained HTML file: deck + player runtime + catalog sims + the font chunks it needs. No network at all when opened.
+ * `student`: the server strips notes and misconception labels (as for the share link), and answers unless `answers` is `shown`. `teacher`: notes open only in a separate presenter window.
+ */
+async function buildOfflineHtml(lessonId: string, audience: OfflineAudience, answers: AnswerMode): Promise<OfflineFile> {
+  const deck = (await lessonApi.deck(lessonId, audience, answers)) as unknown as OfflineSourceDeck;
+  const [js, css] = await Promise.all([text("/offline/runtime.js"), text("/offline/runtime.css")]);
+  const sims: Record<string, string> = {};
+  for (const id of simIds(deck.slides)) {
+    const entry = resolveEmbed(id);
+    if (entry) sims[id] = await text(entry.src);
+  }
+  const data = offlineDeckData(deck, audience, sims);
+  const json = serializeOfflineDeck(data);
   const chars = new Set<number>();
   for (const ch of json + ALWAYS) chars.add(ch.codePointAt(0)!);
   const fonts = await inlineFontFaces(chars, hasMath(deck.slides));
@@ -142,7 +154,7 @@ async function buildOfflineHtml(lessonId: string, audience: OfflineAudience, ans
     `<style>${css}</style>`,
     "</head><body>",
     '<div id="kj-root"></div>',
-    `<script type="application/json" id="kj-deck">${json.replace(/</g, "\\u003c")}</script>`,
+    `<script type="application/json" id="kj-deck">${json}</script>`,
     `<script>${js.replace(/<\/script/gi, "<\\/script")}</script>`,
     "</body></html>",
   ].join("\n");

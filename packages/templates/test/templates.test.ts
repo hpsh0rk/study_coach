@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { LAYOUT_IDS, PAGE_TYPE_IDS, SlideContent } from "@kj/schema";
 import { describeIssue, slotIssues, widgetIssues } from "../src/issues.ts";
-import { BUDGETS, layoutForPageType, PAGE_TYPE_VISUALS, SLOT_SCHEMAS, stepsOf, withoutAnswers } from "../src/index.ts";
+import { BUDGETS, layoutForPageType, PAGE_TYPE_VISUALS, seededRandom, SLOT_SCHEMAS, stepsOf, withoutAnswers } from "../src/index.ts";
 import { galleryCells, maxBudgetContent, maxBudgetTable, sampleContent } from "../src/samples.ts";
 
 describe("layouts", () => {
@@ -152,6 +152,16 @@ describe("withoutAnswers (课前预习 student copies)", () => {
           });
         }
       }
+    }
+  });
+
+  it("replays the same order/match deal from the same stable seed", () => {
+    const order = sampleContent("order");
+    if (order.layout !== "order") throw new Error("layout");
+    for (const mode of ["order", "match"] as const) {
+      const content = { ...order, mode, items: order.items.map((item, i) => ({ text: item.text, match: item.match || `pair ${i + 1}` })) };
+      const deal = () => withoutAnswers(content, seededRandom(`version-3\0${mode}`));
+      expect(deal()).toEqual(deal());
     }
   });
 

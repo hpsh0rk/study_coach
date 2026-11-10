@@ -2,7 +2,7 @@ import { and, count, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-o
 import { checkSourceText, slideKey, sourceUnverified, suspiciousContent } from "@kj/generation";
 import { checkOutline, OUTLINE_SOURCE_CHARS, outlineTiming, verifyNumbers } from "@kj/pedagogy";
 import { LessonParams, LessonScope, newId, Outline, SlideContent, type PageType, type Slide, type Unverified } from "@kj/schema";
-import { withoutAnswers } from "@kj/templates";
+import { seededRandom, withoutAnswers } from "@kj/templates";
 import { db } from "./db/index.ts";
 import { lessons, outlineVersions, shareLinks, slides } from "./db/schema.ts";
 import { secret, type Env, type SessionUser } from "./env.ts";
@@ -213,7 +213,11 @@ export type AnswerMode = "hidden" | "shown";
 
 export function studentSlide({ canUndo: _u, ...s }: Slide, answers: AnswerMode) {
   const content =
-    answers === "hidden" ? withoutAnswers(s.content, undefined, s.pageType) : s.content.layout === "quiz" ? { ...s.content, options: s.content.options.map((o) => ({ ...o, misconception: "" })) } : s.content;
+    answers === "hidden"
+      ? withoutAnswers(s.content, seededRandom(`${s.outlineVersionId}\0${s.specId}`), s.pageType)
+      : s.content.layout === "quiz"
+        ? { ...s.content, options: s.content.options.map((o) => ({ ...o, misconception: "" })) }
+        : s.content;
   return { ...s, content, notes: "", warnings: [], unverified: [] };
 }
 

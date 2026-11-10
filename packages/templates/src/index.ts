@@ -167,8 +167,8 @@ export function stepsOf(content: SlideContent): number {
 /**
  * Student "preview" copies (share link / offline file before the lesson): everything a reveal step
  * would show is removed here, on the server, so it is not merely hidden in the page. Quiz `answer`
- * becomes -1; ordered items are re-dealt in a random cyclic order (their listed order is the answer,
- * and a seeded shuffle could be inverted by the class).
+ * becomes -1; ordered items are re-dealt in a cyclic order (their listed order is the answer).
+ * Canonical exports pass a stable per-version PRNG so repeated share/file payloads are byte-identical.
  */
 export function withoutAnswers(content: SlideContent, random: () => number = Math.random, pageType?: PageType): SlideContent {
   switch (content.layout) {
@@ -198,5 +198,21 @@ export function withoutAnswers(content: SlideContent, random: () => number = Mat
     default:
       return content;
   }
+}
+
+/** Small platform-independent PRNG for reproducible presentation order; not a secrecy boundary. */
+export function seededRandom(seed: string): () => number {
+  let state = 0x811c9dc5;
+  for (let i = 0; i < seed.length; i++) {
+    state ^= seed.charCodeAt(i);
+    state = Math.imul(state, 0x01000193);
+  }
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let value = state;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 0x1_0000_0000;
+  };
 }
 

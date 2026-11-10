@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { seededRandom, withoutAnswers } from "@kj/templates";
 import { CLASSROOM_FIXTURES } from "@kj/templates/testing/classroom";
 import { applyStep, renderSlide } from "@kj/templates/render";
 
@@ -27,6 +28,18 @@ describe.each(CLASSROOM_FIXTURES)("$id classroom interactions", (fixture) => {
       expect(rendered.el.querySelector(".kj-answer")!.classList.contains("kj-step-hidden")).toBe(true);
       applyStep(rendered.el, 2);
       expect(rendered.el.querySelector(".kj-answer")!.classList.contains("kj-step-hidden")).toBe(false);
+      rendered.dispose();
+    }
+  });
+
+  it("keeps teacher-only and answer canaries out of preview DOM and attributes", () => {
+    for (const slide of fixture.slides) {
+      const content = withoutAnswers(slide.content, seededRandom(`${fixture.id}\0${slide.specId}`), slide.pageType);
+      const rendered = renderSlide({ content, sources: slide.sources }, { theme: "classic", interactive: true, language: fixture.params.language, hideAnswers: true });
+      applyStep(rendered.el, rendered.steps);
+      const serialized = rendered.el.outerHTML;
+      for (const canary of fixture.oracle.teacherOnlyCanaries) expect(serialized, `${slide.specId}: ${canary}`).not.toContain(canary);
+      expect(rendered.el.querySelector("[data-correct='true'], [data-outcome='true'], .kj-order-reveal"), slide.specId).toBeNull();
       rendered.dispose();
     }
   });
