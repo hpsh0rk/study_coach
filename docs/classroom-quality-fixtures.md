@@ -34,6 +34,20 @@ The reveal-step browser matrix also found 8 failing render configurations out of
 
 After the fixes, the classroom matrix passes `22/22` and the browser matrix passes `208/208`; the full unit suite, lint, typecheck, build and overflow browser suite are the release gates.
 
+## Citation and scientific mutation gates
+
+The follow-up mutation suite reuses the same four reviewed classroom claims and the same `verifyNumbers` path. It adds:
+
+- 12 citation mutations: adjacent wrong page, truncated supporting page and explicit contradiction for each reviewed claim;
+- 10 physics/chemistry mutations: wrong law, unit, sign, context and significant figures in each subject;
+- six clean controls (four citation claims plus two scientific claim sets).
+
+Baseline on PR #55 caught all citation mutations but only 6/10 scientific mutations: `18/22` seeded catches overall (81.8%), with `0/6` clean false positives. The missed cases were a wrong physics law with the same symbol set, lost significant figures in both subjects, and a reversed chemistry sign.
+
+After the focused fixes the gate catches `22/22` seeded mutations (100%) with `0/6` clean false positives (0%). Formula checking now distinguishes equivalent multiplicative rearrangements (`F=ma`, `a=F/m`) from a different relationship (`a=Fm`); signed values must match their cited sign; and directly cited prose quantities preserve significant-figure precision.
+
+Citation, chemistry-equation and same-unit context mutations use reviewed exact anchors. They prove those committed claims and mutations only. They do not claim paraphrase, entailment or open-domain contradiction detection.
+
 ## Deliberate limits
 
 These fixtures prove closed-world canaries and seeded mutations, not open-ended teaching quality. A real model or teacher is still required for:

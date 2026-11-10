@@ -71,6 +71,20 @@ describe("verifyNumbers", () => {
     expect(u).toEqual([expect.objectContaining({ kind: "formula", text: "T = \\frac{1}{f}" })]);
   });
 
+  it("distinguishes equivalent rearrangements from a wrong law with the same symbols", () => {
+    const source = "Newton's second law is F = m x a.";
+    expect(verifyNumbers(statement(["Rearrange for acceleration"], { kind: "formula", tex: "a=F/m" }), source)).toEqual([]);
+    expect(verifyNumbers(statement(["Multiply force and mass"], { kind: "formula", tex: "a=Fm" }), source)).toEqual([expect.objectContaining({ kind: "formula", text: "a=Fm" })]);
+  });
+
+  it("preserves signs and significant figures from the cited source", () => {
+    const visual = { kind: "placeholder" as const, hint: "" };
+    const source = "The enthalpy change is -286 kJ/mol. The measured yield is 36.0 g.";
+    expect(verifyNumbers(statement(["Enthalpy change is -286 kJ/mol", "Measured yield is 36.0 g"], visual), source)).toEqual([]);
+    expect(verifyNumbers(statement(["Enthalpy change is +286 kJ/mol"], visual), source)).toEqual([expect.objectContaining({ kind: "number", text: "286" })]);
+    expect(verifyNumbers(statement(["Measured yield is 36 g"], visual), source)).toEqual([expect.objectContaining({ kind: "number", text: "36", detail: expect.stringContaining("significant figures") })]);
+  });
+
   it("problem layouts may invent numbers, but their arithmetic must compute (incl. across steps)", () => {
     const ok: SlideContent = { layout: "steps", title: "Find the speed", problem: "Find $v$ when $f = 5$ Hz and $\\lambda = 0.4$ m.", steps: [{ text: "Write $v = f\\lambda$", why: "" }, { text: "Substitute: $v = 5 \\times 0.4$", why: "" }, { text: "Calculate: $v = 2$ m/s", why: "" }] };
     expect(verifyNumbers(ok, SOURCE, { pageType: "worked" })).toEqual([]);

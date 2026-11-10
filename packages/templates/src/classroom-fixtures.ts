@@ -16,7 +16,7 @@ export interface ClassroomFixture {
   outline: Outline;
   slides: ClassroomSlide[];
   oracle: {
-    claims: { specId: string; text: string; supportedBy: number[] }[];
+    claims: { specId: string; text: string; supportedBy: number[]; contradiction: string }[];
     dependencies: { before: string; after: string }[];
     objectives: { objective: string; instruction: string; learnerAction: string; assessment: string }[];
     teacherOnlyCanaries: string[];
@@ -56,8 +56,8 @@ const english: ClassroomFixture = {
   ],
   oracle: {
     claims: [
-      { specId: "en-concept", text: "Wave speed equals frequency times wavelength", supportedBy: [11] },
-      { specId: "en-worked", text: "5 Hz and wavelength 0.4 m", supportedBy: [12] },
+      { specId: "en-concept", text: "Wave speed equals frequency times wavelength", supportedBy: [11], contradiction: "Wave speed is not equal to frequency times wavelength" },
+      { specId: "en-worked", text: "5 Hz and wavelength 0.4 m", supportedBy: [12], contradiction: "The wave does not have frequency 5 Hz and wavelength 0.4 m" },
     ],
     dependencies: [
       { before: "en-retrieval", after: "en-concept" },
@@ -101,8 +101,8 @@ const chinese: ClassroomFixture = {
   ],
   oracle: {
     claims: [
-      { specId: "zh-concept", text: "F = m x a", supportedBy: [22] },
-      { specId: "zh-check", text: "3千克的物体受到12牛顿合力时，加速度为4米/秒²", supportedBy: [22] },
+      { specId: "zh-concept", text: "F = m x a", supportedBy: [22], contradiction: "F 不等于 m x a" },
+      { specId: "zh-check", text: "3千克的物体受到12牛顿合力时，加速度为4米/秒²", supportedBy: [22], contradiction: "这个物体的加速度不是4米/秒²" },
     ],
     dependencies: [
       { before: "zh-retrieval", after: "zh-concept" },
