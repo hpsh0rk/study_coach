@@ -93,7 +93,7 @@ pnpm test:e2e --project=overflow --project=e2e   # Playwright：每种版式在�
 SHOTS_DIR=out pnpm test:e2e --project=e2e        # 同样的流程，每一步保存截图
 ```
 
-测试和 CI 不连接任何外部服务：MinerU 用录制的响应回放，模型提供方和自部署服务用本机 mock。CI 安装 `fonts-noto-cjk`，溢出测试量的是真实中文字形。`node scripts/make-fixture-pdf.mjs` 重新生成 e2e 用的 PDF（`waves-mini.pdf`，以及 `newton-zh-cid.pdf`：未嵌入的 CID 字体中文加两页扫描页）。`node scripts/bench-pbkdf2.mjs` 测密码哈希的耗时（见 architecture §9）。
+测试和 CI 不连接任何外部服务：MinerU 用录制的响应回放，模型提供方和自部署服务用本机 mock。CI 安装 `fonts-noto-cjk`，溢出测试量的是真实中文字形。`node scripts/make-fixture-pdf.mjs` 重新生成 e2e 与 PDF 分类样例；双语分类语料、逐页真值和路由指标见 [`docs/pdf-fixtures.md`](docs/pdf-fixtures.md)。`node scripts/bench-pbkdf2.mjs` 测密码哈希的耗时（见 architecture §9）。
 
 ## 评测（`tools/eval`）
 

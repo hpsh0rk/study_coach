@@ -1,6 +1,5 @@
 #!/usr/bin/env node
-// Generates the fixture PDFs: waves-mini.pdf (8-page born-digital "textbook" with nested bookmarks),
-// newton-zh-cid.pdf (Chinese CID font, two scanned pages) and kinematics-outlines.pdf (formulas drawn as glyph outlines).
+// Generates the fixture PDFs: the three E2E books plus a bilingual page-classification corpus.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -256,6 +255,155 @@ export async function makeKinematicsFixturePdf() {
   return doc.save();
 }
 
+function cidFont(doc) {
+  const ctx = doc.context;
+  const descendant = ctx.register(
+    ctx.obj({
+      Type: "Font",
+      Subtype: "CIDFontType0",
+      BaseFont: "STSong-Light",
+      CIDSystemInfo: { Registry: PDFHexString.fromText("Adobe"), Ordering: PDFHexString.fromText("GB1"), Supplement: 4 },
+      FontDescriptor: ctx.register(ctx.obj({ Type: "FontDescriptor", FontName: "STSong-Light", Flags: 6, FontBBox: [-25, -254, 1000, 880], ItalicAngle: 0, Ascent: 880, Descent: -120, CapHeight: 880, StemV: 93 })),
+      DW: 1000,
+    }),
+  );
+  return ctx.register(ctx.obj({ Type: "Font", Subtype: "Type0", BaseFont: "STSong-Light-UniGB-UTF16-H", Encoding: "UniGB-UTF16-H", DescendantFonts: [descendant] }));
+}
+
+function brokenFont(doc) {
+  const ctx = doc.context;
+  const toUnicode = ctx.register(
+    ctx.stream(`/CIDInit /ProcSet findresource begin
+12 dict begin
+begincmap
+/CIDSystemInfo << /Registry (Fixture) /Ordering (Broken) /Supplement 0 >> def
+/CMapName /Fixture-Broken def
+/CMapType 2 def
+1 begincodespacerange
+<20> <7E>
+endcodespacerange
+1 beginbfrange
+<20> <7E> <E000>
+endbfrange
+endcmap
+CMapName currentdict /CMap defineresource pop
+end
+end`),
+  );
+  return ctx.register(ctx.obj({ Type: "Font", Subtype: "Type1", BaseFont: "Helvetica", Encoding: "WinAnsiEncoding", ToUnicode: toUnicode }));
+}
+
+function appendRawText(doc, page, name, font, lines, size = 12) {
+  page.node.setFontDictionary(PDFName.of(name), font);
+  const ops = lines.map(([text, x, y]) => `BT /${name} ${size} Tf ${x} ${y} Td <${utf16Hex(text)}> Tj ET`);
+  page.node.addContentStream(doc.context.register(doc.context.stream(ops.join("\n"))));
+}
+
+function appendBrokenText(doc, page, font, label) {
+  page.node.setFontDictionary(PDFName.of("FB"), font);
+  const hex = Buffer.from(`BROKEN ${label} FONT MAP`, "ascii").toString("hex");
+  const ops = Array.from({ length: 8 }, (_, i) => `BT /FB 14 Tf 60 ${740 - i * 32} Td <${hex}> Tj ET`);
+  page.node.addContentStream(doc.context.register(doc.context.stream(ops.join("\n"))));
+}
+
+function drawProse(page, font, text) {
+  for (let i = 0; i < 8; i++) page.drawText(text, { x: 50, y: 750 - i * 18, size: 10, font });
+}
+
+function drawLostFormulaRows(page) {
+  drawOutlineMath(page, 210, 520, [["v = u + at", 14]]);
+  drawOutlineMath(page, 210, 460, [["s = ut + at", 14], ["2", 9, 6], ["/2", 14]]);
+}
+
+function drawTable(page) {
+  for (let row = 0; row <= 10; row++) page.drawLine({ start: { x: 50, y: 650 - row * 20 }, end: { x: 545, y: 650 - row * 20 }, thickness: 0.5 });
+  for (let col = 0; col <= 10; col++) page.drawLine({ start: { x: 50 + col * 49.5, y: 650 }, end: { x: 50 + col * 49.5, y: 450 }, thickness: 0.5 });
+}
+
+function setPageLabels(doc, labels) {
+  const nums = labels.flatMap((label, i) => [PDFNumber.of(i), doc.context.obj({ P: PDFHexString.fromText(label) })]);
+  doc.catalog.set(PDFName.of("PageLabels"), doc.context.obj({ Nums: nums }));
+}
+
+/**
+ * Fourteen source-safe synthetic pages: every supported page kind once in English and once in Chinese.
+ * There is no copyrighted source material: prose and vector paths are authored here, scans use GREY_PNG,
+ * and the Chinese pages reference the standard Adobe-GB1 CID font without embedding a font file.
+ */
+export async function makeClassificationCorpusPdf() {
+  const doc = await PDFDocument.create();
+  doc.setTitle("Bilingual PDF page classification corpus");
+  doc.setCreator("study-coach fixture generator");
+  doc.setProducer("study-coach fixture generator");
+  doc.setCreationDate(new Date("2026-01-01T00:00:00.000Z"));
+  doc.setModificationDate(new Date("2026-01-01T00:00:00.000Z"));
+  const latin = await doc.embedFont(StandardFonts.Helvetica);
+  const zh = cidFont(doc);
+  const broken = brokenFont(doc);
+  const scan = await doc.embedPng(GREY_PNG);
+  const pages = [];
+  const addPage = () => {
+    const page = doc.addPage([595, 842]);
+    pages.push(page);
+    return page;
+  };
+  const enProse = "EN_TEXT_CANARY A force changes motion while mass measures inertia in this synthetic physics lesson.";
+  const zhProse = "中文文本标记 这是一页合成的物理教材文字，用来说明力能改变运动状态，质量可以表示物体惯性的大小。";
+
+  drawProse(addPage(), latin, enProse);
+  appendRawText(doc, addPage(), "FZ", zh, chunks(zhProse.repeat(4), 24).map((text, i) => [text, 50, 750 - i * 24]), 14);
+
+  addPage();
+  addPage();
+
+  for (const label of ["EN_SCAN_CANARY", "中文扫描标记"]) {
+    const page = addPage();
+    page.drawImage(scan, { x: 0, y: 0, width: 595, height: 842 });
+    if (label.startsWith("EN_")) page.drawText(label, { x: 60, y: 760, size: 14, font: latin });
+    else appendRawText(doc, page, "FZ", zh, [[label, 60, 760]], 14);
+  }
+
+  appendBrokenText(doc, addPage(), broken, "ENGLISH");
+  appendBrokenText(doc, addPage(), broken, "CHINESE");
+
+  const enLost = addPage();
+  drawProse(enLost, latin, `EN_LOST_CANARY ${enProse}`);
+  drawLostFormulaRows(enLost);
+  const zhLost = addPage();
+  appendRawText(doc, zhLost, "FZ", zh, chunks(`中文公式缺失标记 ${zhProse.repeat(3)}`, 24).map((text, i) => [text, 50, 750 - i * 24]), 14);
+  drawLostFormulaRows(zhLost);
+
+  const enFormula = addPage();
+  drawProse(enFormula, latin, `EN_FORMULA_CANARY ${enProse}`);
+  for (let i = 0; i < 10; i++) enFormula.drawText("v = u + at, s = ut + at2 / 2, F = ma, p = mv", { x: 50, y: 560 - i * 18, size: 10, font: latin });
+  const zhFormula = addPage();
+  appendRawText(doc, zhFormula, "FZ", zh, chunks(`中文公式文本标记 ${zhProse.repeat(2)}`, 24).map((text, i) => [text, 50, 750 - i * 24]), 14);
+  for (let i = 0; i < 10; i++) zhFormula.drawText("v = u + at, s = ut + at2 / 2, F = ma, p = mv", { x: 50, y: 560 - i * 18, size: 10, font: latin });
+
+  const enTable = addPage();
+  drawProse(enTable, latin, `EN_TABLE_CANARY ${enProse}`);
+  drawTable(enTable);
+  enTable.drawText("time", { x: 60, y: 630, size: 9, font: latin });
+  enTable.drawText("velocity", { x: 160, y: 630, size: 9, font: latin });
+  enTable.drawText("12 m/s", { x: 260, y: 610, size: 9, font: latin });
+  const zhTable = addPage();
+  appendRawText(doc, zhTable, "FZ", zh, [
+    ...chunks(`中文表格标记 ${zhProse.repeat(2)}`, 24).map((text, i) => [text, 50, 750 - i * 24]),
+    ["时间", 60, 630],
+    ["速度", 160, 630],
+    ["十二米每秒", 260, 610],
+  ], 14);
+  drawTable(zhTable);
+
+  setPageLabels(doc, ["EN-TEXT", "ZH-TEXT", "EN-BLANK", "ZH-BLANK", "EN-SCAN", "ZH-SCAN", "EN-GARBLED", "ZH-GARBLED", "EN-LOST", "ZH-LOST", "EN-FORMULA", "ZH-FORMULA", "EN-TABLE", "ZH-TABLE"]);
+  addOutline(doc, pages.map((page) => page.ref), [
+    { title: "Readable and blank", page: 0 },
+    { title: "Must-fix extraction", page: 4 },
+    { title: "Refine structure", page: 10 },
+  ]);
+  return doc.save();
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const dir = resolve(dirname(fileURLToPath(import.meta.url)), "../fixtures/pdfs");
   mkdirSync(dir, { recursive: true });
@@ -263,6 +411,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     ["waves-mini.pdf", makeFixturePdf],
     ["newton-zh-cid.pdf", makeCidFixturePdf],
     ["kinematics-outlines.pdf", makeKinematicsFixturePdf],
+    ["classification-corpus.pdf", makeClassificationCorpusPdf],
   ]) {
     writeFileSync(resolve(dir, name), await make());
     console.log(`wrote ${resolve(dir, name)}`);

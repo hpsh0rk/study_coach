@@ -39,8 +39,8 @@ export interface ExternalOutcome {
 const POLL_MS = 2_000;
 const POLL_LIMIT = 150;
 
-/** The parser's Markdown → text per page of the job, null where the separator did not come back. */
-export function readResult(data: ArrayBuffer, count: number): (string | null)[] {
+/** The parser's Markdown → text per page of the job; malformed separator sequences throw before anything is saved. */
+export function readResult(data: ArrayBuffer, count: number): string[] {
   return splitSeparated(new TextDecoder().decode(data), count);
 }
 
@@ -108,9 +108,8 @@ export async function parseExternally(
           if (state !== "ready") out.missed.push(...job.pages);
           else {
             const texts = readResult(await deps.result(job.id), job.pages.length);
-            const got = job.pages.flatMap((no, i) => (texts[i] === null ? [] : [{ no, text: texts[i]! }]));
+            const got = job.pages.map((no, i) => ({ no, text: texts[i]! }));
             out.saved.push(...(await deps.save(job.id, got)));
-            out.missed.push(...job.pages.filter((_, i) => texts[i] === null));
           }
         }
       }

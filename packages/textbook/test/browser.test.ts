@@ -2,15 +2,22 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { PageKind } from "@kj/schema";
 import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 import { beforeAll, describe, expect, it } from "vitest";
 import { GlobalWorkerOptions, parsePdf } from "../src/browser.ts";
+import { badCharRatio, buildChapterTree, MANUAL_PARSER, mathScore, MUST_FIX_KINDS, REFINE_KINDS, routePages } from "../src/index.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pdfjsDir = dirname(createRequire(import.meta.url).resolve("pdfjs-dist/package.json"));
 const fixture = (name: string) => {
   const buf = readFileSync(resolve(here, "../../../fixtures/pdfs", name));
   return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
+};
+const corpus = JSON.parse(readFileSync(resolve(here, "../../../fixtures/pdfs/classification-corpus.json"), "utf8")) as {
+  fixture: string;
+  chapters: { title: string; start: number; end: number }[];
+  pages: { no: number; label: string; language: "en" | "zh"; fact: string; required: string[]; forbidden: string[]; kind: PageKind; route: "none" | "auto" | "refine" }[];
 };
 
 beforeAll(() => {
@@ -56,51 +63,40 @@ describe("parsePdf", () => {
   });
 });
 
-/** A 1×1 grey PNG: scaled up it stands in for a scanned page image. */
-const PNG = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGNoAAAAggCBd81ytgAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
-
 describe("page kinds from the parse loop", () => {
-  it("tells text, scanned, blank, formula-lost (display and inline), formula-text and table pages apart", async () => {
-    const doc = await PDFDocument.create();
-    const font = await doc.embedFont(StandardFonts.Helvetica);
-    const prose = "A wave transfers energy from one place to another without transporting matter along with it.";
-    const body = (page: ReturnType<typeof doc.addPage>, from = 760, lines = 12) => {
-      for (let i = 0; i < lines; i++) page.drawText(prose, { x: 50, y: from - i * 16, size: 10, font });
-    };
+  it("matches the bilingual corpus manifest and its text-layer facts", async () => {
+    const parsed = await parsePdf(fixture(corpus.fixture), "fallback", { assets: `${pdfjsDir}/` });
+    expect(parsed.pages.map(({ no, label, kind }) => ({ no, label, kind }))).toEqual(corpus.pages.map(({ no, label, kind }) => ({ no, label, kind })));
+    corpus.pages.forEach((expected, i) => {
+      const text = parsed.pages[i]!.text;
+      for (const token of expected.required) expect.soft(text, `page ${expected.no} must contain ${token}`).toContain(token);
+      for (const token of expected.forbidden) expect.soft(text, `page ${expected.no} must not contain ${token}`).not.toContain(token);
+    });
 
-    body(doc.addPage([595, 842]));
+    expect(parsed.pages.slice(2, 4).map((p) => p.text)).toEqual(["", ""]);
+    expect(parsed.pages.slice(4, 6).every((p) => p.text.length < 30)).toBe(true);
+    expect(parsed.pages.slice(6, 8).every((p) => badCharRatio(p.text) === 1)).toBe(true);
+    expect(parsed.pages.slice(8, 10).every((p) => !p.text.includes("v = u"))).toBe(true);
+    expect(parsed.pages.slice(10, 12).every((p) => mathScore(p.text) >= 40)).toBe(true);
 
-    const scan = doc.addPage([595, 842]);
-    scan.drawImage(await doc.embedPng(PNG), { x: 0, y: 0, width: 595, height: 842 });
-
-    doc.addPage([595, 842]).drawText("12", { x: 290, y: 30, size: 9, font });
-
-    // OpenStax-style display formulas: glyph outlines (filled curves), no text layer.
-    const display = doc.addPage([595, 842]);
-    body(display);
-    for (const y of [500, 440]) for (let k = 0; k < 6; k++) display.drawEllipse({ x: 200 + k * 14, y, xScale: 4, yScale: 5 });
-
-    // Inline numbers drawn as outlines inside sentences: "The speed is ▢▢▢ m/s".
-    const inline = doc.addPage([595, 842]);
-    body(inline, 760, 6);
-    for (const y of [600, 560]) {
-      inline.drawText("The speed of the wave is", { x: 50, y, size: 10, font });
-      for (let k = 0; k < 3; k++) inline.drawEllipse({ x: 180 + k * 6, y: y + 4, xScale: 2.5, yScale: 3.5 });
-      inline.drawText("m/s along the string.", { x: 205, y, size: 10, font });
+    const chapters = buildChapterTree(parsed.toc, parsed.pageCount, parsed.pages);
+    expect(chapters.map((chapter) => ({ title: chapter.title, start: chapter.pageStart, end: chapter.pageEnd }))).toEqual(corpus.chapters);
+    for (const chapter of chapters) {
+      expect(Array.from({ length: chapter.pageEnd - chapter.pageStart + 1 }, (_, i) => chapter.pageStart + i)).toEqual(
+        corpus.pages.filter((page) => page.no >= chapter.pageStart && page.no <= chapter.pageEnd).map((page) => page.no),
+      );
     }
+  });
 
-    const mathy = doc.addPage([595, 842]);
-    body(mathy, 760, 4);
-    for (let i = 0; i < 12; i++) mathy.drawText(`v = f x L, T = 1 / f, E = h x f, p = m x v`, { x: 50, y: 680 - i * 16, size: 10, font });
+  it("routes the corpus's must-fix and refine pages exactly, with an offline manual fallback", async () => {
+    const parsed = await parsePdf(fixture(corpus.fixture), "fallback", { assets: `${pdfjsDir}/` });
+    const pages = parsed.pages.map((p) => ({ no: p.no, kind: p.kind! }));
+    const parser = { id: "offline-parser", kinds: [...MUST_FIX_KINDS, ...REFINE_KINDS] };
+    const expected = (route: "auto" | "refine") => corpus.pages.filter((p) => p.route === route).map((p) => p.no);
 
-    const table = doc.addPage([595, 842]);
-    body(table, 760, 4);
-    for (let r = 0; r <= 10; r++) table.drawLine({ start: { x: 50, y: 650 - r * 20 }, end: { x: 545, y: 650 - r * 20 }, thickness: 0.5 });
-    for (let c = 0; c <= 10; c++) table.drawLine({ start: { x: 50 + c * 49.5, y: 650 }, end: { x: 50 + c * 49.5, y: 450 }, thickness: 0.5 });
-
-    const bytes = await doc.save();
-    const parsed = await parsePdf(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, "x", { assets: `${pdfjsDir}/` });
-    expect(parsed.pages.map((p) => p.kind)).toEqual(["text", "scanned", "blank", "formula-lost", "formula-lost", "formula-text", "table"]);
+    expect(routePages(pages, [parser], { kinds: MUST_FIX_KINDS, limit: 300 })).toEqual({ [parser.id]: expected("auto") });
+    expect(routePages(pages, [parser], { kinds: REFINE_KINDS, limit: 300 })).toEqual({ [parser.id]: expected("refine") });
+    expect(routePages(pages, [], { kinds: MUST_FIX_KINDS, limit: 300 })).toEqual({ [MANUAL_PARSER]: expected("auto") });
   });
 
   it("classifies the fixture books", async () => {
