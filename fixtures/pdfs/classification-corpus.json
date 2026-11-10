@@ -7,6 +7,18 @@
     { "title": "Must-fix extraction", "start": 5, "end": 10 },
     { "title": "Refine structure", "start": 11, "end": 14 }
   ],
+  "recordedMineru": {
+    "fixture": "fixtures/pdfs/kinematics-outlines.pdf",
+    "pages": [
+      {
+        "ordinal": 1,
+        "pdfPage": 2,
+        "required": ["3.1 Equations of motion", "A car accelerating from rest", "after ten seconds"],
+        "formulas": ["v = u + at", "s = ut + at^2 / 2"],
+        "table": []
+      }
+    ]
+  },
   "pages": [
     { "no": 1, "label": "EN-TEXT", "language": "en", "fact": "readable text layer", "required": ["EN_TEXT_CANARY", "mass measures inertia"], "forbidden": [], "kind": "text", "route": "none" },
     { "no": 2, "label": "ZH-TEXT", "language": "zh", "fact": "readable text layer", "required": ["中文文本标记", "质量可以表示物体惯性"], "forbidden": [], "kind": "text", "route": "none" },
@@ -16,11 +28,11 @@
     { "no": 6, "label": "ZH-SCAN", "language": "zh", "fact": "full-page image with negligible text", "required": ["中文扫描标记"], "forbidden": [], "kind": "scanned", "route": "auto" },
     { "no": 7, "label": "EN-GARBLED", "language": "en", "fact": "text layer maps every visible character to private-use Unicode", "required": [], "forbidden": ["BROKEN", "ENGLISH"], "kind": "garbled", "route": "auto" },
     { "no": 8, "label": "ZH-GARBLED", "language": "zh", "fact": "text layer maps every visible character to private-use Unicode", "required": [], "forbidden": ["BROKEN", "CHINESE"], "kind": "garbled", "route": "auto" },
-    { "no": 9, "label": "EN-LOST", "language": "en", "fact": "readable prose with two formula rows drawn only as glyph outlines", "required": ["EN_LOST_CANARY"], "forbidden": ["v = u + at", "s = ut"], "kind": "formula-lost", "route": "auto" },
-    { "no": 10, "label": "ZH-LOST", "language": "zh", "fact": "readable prose with two formula rows drawn only as glyph outlines", "required": ["中文公式缺失标记"], "forbidden": ["v = u + at", "s = ut"], "kind": "formula-lost", "route": "auto" },
-    { "no": 11, "label": "EN-FORMULA", "language": "en", "fact": "readable prose and at least 40 extractable math tokens", "required": ["EN_FORMULA_CANARY", "v = u + at", "F = ma"], "forbidden": [], "kind": "formula-text", "route": "refine" },
-    { "no": 12, "label": "ZH-FORMULA", "language": "zh", "fact": "readable prose and at least 40 extractable math tokens", "required": ["中文公式文本标记", "v = u + at", "F = ma"], "forbidden": [], "kind": "formula-text", "route": "refine" },
-    { "no": 13, "label": "EN-TABLE", "language": "en", "fact": "readable prose and table cells over a ruled 10 by 10 table", "required": ["EN_TABLE_CANARY", "time", "velocity", "12 m/s"], "forbidden": [], "kind": "table", "route": "refine" },
-    { "no": 14, "label": "ZH-TABLE", "language": "zh", "fact": "readable prose and table cells over a ruled 10 by 10 table", "required": ["中文表格标记", "时间", "速度", "十二米每秒"], "forbidden": [], "kind": "table", "route": "refine" }
+    { "no": 9, "label": "EN-LOST", "language": "en", "fact": "readable prose with two formula rows drawn only as glyph outlines", "required": ["EN_LOST_CANARY"], "forbidden": ["v = u + at", "s = ut"], "decisive": { "formulas": ["v = u + at", "s = ut + at^2 / 2"], "table": [] }, "kind": "formula-lost", "route": "auto" },
+    { "no": 10, "label": "ZH-LOST", "language": "zh", "fact": "readable prose with two formula rows drawn only as glyph outlines", "required": ["中文公式缺失标记"], "forbidden": ["v = u + at", "s = ut"], "decisive": { "formulas": ["v = u + at", "s = ut + at^2 / 2"], "table": [] }, "kind": "formula-lost", "route": "auto" },
+    { "no": 11, "label": "EN-FORMULA", "language": "en", "fact": "readable prose and at least 40 extractable math tokens", "required": ["EN_FORMULA_CANARY", "v = u + at", "F = ma"], "forbidden": [], "decisive": { "formulas": ["v = u + at", "F = ma"], "table": [] }, "kind": "formula-text", "route": "refine" },
+    { "no": 12, "label": "ZH-FORMULA", "language": "zh", "fact": "readable prose and at least 40 extractable math tokens", "required": ["中文公式文本标记", "v = u + at", "F = ma"], "forbidden": [], "decisive": { "formulas": ["v = u + at", "F = ma"], "table": [] }, "kind": "formula-text", "route": "refine" },
+    { "no": 13, "label": "EN-TABLE", "language": "en", "fact": "readable prose and table cells over a ruled 10 by 10 table", "required": ["EN_TABLE_CANARY", "time", "velocity", "12 m/s"], "forbidden": [], "decisive": { "formulas": [], "table": ["time | velocity", "12 m/s"] }, "kind": "table", "route": "refine" },
+    { "no": 14, "label": "ZH-TABLE", "language": "zh", "fact": "readable prose and table cells over a ruled 10 by 10 table", "required": ["中文表格标记", "时间", "速度", "十二米每秒"], "forbidden": [], "decisive": { "formulas": [], "table": ["时间 | 速度", "十二米每秒"] }, "kind": "table", "route": "refine" }
   ]
 }
