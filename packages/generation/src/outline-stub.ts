@@ -65,14 +65,15 @@ export function stubOutline(input: DraftInput): { objectives: string[]; slides: 
   const objectives = sections.map((s) => `Explain ${cleanTitle(s.title).toLowerCase()}`).slice(0, 3);
 
   slides.push({ pageType: "cover", title: cleanTitle(input.lessonTitle), purpose: "Lesson title and objectives", keyPoints: [], visual: "none", minutes: 0.5, sourcePages: [], loop: 0 });
+  const zh = input.params.language === "zh";
   slides.push({
     pageType: "retrieval",
-    title: "Quick recap: what do you remember?",
+    title: zh ? "快速回顾：用上节课的知识热身" : "Quick recap: activate prior knowledge",
     purpose: "Activate prior knowledge",
-    keyPoints: sections.map((s) => `Recall ${cleanTitle(s.title).toLowerCase()}`).slice(0, 3),
+    keyPoints: zh ? ["回顾一个相关概念", "说出一个已学过的关系"] : ["Recall one related idea", "Name a relationship you already know"],
     visual: "none",
     minutes: 4,
-    sourcePages: all.slice(0, 2),
+    sourcePages: [],
     loop: 0,
   });
 

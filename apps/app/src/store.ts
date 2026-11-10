@@ -213,7 +213,7 @@ export type AnswerMode = "hidden" | "shown";
 
 export function studentSlide({ canUndo: _u, ...s }: Slide, answers: AnswerMode) {
   const content =
-    answers === "hidden" ? withoutAnswers(s.content) : s.content.layout === "quiz" ? { ...s.content, options: s.content.options.map((o) => ({ ...o, misconception: "" })) } : s.content;
+    answers === "hidden" ? withoutAnswers(s.content, undefined, s.pageType) : s.content.layout === "quiz" ? { ...s.content, options: s.content.options.map((o) => ({ ...o, misconception: "" })) } : s.content;
   return { ...s, content, notes: "", warnings: [], unverified: [] };
 }
 

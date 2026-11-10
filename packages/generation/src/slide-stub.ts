@@ -3,16 +3,18 @@ import { BUDGETS } from "@kj/templates";
 import { findEmbed } from "@kj/widgets";
 import { clip, glossaryFrom, quantitiesIn, sentencesOf } from "./text.ts";
 
-const PREDICT: Record<string, { question: string; options: string[]; observe: string[] }> = {
+const PREDICT: Record<string, { question: string; options: string[]; observe: string[]; outcome: number }> = {
   "wave-string": {
     question: "What happens to the wavelength if frequency increases?",
     options: ["It gets longer", "It gets shorter", "It stays the same"],
     observe: ["Double the frequency", "Measure the new wavelength"],
+    outcome: 1,
   },
   pendulum: {
     question: "What happens to the period with a longer string?",
     options: ["It gets longer", "It gets shorter", "It stays the same"],
     observe: ["Double the string length", "Time ten swings"],
+    outcome: 0,
   },
 };
 
@@ -187,6 +189,7 @@ export function stubSlide(input: StubInput): { content: SlideContent; notes: str
         sim,
         observe: p.observe,
         explain: clip(sentences.find((s) => /halve|increase|decrease|double|longer|shorter/i.test(s)) ?? sentences[0] ?? spec.title, 12),
+        outcome: p.outcome,
       };
       break;
     }
@@ -204,6 +207,7 @@ export function stubSlide(input: StubInput): { content: SlideContent; notes: str
         ],
         answer: 1,
         explain: clip(sentences[0] ?? spec.title, BUDGETS.quiz.explain.max),
+        ...(/hinge|关键|诊断|依赖/i.test(`${spec.purpose} ${spec.title}`) ? { poll: true } : {}),
       };
       break;
     }

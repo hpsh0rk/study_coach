@@ -67,10 +67,10 @@ export function sourceUnverified(spec: Pick<SlideSpec, "sourceIssue">): Unverifi
   ];
 }
 
-/** The text a slide is checked against: its cited pages, or the whole selection when it cites none. */
+/** The text a slide is checked against. No citation means no source support; it must not borrow the selection. */
 export function checkSourceText(sourcePages: number[], pages: PageText[]): string {
   const cited = new Set(sourcePages);
-  const picked = cited.size ? pages.filter((p) => cited.has(p.no)) : pages;
+  const picked = cited.size ? pages.filter((p) => cited.has(p.no)) : [];
   return picked.map((p) => p.text).join("\n");
 }
 

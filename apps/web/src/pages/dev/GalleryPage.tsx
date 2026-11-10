@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router";
 import type { LayoutId, ThemeId } from "@kj/schema";
 import { CANVAS, LAYOUTS } from "@kj/templates";
 import { galleryCells } from "@kj/templates/testing";
+import { classroomFixtureCells } from "@kj/templates/testing/classroom";
 import { applyStep, fitSlide, measureOverflow, minBodyFontPx, renderSlide } from "@kj/templates/render";
 
 /**
@@ -13,6 +14,8 @@ export function GalleryPage() {
   const [q] = useSearchParams();
   const theme = (q.get("theme") as ThemeId) || "classic";
   const only = q.get("layout") as LayoutId | null;
+  const matrixOnly = q.get("fixture") === "classroom";
+  const reveal = q.get("reveal");
   const host = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -22,14 +25,18 @@ export function GalleryPage() {
     document.body.dataset.galleryReady = "0";
     const disposers: (() => void)[] = [];
     const cells: { cell: HTMLElement; slide: HTMLElement }[] = [];
-    for (const g of galleryCells().filter((g) => !only || g.layout === only)) {
+    const examples = matrixOnly ? classroomFixtureCells() : [...galleryCells(), ...classroomFixtureCells()];
+    for (const g of examples.filter((g) => !only || g.layout === only)) {
       const cell = document.createElement("figure");
       cell.className = "gallery-cell";
       cell.dataset.testid = `slide-${g.id}`;
       const frame = document.createElement("div");
       frame.className = "gallery-frame";
       const r = renderSlide({ content: g.content, sources: [3, 4] }, { theme, interactive: true, badge: LAYOUTS[g.layout].label.en, index: 0, total: 1 });
-      applyStep(r.el, r.steps);
+      const step = reveal === null ? r.steps : Math.min(r.steps, Math.max(0, Number(reveal) || 0));
+      applyStep(r.el, step);
+      cell.dataset.steps = String(r.steps);
+      cell.dataset.reveal = String(step);
       frame.append(r.el);
       const cap = document.createElement("figcaption");
       cap.textContent = g.id;
@@ -51,7 +58,7 @@ export function GalleryPage() {
       document.body.dataset.galleryReady = "1";
     })();
     return () => disposers.forEach((d) => d());
-  }, [theme, only]);
+  }, [theme, only, matrixOnly, reveal]);
 
   return (
     <div className="gallery-page" style={{ ["--canvas-w" as string]: `${CANVAS.width}px` }}>

@@ -40,6 +40,13 @@ describe("checkOutline", () => {
     const o = outline([spec("cover", 1), { ...spec("concept", 3), layout: "quiz" }, spec("exit", 3)]);
     expect(checkOutline(o, params).some((v) => v.code === "layout" && v.level === "error")).toBe(true);
   });
+
+  it("flags a numbered learning loop without both instruction and learner action", () => {
+    const lone = spec("concept", 3, { loop: 1 });
+    expect(checkOutline(outline([lone]), params)).toEqual(expect.arrayContaining([expect.objectContaining({ code: "loop-balance", slideId: lone.id })]));
+    const paired = outline([lone, spec("check", 2, { loop: 1 })]);
+    expect(checkOutline(paired, params).map((v) => v.code)).not.toContain("loop-balance");
+  });
 });
 
 describe("densityOf", () => {
