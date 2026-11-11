@@ -2,7 +2,7 @@
 
 `@kj/templates/testing/classroom` contains two reviewed, replay-only lessons:
 
-- English physics: wave speed, with prerequisite retrieval, explanation, worked example, faded practice, hinge poll and exit check.
+- English physics: wave speed, with prerequisite retrieval, explanation, wave-string investigation, worked example, faded practice, hinge poll and exit check.
 - Chinese physics: Newton's second law, with prerequisite retrieval, explanation, faded calculation, hinge poll and exit check.
 
 CI never calls a model or external service. The fixtures pin source pages, outline rows, generated slide payloads and compact oracles.
@@ -17,7 +17,7 @@ CI never calls a model or external service. The fixtures pin source pages, outli
 | Outline/deck identity | Every outline row appears exactly once in the replayed deck, in the same order, with matching page type and source pages. |
 | Pedagogy dependencies | Each objective has an instruction, learner action and assessment in that order. Every numbered learning loop must contain both instruction and learner activity. Retrieval fixtures use prerequisites rather than today's source pages. |
 | Polls and interactions | Hinge checks have a valid answer and two reveal steps: tally before answer. Deterministic experiment content carries the confirmed prediction outcome. |
-| Overflow and reveal state | All 13 replayed slides run in classic and chalk themes, at 16:9 and 4:3 viewports, at every reveal step. CI checks slot overflow, body font policy, page errors and no hidden content at the final step. |
+| Overflow and reveal state | All 14 replayed slides run in classic and chalk themes at every real reveal state. The player matrix covers 1920×1080, 1024×768, 1024×576 and 1280×720 at 2× device scale; CI checks slot overflow, clipped descendants, source/control collisions, body font policy, page errors and no hidden final content. |
 
 ## Baseline and result
 
@@ -47,6 +47,20 @@ Baseline on PR #55 caught all citation mutations but only 6/10 scientific mutati
 After the focused fixes the gate catches `22/22` seeded mutations (100%) with `0/6` clean false positives (0%). Formula checking now distinguishes equivalent multiplicative rearrangements (`F=ma`, `a=F/m`) from a different relationship (`a=Fm`); signed values must match their cited sign; and directly cited prose quantities preserve significant-figure precision.
 
 Citation, chemistry-equation and same-unit context mutations use reviewed exact anchors. They prove those committed claims and mutations only. They do not claim paraphrase, entailment or open-domain contradiction detection.
+
+## Runtime viewport and interaction follow-up
+
+The PR #55 baseline was `208/208` gallery configurations: 13 slides × 4 requested reveal indices × 2 themes × 2 DPR-1 viewports. It rendered the fixed 1920×1080 gallery canvas, so it did not prove real player scaling, 1024×576, high-DPI, resize or fullscreen behavior. The classroom replay also had no simulation slide.
+
+The follow-up keeps that gallery gate (`224/224` after adding the reviewed wave-string investigation) and adds:
+
+- `280/280` real player cells: 35 actual slide/reveal states × 2 themes × 4 viewport profiles;
+- four profiles: 1920×1080 DPR 1, 1024×768 DPR 1, 1024×576 DPR 1, and 1280×720 DPR 2;
+- deterministic poll tally/reveal, simulation canvas/outcome, three live resize sizes, and fullscreen enter/exit;
+- the existing full-flow checks for bidirectional presenter sync and a network-blocked offline file, including its embedded simulation.
+
+The baseline run was green and the expanded matrix found no production defect. Only test/dev fixture surfaces changed; runtime behavior was not altered.
+The completed branch passes `362/362` unit/API tests and `15/15` Playwright tests; the latter includes bidirectional presenter sync and the zero-network offline run.
 
 ## Deliberate limits
 
