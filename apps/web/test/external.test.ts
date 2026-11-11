@@ -8,7 +8,7 @@ const md = (count: number, missing: number[] = []) =>
   Array.from({ length: count }, (_, i) => (missing.includes(i + 1) ? "" : `${separatorText(i + 1)}\n$$ v_${i + 1} = u + a t $$`)).join("\n");
 
 function fakes(over: Partial<ExternalDeps> = {}, opts: { size?: (pages: number[]) => number; missing?: number[] } = {}) {
-  const calls = { created: [] as { pages: number[]; ocr: boolean }[], uploaded: [] as number[], saved: [] as number[][], polls: 0 };
+  const calls = { created: [] as { pages: number[]; ocr: boolean }[], uploaded: [] as number[], saved: [] as number[][], savedText: [] as { no: number; text: string }[][], polls: 0 };
   let jobs = 0;
   const pagesOf = new Map<string, number[]>();
   const deps: ExternalDeps = {
@@ -33,6 +33,7 @@ function fakes(over: Partial<ExternalDeps> = {}, opts: { size?: (pages: number[]
     },
     async save(_job, pages) {
       calls.saved.push(pages.map((p) => p.no));
+      calls.savedText.push(pages);
       return pages.map((p) => ({ no: p.no, words: 8, chars: p.text.length, flags: [], parser: "mineru-agent/1" }));
     },
     async sleep() {},
@@ -65,6 +66,10 @@ describe("external parsing in the browser", () => {
       { pages: [9], ocr: false },
     ]);
     expect(calls.saved).toEqual([[5, 12], [3, 8], [9]]);
+    expect(calls.savedText[0]).toEqual([
+      { no: 5, text: "$$ v_1 = u + a t $$" },
+      { no: 12, text: "$$ v_2 = u + a t $$" },
+    ]);
     expect(out.saved.map((p) => p.no)).toEqual([5, 12, 3, 8, 9]);
     expect(out).toMatchObject({ missed: [], stopped: null });
     expect(progress).toEqual([0, 2, 4, 5]);
@@ -77,11 +82,12 @@ describe("external parsing in the browser", () => {
     expect(out.missed).toEqual([7]);
   });
 
-  it("pages whose separator did not come back are reported, not saved", async () => {
+  it("rejects a result with a missing separator as one unsafe batch, so no text can shift pages", async () => {
     const { deps, calls } = fakes({}, { missing: [2] });
     const out = await parseExternally([4, 6].map((no) => ({ no, kind: "formula-lost" as const })), info, deps);
-    expect(calls.saved).toEqual([[4]]);
-    expect(out.missed).toEqual([6]);
+    expect(calls.saved).toEqual([]);
+    expect(out.missed).toEqual([4, 6]);
+    expect(out.failure).toMatch(/separators.*missing.*duplicated.*extra.*order/i);
   });
 
   it("stops at a refusal that will not go away (quota), keeping what was read", async () => {

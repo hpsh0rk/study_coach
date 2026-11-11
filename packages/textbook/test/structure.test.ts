@@ -193,6 +193,7 @@ describe("page kinds", () => {
     expect(classifyPage({ ...plain, chars: 350, words: 60, imageArea: 0.6 })).toBe("scanned");
     expect(classifyPage({ ...plain, chars: 20, words: 3, imageArea: 0.1 })).toBe("blank");
     expect(classifyPage({ ...plain, badCharRatio: 0.2 })).toBe("garbled");
+    expect(classifyPage({ ...plain, chars: 200, words: 0, badCharRatio: 1 })).toBe("garbled");
     expect(classifyPage({ ...plain, glyphRows: 2 })).toBe("formula-lost");
     expect(classifyPage({ ...plain, holes: 2, glyphs: 5 })).toBe("formula-lost");
     expect(classifyPage({ ...plain, holes: 2, glyphs: 4 })).toBe("text");
@@ -231,12 +232,24 @@ describe("page kinds", () => {
 });
 
 describe("external parser results", () => {
-  it("maps one Markdown file back to pages by the separator pages", () => {
-    const md = [separatorText(1), "## 3.1 Equations", "$$ v = u + a t $$", "", `# ${separatorText(3)}`, "<!-- image-->", "Third", separatorText(9), "ignored"].join("\n");
-    expect(splitSeparated(md, 3)).toEqual(["## 3.1 Equations\n$$ v = u + a t $$", null, "Third"]);
-    expect(splitSeparated("no separators at all", 2)).toEqual([null, null]);
+  it("maps distinct canaries back by ordered separator pages", () => {
+    const md = [separatorText(1), "PAGE_A_7f31", "## KJPAGE 2", "PAGE_B_c204", separatorText(3), "<!-- image-->", "PAGE_C_91aa"].join("\n");
+    expect(splitSeparated(md, 3)).toEqual(["PAGE_A_7f31", "PAGE_B_c204", "PAGE_C_91aa"]);
     // A separator that is empty still counts: an empty page is a result, not a failure.
     expect(splitSeparated(`${separatorText(1)}\n<!-- image-->\n${separatorText(2)}\nB`, 2)).toEqual(["", "B"]);
+  });
+
+  it("rejects any marker mutation instead of shifting text onto a different page", () => {
+    for (const md of [
+      `${separatorText(1)}\nA\n${separatorText(3)}\nC`,
+      `${separatorText(1)}\nA\n${separatorText(2)}\nB\n${separatorText(2)}\nB again`,
+      `${separatorText(2)}\nB\n${separatorText(1)}\nA`,
+      `${separatorText(1)}\nA\n${separatorText(2)}\nB\n${separatorText(99)}\nbody canary`,
+      `${separatorText(1)}\nA body line\nKJPAGE 99\n${separatorText(2)}\nB`,
+      "no separators at all",
+    ]) {
+      expect(() => splitSeparated(md, 2)).toThrow(/separators.*missing.*duplicated.*extra.*order/i);
+    }
   });
 
   it("turns parser Markdown into page text", () => {

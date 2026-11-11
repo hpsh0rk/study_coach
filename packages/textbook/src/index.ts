@@ -55,8 +55,8 @@ export function badCharRatio(text: string): number {
 /** Thresholds from the parsing research (docs/research/pdf-parsing.md §7), checked in this order. */
 export function classifyPage(p: PageProbe): PageKind {
   if ((p.chars < 30 && p.imageArea > 0.3) || (p.imageArea > 0.5 && p.chars < 400)) return "scanned";
-  if (isEmptyPage(p.words)) return "blank";
   if (p.badCharRatio > 0.05) return "garbled";
+  if (isEmptyPage(p.words)) return "blank";
   if (p.glyphRows >= 2 || (p.holes >= 2 && p.glyphs >= 5)) return "formula-lost";
   if (p.mathScore >= 40) return "formula-text";
   if (p.rules >= 20 || (p.rects >= 15 && p.gridRows >= 3)) return "table";
@@ -114,15 +114,22 @@ export function cleanVisionText(text: string): string {
  */
 export const separatorText = (i: number) => `KJPAGE ${i}`;
 
-/** The Markdown of each of `count` pages, or null where its separator did not come back. */
-export function splitSeparated(markdown: string, count: number): (string | null)[] {
-  const out: (string | null)[] = new Array<string | null>(count).fill(null);
+/** A malformed parser result is unsafe to save because its text may be shifted onto another PDF page. */
+export class PageSeparatorError extends Error {
+  constructor() {
+    super("External parser page separators are missing, duplicated, extra, or out of order");
+    this.name = "PageSeparatorError";
+  }
+}
+
+/** The Markdown of each of `count` pages; malformed marker sequences are rejected as one unsafe result. */
+export function splitSeparated(markdown: string, count: number): string[] {
   const marks = [...markdown.matchAll(/^[ \t]*(?:#+[ \t]*)?KJPAGE[ \t]+(\d+)[ \t]*$/gm)];
+  if (!Number.isInteger(count) || count < 1 || marks.length !== count || marks.some((m, i) => Number(m[1]) !== i + 1)) throw new PageSeparatorError();
+  const out = new Array<string>(count).fill("");
   marks.forEach((m, k) => {
-    const i = Number(m[1]) - 1;
-    if (i < 0 || i >= count || out[i] !== null) return;
     const end = k + 1 < marks.length ? marks[k + 1]!.index : markdown.length;
-    out[i] = cleanParsedMarkdown(markdown.slice(m.index + m[0].length, end));
+    out[k] = cleanParsedMarkdown(markdown.slice(m.index + m[0].length, end));
   });
   return out;
 }
