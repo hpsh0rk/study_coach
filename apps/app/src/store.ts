@@ -212,8 +212,14 @@ export async function lessonList(env: Env, user: SessionUser) {
 export type AnswerMode = "hidden" | "shown";
 
 export function studentSlide({ canUndo: _u, ...s }: Slide, answers: AnswerMode) {
+  // A faded example is an assessment even if malformed generated/edited content lost `fadeFrom`.
+  // Keep the explanation steps, but never serialize its final answer-bearing step to a preview copy.
+  const answerSafe =
+    s.pageType === "faded" && s.content.layout === "steps" && s.content.fadeFrom === undefined
+      ? { ...s.content, fadeFrom: Math.max(0, s.content.steps.length - 1) }
+      : s.content;
   const content =
-    answers === "hidden" ? withoutAnswers(s.content) : s.content.layout === "quiz" ? { ...s.content, options: s.content.options.map((o) => ({ ...o, misconception: "" })) } : s.content;
+    answers === "hidden" ? withoutAnswers(answerSafe) : s.content.layout === "quiz" ? { ...s.content, options: s.content.options.map((o) => ({ ...o, misconception: "" })) } : s.content;
   return { ...s, content, notes: "", warnings: [], unverified: [] };
 }
 
