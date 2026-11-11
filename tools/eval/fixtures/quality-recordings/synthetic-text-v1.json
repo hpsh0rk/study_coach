@@ -1,0 +1,21 @@
+{
+  "fixtureVersion": 1,
+  "corpusVersion": 1,
+  "caseId": "text-grounding-v1",
+  "target": "text",
+  "recordedAt": "2026-11-10T00:00:00.000Z",
+  "implementation": {
+    "kind": "synthetic-mock",
+    "model": "fixture-v1",
+    "protocol": "offline"
+  },
+  "output": {
+    "raw": "{\"summary\":\"At constant speed, distance is speed multiplied by time.\",\"citations\":[1],\"quantities\":[{\"value\":12,\"unit\":\"m/s\"},{\"value\":3,\"unit\":\"s\"},{\"value\":36,\"unit\":\"m\"}],\"studentQuestion\":\"How far does the cart travel at 12 m/s for 3 s?\",\"teacherAnswer\":\"36 m\"}"
+  },
+  "metadata": {
+    "latencyMs": 7,
+    "inputTokens": 91,
+    "outputTokens": 65,
+    "costUsd": null
+  }
+}
