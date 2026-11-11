@@ -415,6 +415,11 @@
   gap: 22px;
   align-items: baseline;
 }
+.kj-step-body {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+}
 .kj-step-n {
   display: inline-grid;
   place-items: center;

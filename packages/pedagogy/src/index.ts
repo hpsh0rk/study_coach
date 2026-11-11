@@ -273,6 +273,20 @@ export function checkOutline(outline: Outline, params: LessonParams): Violation[
   }
   if (timing.lectureShare > 0.5 + 1e-9) v.push({ level: "warning", code: "talk-ratio", message: `讲授占 ${Math.round(timing.lectureShare * 100)}%，建议 ≤ 50% · too much lecture` });
   if (timing.activityShare < 0.4 - 1e-9) v.push({ level: "warning", code: "activity-ratio", message: `学生活动占 ${Math.round(timing.activityShare * 100)}%，建议 ≥ 40% · too little student activity` });
+  const loops = [...new Set(outline.slides.map((s) => s.loop).filter((loop) => loop > 0))].sort((a, b) => a - b);
+  for (const loop of loops) {
+    const slides = outline.slides.filter((s) => s.loop === loop);
+    const instruction = slides.some((s) => PAGE_TYPES[s.pageType].mode === "lecture");
+    const learnerAction = slides.some((s) => PAGE_TYPES[s.pageType].mode === "practice");
+    if (!instruction || !learnerAction) {
+      v.push({
+        level: "warning",
+        code: "loop-balance",
+        message: `学习环 ${loop} 需要讲解和学生活动 · learning loop ${loop} needs both instruction and learner action`,
+        slideId: slides[0]?.id,
+      });
+    }
+  }
   if (outline.slides[0]?.pageType !== "cover") v.push({ level: "warning", code: "skeleton", message: "第一页应为封面与目标 · start with a cover" });
   const last = outline.slides[outline.slides.length - 1];
   if (last && !["exit", "summary"].includes(last.pageType)) v.push({ level: "warning", code: "skeleton", message: "最后应以小结或出门条收尾 · end with a summary or exit ticket" });

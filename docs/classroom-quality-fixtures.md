@@ -1,0 +1,45 @@
+# Deterministic classroom deck fixtures
+
+`@kj/templates/testing/classroom` contains two reviewed, replay-only lessons:
+
+- English physics: wave speed, with prerequisite retrieval, explanation, worked example, faded practice, hinge poll and exit check.
+- Chinese physics: Newton's second law, with prerequisite retrieval, explanation, faded calculation, hinge poll and exit check.
+
+CI never calls a model or external service. The fixtures pin source pages, outline rows, generated slide payloads and compact oracles.
+
+## Machine checks
+
+| Aspect | Deterministic oracle |
+| --- | --- |
+| Claim support and citations | Each decisive claim names its exact supporting page. The test proves the cited page contains the canary claim and adjacent pages do not. A slide with no citation gets no source text to borrow. |
+| Number and unit fidelity | Values, formulas and calculations are checked only against cited pages. Quantity checks compare normalized value plus dimension, including `20 kHz` = `20 000 Hz`, Chinese units, and wrong-unit mutations such as `120 km/s` vs `120 m/s`. |
+| Teacher/student boundary | Unique canaries in notes, misconceptions, explanations, question answers and faded answer steps must be absent from hidden-answer student payloads. A faded slide missing `fadeFrom` fails closed by hiding its final step. |
+| Outline/deck identity | Every outline row appears exactly once in the replayed deck, in the same order, with matching page type and source pages. |
+| Pedagogy dependencies | Each objective has an instruction, learner action and assessment in that order. Every numbered learning loop must contain both instruction and learner activity. Retrieval fixtures use prerequisites rather than today's source pages. |
+| Polls and interactions | Hinge checks have a valid answer and two reveal steps: tally before answer. Deterministic experiment content carries the confirmed prediction outcome. |
+| Overflow and reveal state | All 13 replayed slides run in classic and chalk themes, at 16:9 and 4:3 viewports, at every reveal step. CI checks slot overflow, body font policy, page errors and no hidden content at the final step. |
+
+## Baseline and result
+
+Before the fixes, the existing core suites were green (`142/142` tests), but the new 22-test classroom matrix had six failing oracle groups (`16/22` passing):
+
+1. an uncited `120 m/s` claim borrowed support from the whole selection;
+2. `120 km/s` passed against a cited `120 m/s`;
+3. a learning loop with explanation only was not flagged;
+4. deterministic retrieval cited and repeated today's topic;
+5. deterministic hinge/experiment interaction metadata was missing;
+6. a faded student activity without `fadeFrom` leaked its final teacher-only answer.
+
+The reveal-step browser matrix also found 8 failing render configurations out of 208: both faded slides overflowed at step 0 in both themes and viewports because the blank-answer placeholder forced the hidden body into a second grid row.
+
+After the fixes, the classroom matrix passes `22/22` and the browser matrix passes `208/208`; the full unit suite, lint, typecheck, build and overflow browser suite are the release gates.
+
+## Deliberate limits
+
+These fixtures prove closed-world canaries and seeded mutations, not open-ended teaching quality. A real model or teacher is still required for:
+
+- bilingual paraphrase-level claim support, contradiction and wrong-context judgments;
+- semantic answer giveaways in a stem or distractor that contain no teacher-only field/canary;
+- whether prerequisites, difficulty progression, remediation and objective coverage are pedagogically appropriate;
+- whether a generated lesson is accurate, level-appropriate and teachable without reordering;
+- classroom usability of polls, pacing and projection on real hardware.

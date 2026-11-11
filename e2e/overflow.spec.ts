@@ -11,7 +11,7 @@ test("all layouts fit at max budget with body text >= 48px", async ({ page }) =>
     figs.map((f) => ({ id: f.getAttribute("data-testid"), overflow: f.getAttribute("data-overflow") ?? "?", minFont: Number(f.getAttribute("data-min-font")), hidden: f.querySelectorAll(".kj-step-hidden").length })),
   );
   expect(errors).toEqual([]);
-  expect(cells.length).toBe(38);
+  expect(cells.length).toBe(51);
   for (const c of cells) {
     expect.soft(c.overflow, `${c.id} overflowing slots`).toBe("");
     expect.soft(c.minFont, `${c.id} smallest body font`).toBeGreaterThanOrEqual(48 - 0.01);
@@ -21,6 +21,38 @@ test("all layouts fit at max budget with body text >= 48px", async ({ page }) =>
     for (const id of ["order-sample", "order-match-zh", "quiz-poll-en", "experiment-sample"]) {
       const fig = page.getByTestId(`slide-${id}`);
       if (await fig.count()) await fig.locator(".kj-slide").screenshot({ path: `${process.env.SHOTS_DIR}/18-gallery-${id}.png` });
+    }
+  }
+});
+
+test("classroom replays fit in both themes at every reveal step", async ({ page }) => {
+  for (const size of [{ width: 1920, height: 1080 }, { width: 1024, height: 768 }]) {
+    await page.setViewportSize(size);
+    for (const theme of ["classic", "chalk"]) {
+      for (let reveal = 0; reveal <= 3; reveal++) {
+        const errors: string[] = [];
+        page.on("pageerror", (error) => errors.push(error.message));
+        await page.goto(`/dev/gallery?fixture=classroom&theme=${theme}&reveal=${reveal}`);
+        await page.waitForFunction(() => document.body.dataset.galleryReady === "1", null, { timeout: 30_000 });
+        const cells = await page.$$eval("figure[data-testid^='slide-classroom-']", (figs) =>
+          figs.map((figure) => ({
+            id: figure.getAttribute("data-testid"),
+            overflow: figure.getAttribute("data-overflow") ?? "?",
+            minFont: Number(figure.getAttribute("data-min-font")),
+            hidden: figure.querySelectorAll(".kj-step-hidden").length,
+            steps: Number((figure as HTMLElement).dataset.steps),
+            shown: Number((figure as HTMLElement).dataset.reveal),
+          })),
+        );
+        expect(errors, `${theme} ${size.width}×${size.height} reveal ${reveal}`).toEqual([]);
+        expect(cells).toHaveLength(13);
+        for (const cell of cells) {
+          expect.soft(cell.overflow, `${cell.id} ${theme} reveal ${reveal}`).toBe("");
+          expect.soft(cell.minFont, `${cell.id} ${theme} reveal ${reveal}`).toBeGreaterThanOrEqual(48 - 0.01);
+          if (cell.shown === cell.steps) expect.soft(cell.hidden, `${cell.id} final reveal`).toBe(0);
+        }
+        page.removeAllListeners("pageerror");
+      }
     }
   }
 });

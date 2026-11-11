@@ -46,6 +46,13 @@ describe("verifyNumbers", () => {
     expect(verifyNumbers(c, SOURCE)).toEqual([]);
   });
 
+  it("compares value and unit together, including scaled and Chinese units", () => {
+    expect(verifyNumbers(statement(["Sound travels at 340 km/s in air"]), SOURCE)).toEqual([expect.objectContaining({ kind: "number", text: "340 km/s" })]);
+    expect(verifyNumbers(statement(["Ultrasound is above 20 kHz"]), SOURCE)).toEqual([]);
+    const zh = statement(["合力是12千克"]);
+    expect(verifyNumbers(zh, "物体受到12牛顿合力")).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "number", text: "12千克" })]));
+  });
+
   it("flags numbers missing from the cited pages, but ignores small counts", () => {
     const c = statement(["Sound travels at 343 m/s in air", "There are 3 kinds of wave"]);
     const u = verifyNumbers(c, SOURCE);

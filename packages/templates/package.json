@@ -8,6 +8,7 @@
     "./render": "./src/render/index.ts",
     "./issues": "./src/issues.ts",
     "./testing": "./src/samples.ts",
+    "./testing/classroom": "./src/classroom-fixtures.ts",
     "./slides.css": "./src/render/slides.css"
   },
   "scripts": {

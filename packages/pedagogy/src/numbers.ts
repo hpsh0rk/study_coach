@@ -36,7 +36,8 @@ export interface FoundNumber {
   decimals: number;
 }
 
-const NUM_RE = /(?<![\p{L}\p{N}_.])([-−]?)(\d{1,3}(?:[,\u00a0\u202f ]\d{3})+(?!\d)|\d+)(?:\.(\d+))?(?:\s*(?:×|x|\*)\s*10\s*\^\s*\(?([-−]?\d+)\)?)?/gu;
+// CJK normally has no spaces around quantities ("12牛顿"), while Latin chemical tokens (CO2/H2O) stay excluded.
+const NUM_RE = /(?<![A-Za-z\d_.])([-−]?)(\d{1,3}(?:[,\u00a0\u202f ]\d{3})+(?!\d)|\d+)(?:\.(\d+))?(?:\s*(?:×|x|\*)\s*10\s*\^\s*\(?([-−]?\d+)\)?)?/g;
 
 /** Numbers in prose or plain math, with thousands separators ("20 000", "3,000") and "a × 10^b". */
 export function numbersIn(raw: string): FoundNumber[] {
@@ -51,6 +52,44 @@ export function numbersIn(raw: string): FoundNumber[] {
     if (sign) value = -value;
     if (!Number.isFinite(value)) continue;
     out.push({ text: whole.trim(), value, decimals: exp ? 0 : (frac?.length ?? 0) });
+  }
+  return out;
+}
+
+interface FoundQuantity {
+  text: string;
+  number: FoundNumber;
+  dimension: string;
+  baseValue: number;
+}
+
+const QUANTITY_RE =
+  /([-−]?(?:\d{1,3}(?:[,\u00a0\u202f ]\d{3})+|\d+)(?:\.\d+)?(?:\s*(?:×|x|\*)\s*10\s*\^\s*\(?[-−]?\d+\)?)?)\s*(kilometres?\s+per\s+second|meters?\s+per\s+second|metres?\s+per\s+second|km\s*\/\s*s|m\s*\/\s*s(?:²|\^2)?|米\s*\/\s*秒(?:²|\^2)?|千米\s*\/\s*秒|kilohertz|kHz|hertz|Hz|赫兹|kilograms?|kg|千克|grams?|g|newtons?|N|牛顿|centimetres?|centimeters?|cm|millimetres?|millimeters?|mm|kilometres?|kilometers?|km|metres?|meters?|m|米|seconds?|s|秒)(?![A-Za-z])/giu;
+
+function normalizedUnit(raw: string): { dimension: string; factor: number } | undefined {
+  const unit = raw.toLowerCase().replace(/\s+/g, "");
+  if (["kilometrespersecond", "kilometerspersecond", "km/s", "千米/秒"].includes(unit)) return { dimension: "speed", factor: 1e3 };
+  if (["metrespersecond", "meterspersecond", "m/s", "米/秒"].includes(unit)) return { dimension: "speed", factor: 1 };
+  if (["m/s²", "m/s^2", "米/秒²", "米/秒^2"].includes(unit)) return { dimension: "acceleration", factor: 1 };
+  if (["kilohertz", "khz"].includes(unit)) return { dimension: "frequency", factor: 1e3 };
+  if (["hertz", "hz", "赫兹"].includes(unit)) return { dimension: "frequency", factor: 1 };
+  if (["kilogram", "kilograms", "kg", "千克"].includes(unit)) return { dimension: "mass", factor: 1 };
+  if (["gram", "grams", "g"].includes(unit)) return { dimension: "mass", factor: 1e-3 };
+  if (["newton", "newtons", "n", "牛顿"].includes(unit)) return { dimension: "force", factor: 1 };
+  if (["kilometre", "kilometres", "kilometer", "kilometers", "km"].includes(unit)) return { dimension: "length", factor: 1e3 };
+  if (["centimetre", "centimetres", "centimeter", "centimeters", "cm"].includes(unit)) return { dimension: "length", factor: 1e-2 };
+  if (["millimetre", "millimetres", "millimeter", "millimeters", "mm"].includes(unit)) return { dimension: "length", factor: 1e-3 };
+  if (["metre", "metres", "meter", "meters", "m", "米"].includes(unit)) return { dimension: "length", factor: 1 };
+  if (["second", "seconds", "s", "秒"].includes(unit)) return { dimension: "time", factor: 1 };
+}
+
+function quantitiesIn(raw: string): FoundQuantity[] {
+  const out: FoundQuantity[] = [];
+  for (const match of raw.matchAll(QUANTITY_RE)) {
+    const number = numbersIn(match[1]!)[0];
+    const unit = normalizedUnit(match[2]!);
+    if (!number || !unit) continue;
+    out.push({ text: match[0].trim(), number, dimension: unit.dimension, baseValue: number.value * unit.factor });
   }
   return out;
 }
@@ -311,6 +350,16 @@ export function verifyNumbers(content: SlideContent, source: string, opts: Verif
     for (const n of candidates) {
       if (isTrivial(n) || inSource(n, verified)) continue;
       add({ kind: "number", text: n.text, detail: "引用页中没有找到这个数 · not found on the cited pages" });
+    }
+    const sourceQuantities = quantitiesIn(source);
+    for (const quantity of [...prose, ...tex].flatMap(quantitiesIn)) {
+      // The literal/scaled number exists, but the cited page does not support this value-unit pair.
+      if (!inSource(quantity.number, sourceNums)) continue;
+      const supported = sourceQuantities.some((candidate) => {
+        const tolerance = Math.max(Math.abs(quantity.baseValue) * 1e-9, 1e-12);
+        return candidate.dimension === quantity.dimension && close(candidate.baseValue, quantity.baseValue, tolerance);
+      });
+      if (!supported) add({ kind: "number", text: quantity.text, detail: "引用页中的单位或量纲不一致 · unit or dimension does not match the cited pages" });
     }
   }
 

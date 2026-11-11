@@ -170,7 +170,7 @@ export function stepsOf(content: SlideContent): number {
  * becomes -1; ordered items are re-dealt in a random cyclic order (their listed order is the answer,
  * and a seeded shuffle could be inverted by the class).
  */
-export function withoutAnswers(content: SlideContent, random: () => number = Math.random): SlideContent {
+export function withoutAnswers(content: SlideContent, random: () => number = Math.random, pageType?: PageType): SlideContent {
   switch (content.layout) {
     case "quiz":
       return { ...content, answer: -1, explain: "", options: content.options.map((o) => ({ ...o, misconception: "" })) };
@@ -178,9 +178,11 @@ export function withoutAnswers(content: SlideContent, random: () => number = Mat
       const { outcome: _o, ...rest } = content;
       return { ...rest, explain: "" };
     }
-    case "steps":
-      if (content.fadeFrom === undefined) return content;
-      return { ...content, steps: content.steps.map((s, i) => (i < content.fadeFrom! ? s : { text: "", why: "" })) };
+    case "steps": {
+      const fadeFrom = content.fadeFrom ?? (pageType === "faded" ? Math.max(1, content.steps.length - 1) : undefined);
+      if (fadeFrom === undefined) return content;
+      return { ...content, fadeFrom, steps: content.steps.map((s, i) => (i < fadeFrom ? s : { text: "", why: "" })) };
+    }
     case "questions":
       return { ...content, items: content.items.map((it) => ({ ...it, a: "" })) };
     case "order": {
