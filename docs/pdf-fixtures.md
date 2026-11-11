@@ -29,6 +29,14 @@ Before the corpus-driven fix, classification matched 12/14 pages (85.7%): both f
 
 Before strict marker validation, 0/6 malformed `KJPAGE` mutations produced an explicit failure. All 6/6 are now rejected as unsafe, while clean ordered results and non-contiguous page mapping remain exact.
 
+## Recorded MinerU replay
+
+The sanitized response in `apps/app/src/textbook/parsers/mineru-recorded.json` is tied to `kinematics-outlines.pdf` page 2 in the shared oracle. Offline replay checks its exact request-page provenance, 3/3 page-identity canaries, and 2/2 outline formulas after harmless LaTeX font-command normalization.
+
+Formula similarity alone is not identity: the recording recovers the same equations as corpus page 9, but is rejected for that page because it lacks `EN_LOST_CANARY`. It is also rejected as corpus table page 13 because its page canary, decisive table row, and `12 m/s` cell are absent. A valid recorded-result-shaped table control passes the same reviewed page-13 tokens; it is synthetic and is not described as a MinerU recording.
+
+Six marker-identity mutations derived from the real recording (missing, duplicate, out-of-order, extra, fake body marker, wrong ordinal) are rejected before the save boundary. Result: 6/6 whole batches rejected and 0 partial pages saved; the clean two-page formula+table control saves 2/2.
+
 ## Remaining real-parser gaps
 
-This corpus proves deterministic pdf.js classification and local routing, not OCR or formula reconstruction quality. A live MinerU or vision-parser evaluation must run these same page identities through the real service and compare returned canaries/formulas/tables to a separately reviewed golden. The synthetic grey scan cannot measure OCR recall, and the compact corpus does not represent complex publisher layouts such as multi-column reading order, merged table cells, figure labels, or partially corrupt embedded fonts.
+This corpus proves deterministic pdf.js classification and local routing, not OCR or formula reconstruction quality. The existing MinerU recording positively covers one formula page only; it contains no table or scan and cannot establish current service quality or drift. A live MinerU or vision-parser evaluation must run these same page identities through the real service and compare returned canaries/formulas/tables to the reviewed golden. The synthetic grey scan cannot measure OCR recall, and the compact corpus does not represent complex publisher layouts such as multi-column reading order, merged table cells, figure labels, or partially corrupt embedded fonts.
