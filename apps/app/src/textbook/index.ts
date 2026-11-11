@@ -3,7 +3,7 @@
  * textbook's pages, chapters and labels. It knows nothing about lessons.
  */
 import { and, asc, between, count, desc, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
-import { chapterRunsOf, isEmptyPage, MIN_PAGE_WORDS, missingRanges, MUST_FIX_KINDS, PDFJS_PARSER, type PageFlag, normalizeRanges, pagesInRanges, rangesForChapters, sourceCut, type ChapterRun } from "@kj/textbook";
+import { chapterRunsOf, isEmptyPage, MIN_PAGE_WORDS, missingRanges, MUST_FIX_KINDS, PDFJS_PARSER, type PageFlag, normalizeRanges, pagesInRanges, rangesForChapters, sourceCut, topSections, type ChapterRun } from "@kj/textbook";
 import type { ChapterNode, LessonScope, PageKind, PageRange, PageText } from "@kj/schema";
 import { db } from "../db/index.ts";
 import type { Env, SessionUser } from "../env.ts";
@@ -203,7 +203,7 @@ export async function scopeStats(env: Env, documentId: string, ranges: PageRange
     .orderBy(asc(pages.no));
   const withText = rows.filter((r) => !isEmptyPage(r.words));
   return {
-    words: rows.reduce((n, r) => n + r.words, 0),
+    words: withText.reduce((n, r) => n + r.words, 0),
     emptyPages: rows.filter((r) => isEmptyPage(r.words)).map((r) => r.no),
     unreadPages: sourceCut(withText, opts.sourceBudget).omitted,
   };
@@ -245,7 +245,7 @@ export async function resolveScope(
   const fromChapters = ids.length ? rangesForChapters(tree, ids, doc.pageCount) : [];
   const merged = normalizeRanges([...fromChapters, ...ranges], doc.pageCount);
   if (!merged.length) throw new HttpError(400, "EMPTY_SCOPE", "Choose at least one chapter or page range · 请至少选择一个章节或页码范围");
-  const picked = tree.filter((c) => ids.includes(c.id) && !(c.parentId && ids.includes(c.parentId)));
+  const picked = topSections(tree, ids);
   const title = picked.length ? picked.map((c) => c.title).join(" · ") : `${doc.title} pp. ${merged.map((r) => `${r.start}–${r.end}`).join(", ")}`;
   return { scope: { chapterIds: ids, ranges: merged }, title: title.slice(0, 200) };
 }

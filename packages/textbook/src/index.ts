@@ -355,10 +355,42 @@ export function childrenOf(tree: ChapterNode[], parentId: string | null): Chapte
   return tree.filter((c) => c.parentId === parentId).sort((a, b) => a.ord - b.ord);
 }
 
-/** Selected chapters with no selected child, in reading order: the planner's sections and the owners of pages in a unit split. */
-export function leafSections(tree: ChapterNode[], chapterIds: string[]): ChapterNode[] {
+function selectedRelative(tree: ChapterNode[], chapterIds: string[], direction: "ancestor" | "descendant"): ChapterNode[] {
   const ids = new Set(chapterIds);
-  return tree.filter((c) => ids.has(c.id) && !tree.some((k) => k.parentId === c.id && ids.has(k.id)));
+  const parents = new Map(tree.map((chapter) => [chapter.id, chapter.parentId]));
+  const hasSelectedAncestor = (chapter: ChapterNode) => {
+    const seen = new Set<string>();
+    let parentId = chapter.parentId;
+    while (parentId && !seen.has(parentId)) {
+      if (ids.has(parentId)) return true;
+      seen.add(parentId);
+      parentId = parents.get(parentId) ?? null;
+    }
+    return false;
+  };
+  const selected = tree.filter((chapter) => ids.has(chapter.id));
+  if (direction === "ancestor") return selected.filter((chapter) => !hasSelectedAncestor(chapter));
+  const ancestorsWithSelectedDescendants = new Set<string>();
+  for (const chapter of selected) {
+    const seen = new Set<string>();
+    let parentId = chapter.parentId;
+    while (parentId && !seen.has(parentId)) {
+      ancestorsWithSelectedDescendants.add(parentId);
+      seen.add(parentId);
+      parentId = parents.get(parentId) ?? null;
+    }
+  }
+  return selected.filter((chapter) => !ancestorsWithSelectedDescendants.has(chapter.id));
+}
+
+/** Selected chapters with no selected ancestor, in reading order: the concise title of a selection. */
+export function topSections(tree: ChapterNode[], chapterIds: string[]): ChapterNode[] {
+  return selectedRelative(tree, chapterIds, "ancestor");
+}
+
+/** Selected chapters with no selected descendant, in reading order: the planner's sections and owners of pages in a unit split. */
+export function leafSections(tree: ChapterNode[], chapterIds: string[]): ChapterNode[] {
+  return selectedRelative(tree, chapterIds, "descendant");
 }
 
 /** Consecutive selected pages owned by one chapter (or by none), with their word counts. */
