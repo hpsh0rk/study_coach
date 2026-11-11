@@ -34,10 +34,19 @@ export interface FoundNumber {
   text: string;
   value: number;
   decimals: number;
+  significantFigures: number;
 }
 
 // CJK normally has no spaces around quantities ("12牛顿"), while Latin chemical tokens (CO2/H2O) stay excluded.
 const NUM_RE = /(?<![A-Za-z\d_.])([-−]?)(\d{1,3}(?:[,\u00a0\u202f ]\d{3})+(?!\d)|\d+)(?:\.(\d+))?(?:\s*(?:×|x|\*)\s*10\s*\^\s*\(?([-−]?\d+)\)?)?/g;
+
+function significantFigures(text: string): number {
+  const mantissa = text.split(/\s*(?:×|x|\*)\s*10\s*\^/i)[0]!.replace(/[-−+,\u00a0\u202f ]/g, "");
+  const decimal = mantissa.includes(".");
+  let digits = mantissa.replace(".", "").replace(/^0+/, "");
+  if (!decimal) digits = digits.replace(/0+$/, "");
+  return Math.max(1, digits.length);
+}
 
 /** Numbers in prose or plain math, with thousands separators ("20 000", "3,000") and "a × 10^b". */
 export function numbersIn(raw: string): FoundNumber[] {
@@ -51,7 +60,7 @@ export function numbersIn(raw: string): FoundNumber[] {
     if (exp) value *= 10 ** Number(exp.replace("−", "-"));
     if (sign) value = -value;
     if (!Number.isFinite(value)) continue;
-    out.push({ text: whole.trim(), value, decimals: exp ? 0 : (frac?.length ?? 0) });
+    out.push({ text: whole.trim(), value, decimals: exp ? 0 : (frac?.length ?? 0), significantFigures: significantFigures(whole) });
   }
   return out;
 }
@@ -99,7 +108,12 @@ const close = (a: number, b: number, tol: number) => Math.abs(a - b) <= tol;
 
 function inSource(n: FoundNumber, source: number[]): boolean {
   const tol = Math.max(Math.abs(n.value) * 1e-9, 1e-12);
-  return source.some((v) => SCALES.some((k) => close(n.value, v * k, tol * Math.max(1, k))) || close(Math.abs(n.value), Math.abs(v), tol));
+  return source.some((v) => SCALES.some((k) => close(n.value, v * k, tol * Math.max(1, k))));
+}
+
+function matchingSourceNumbers(n: FoundNumber, source: FoundNumber[]): FoundNumber[] {
+  const tol = Math.max(Math.abs(n.value) * 1e-9, 1e-12);
+  return source.filter((candidate) => SCALES.some((k) => close(n.value, candidate.value * k, tol * Math.max(1, k))));
 }
 
 const isTrivial = (n: FoundNumber) => n.decimals === 0 && Number.isInteger(n.value) && Math.abs(n.value) <= TRIVIAL_MAX;
@@ -244,11 +258,82 @@ export function symbolsOf(formula: string, tex: boolean): Set<string> {
   return out;
 }
 
-function sourceFormulaSymbols(source: string): Set<string>[] {
+function monomialOf(raw: string): Map<string, number> | undefined {
+  const text = texToPlain(raw)
+    .replace(GREEK_WORDS, (word) => GREEK[word] ?? GREEK[word.toLowerCase()] ?? word)
+    .replace(/\s+x\s+/gi, "*")
+    .replace(/[×·]/g, "*")
+    .replace(/[(){}\s]/g, "");
+  if (!text || /[+=]/.test(text) || /-(?!\d)/.test(text)) return undefined;
+  const powers = new Map<string, number>();
+  let direction = 1;
+  for (let i = 0; i < text.length; ) {
+    const char = text[i]!;
+    if (char === "*" || char === "·") {
+      direction = 1;
+      i++;
+      continue;
+    }
+    if (char === "/") {
+      direction = -1;
+      i++;
+      continue;
+    }
+    if (/\d|\./.test(char)) {
+      i++;
+      continue;
+    }
+    if (!/[A-Za-zα-ωΑ-Ω]/.test(char)) return undefined;
+    let exponent = 1;
+    const rest = text.slice(i + 1);
+    const explicit = /^\^(-?\d+)/.exec(rest);
+    if (explicit) {
+      exponent = Number(explicit[1]);
+      i += explicit[0].length;
+    } else if (rest[0] === "²" || rest[0] === "³") {
+      exponent = rest[0] === "²" ? 2 : 3;
+      i++;
+    }
+    powers.set(char, (powers.get(char) ?? 0) + direction * exponent);
+    direction = 1;
+    i++;
+  }
+  return powers.size ? powers : undefined;
+}
+
+/** Canonical multiplicative-law fingerprint: F=ma and a=F/m are equal; a=Fm is not. */
+function formulaFingerprint(raw: string): string | undefined {
+  const plain = texToPlain(raw);
+  const at = plain.indexOf("=");
+  if (at < 0) return undefined;
+  const lhsToken = /(?:^|[\s:])([A-Za-zα-ωΑ-Ω])\s*$/.exec(plain.slice(0, at))?.[1];
+  if (!lhsToken) return undefined;
+  const right = plain
+    .slice(at + 1)
+    .split(/[.;,，。；]|(?:\s{2,})/)[0]!
+    .trim();
+  const lhs = monomialOf(lhsToken);
+  const rhs = monomialOf(right);
+  if (!lhs || !rhs) return undefined;
+  const powers = new Map(lhs);
+  for (const [symbol, exponent] of rhs) powers.set(symbol, (powers.get(symbol) ?? 0) - exponent);
+  for (const [symbol, exponent] of powers) if (exponent === 0) powers.delete(symbol);
+  const entries = [...powers].sort(([a], [b]) => a.localeCompare(b));
+  if (!entries.length) return undefined;
+  if (entries[0]![1] < 0) entries.forEach((entry) => (entry[1] *= -1));
+  return entries.map(([symbol, exponent]) => `${symbol}:${exponent}`).join("|");
+}
+
+interface SourceFormula {
+  symbols: Set<string>;
+  fingerprint?: string;
+}
+
+function sourceFormulas(source: string): SourceFormula[] {
   return source
     .split(/(?<=[.!?。！？])\s+|\n/)
     .filter((s) => /=/.test(s))
-    .map((s) => symbolsOf(s, false));
+    .map((text) => ({ symbols: symbolsOf(text, false), fingerprint: formulaFingerprint(text) }));
 }
 
 /** Equations that are symbolic (no digits on the right-hand side): candidates for the formula check. */
@@ -344,11 +429,23 @@ export function verifyNumbers(content: SlideContent, source: string, opts: Verif
 
   const problem = PROBLEM_LAYOUTS.has(content.layout) || (opts.pageType !== undefined && PROBLEM_TYPES.has(opts.pageType));
   if (!problem) {
-    const sourceNums = numbersIn(source).map((n) => n.value);
+    const sourceFound = numbersIn(source);
+    const sourceNums = sourceFound.map((n) => n.value);
     const verified = [...sourceNums, ...calc.results];
-    const candidates = [...prose, ...tex].flatMap(numbersIn).concat(data.map((v) => ({ text: String(v), value: v, decimals: (String(v).split(".")[1] ?? "").length })));
+    const textCandidates = [...prose, ...tex].flatMap(numbersIn);
+    const candidates = textCandidates.concat(
+      data.map((v) => ({ text: String(v), value: v, decimals: (String(v).split(".")[1] ?? "").length, significantFigures: significantFigures(String(v)) })),
+    );
     for (const n of candidates) {
-      if (isTrivial(n) || inSource(n, verified)) continue;
+      if (isTrivial(n)) continue;
+      const sourceMatches = matchingSourceNumbers(n, sourceFound);
+      if (sourceMatches.length || inSource(n, calc.results)) {
+        if (textCandidates.includes(n) && sourceMatches.length && !sourceMatches.some((match) => match.significantFigures === n.significantFigures)) {
+          add({ kind: "number", text: n.text, detail: "引用页中的有效数字精度不同 · significant figures do not match the cited pages" });
+        }
+        continue;
+      }
+      if (inSource(n, verified)) continue;
       add({ kind: "number", text: n.text, detail: "引用页中没有找到这个数 · not found on the cited pages" });
     }
     const sourceQuantities = quantitiesIn(source);
@@ -363,11 +460,13 @@ export function verifyNumbers(content: SlideContent, source: string, opts: Verif
     }
   }
 
-  const srcFormulas = sourceFormulaSymbols(source);
+  const srcFormulas = sourceFormulas(source);
   const formulaTexts = formulasOf([...prose.map((text) => ({ text, tex: false })), ...tex.map((text) => ({ text, tex: true }))]);
   for (const f of formulaTexts) {
     const syms = symbolsOf(f.text, true);
-    const ok = srcFormulas.some((s) => [...syms].every((x) => s.has(x)));
+    const fingerprint = formulaFingerprint(f.text);
+    const comparable = srcFormulas.filter((candidate) => [...syms].every((symbol) => candidate.symbols.has(symbol)));
+    const ok = comparable.some((candidate) => !fingerprint || !candidate.fingerprint || candidate.fingerprint === fingerprint);
     if (!ok) add({ kind: "formula", text: f.text.slice(0, 120), detail: "引用页中没有找到这个公式 · formula not found on the cited pages" });
   }
   return out.slice(0, MAX_FLAGS);
