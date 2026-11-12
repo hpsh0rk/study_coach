@@ -2,6 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 const PORT = Number(process.env.E2E_PORT ?? 8788);
 const baseURL = `http://127.0.0.1:${PORT}`;
+const authenticated = { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 720 }, storageState: "playwright/.auth/admin.json" };
 
 export default defineConfig({
   testDir: "e2e",
@@ -14,7 +15,10 @@ export default defineConfig({
   use: { baseURL, trace: "retain-on-failure", viewport: { width: 1280, height: 720 }, locale: "zh-CN" },
   projects: [
     { name: "overflow", testMatch: /[\\/]overflow\.spec\.ts$/, use: { ...devices["Desktop Chrome"], viewport: { width: 1920, height: 1080 } } },
-    { name: "e2e", testMatch: /[\\/]flow\.spec\.ts$/, use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 720 } } },
+    { name: "auth", testMatch: /[\\/]auth\.spec\.ts$/, use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 720 } } },
+    { name: "lesson", testMatch: /[\\/]lesson\.spec\.ts$/, dependencies: ["auth"], use: authenticated },
+    { name: "textbook", testMatch: /[\\/]textbook\.spec\.ts$/, dependencies: ["lesson"], use: authenticated },
+    { name: "admin", testMatch: /[\\/]admin\.spec\.ts$/, dependencies: ["textbook"], use: authenticated },
   ],
   webServer: {
     command: "bash scripts/e2e-server.sh",
