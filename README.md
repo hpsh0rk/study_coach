@@ -88,9 +88,10 @@ macOS 自带苹方等中文字体，不需要安装 `fonts-noto-cjk`。但字形
 ```bash
 pnpm lint          # ESLint + 模型 SDK / 接口只能出现在 packages/ai + dependency-cruiser 模块边界
 pnpm typecheck
+pnpm quality:replay # 离线回放全部已提交的质量与解析录制夹具（0 网络请求）
 pnpm test          # 所有包的 vitest；apps/app 在 workerd 里运行（D1、登录、幻灯片复用 / 撤销等）
-pnpm test:e2e --project=overflow --project=e2e   # Playwright：每种版式在最大内容时不溢出 + 老师完整流程（:8788）
-SHOTS_DIR=out pnpm test:e2e --project=e2e        # 同样的流程，每一步保存截图
+pnpm test:e2e --project=overflow --project=admin  # Playwright：版式溢出矩阵 + 完整端到端流程（auth → lesson → textbook → admin，:8788）
+SHOTS_DIR=out pnpm test:e2e --project=admin       # 同样的端到端流程，每一步保存截图
 ```
 
 测试和 CI 不连接任何外部服务：MinerU 用录制的响应回放，模型提供方和自部署服务用本机 mock。CI 安装 `fonts-noto-cjk`，溢出测试量的是真实中文字形。`node scripts/make-fixture-pdf.mjs` 重新生成 e2e 与 PDF 分类样例；双语分类语料、逐页真值和路由指标见 [`docs/pdf-fixtures.md`](docs/pdf-fixtures.md)。真实模型、MinerU OCR/表格、WPS/PowerPoint/Keynote、课堂硬件和老师评审的明确手工流程见 [`docs/manual-quality-gates.md`](docs/manual-quality-gates.md)。`node scripts/bench-pbkdf2.mjs` 测密码哈希的耗时（见 architecture §9）。

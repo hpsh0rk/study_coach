@@ -12,6 +12,52 @@ import { Stepper, StepIntro, type StepKey } from "./Stepper.tsx";
 
 const MINUTE_CHOICES = [30, 35, 40, 45, 60, 80, 90];
 
+export function parseTypedLessonMinutes(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const n = Number(trimmed);
+  return Number.isInteger(n) && n >= 10 && n <= 120 ? n : null;
+}
+
+export function clampLessonMinutes(raw: string, fallback = 40): number {
+  const trimmed = raw.trim();
+  if (!trimmed) return fallback;
+  const n = Number(trimmed);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(10, Math.min(120, Math.round(n)));
+}
+
+/** Keeps what the teacher types ("5" on the way to "50", or "") while typing; clamps/rounds to 10–120 only on blur. */
+function LessonMinutesInput({ value, onChange }: { value: number; onChange: (minutes: number) => void }) {
+  const [text, setText] = useState(String(value));
+  const [focused, setFocused] = useState(false);
+  return (
+    <input
+      type="number"
+      min={10}
+      max={120}
+      step={1}
+      value={focused ? text : String(value)}
+      aria-label="自定义分钟 Custom minutes"
+      className="minutes-input"
+      onFocus={() => {
+        setText(String(value));
+        setFocused(true);
+      }}
+      onChange={(e) => {
+        setText(e.target.value);
+        const parsed = parseTypedLessonMinutes(e.target.value);
+        if (parsed !== null) onChange(parsed);
+      }}
+      onBlur={() => {
+        setFocused(false);
+        const clamped = clampLessonMinutes(text, 40);
+        if (clamped !== value) onChange(clamped);
+      }}
+    />
+  );
+}
+
 /**
  * Selection size vs lesson length (words-based estimate); drives the hint before any model call.
  * `unread`: pages the outline cannot read (formatted), which rules out "good fit".
@@ -90,7 +136,7 @@ export function SettingsStep({ view, reached }: { view: LessonView; reached: Ste
                 {m} 分钟
               </button>
             ))}
-            <input type="number" min={10} max={120} value={params.minutes} onChange={(e) => set("minutes", Math.max(10, Math.min(120, Number(e.target.value) || 40)))} aria-label="自定义分钟 Custom minutes" className="minutes-input" />
+            <LessonMinutesInput value={params.minutes} onChange={(minutes) => set("minutes", minutes)} />
           </fieldset>
           <label>
             学生水平 Student level
