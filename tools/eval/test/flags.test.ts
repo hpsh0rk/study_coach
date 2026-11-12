@@ -1,7 +1,29 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_OPTIONS } from "@kj/generation";
+import { parseArgs } from "../src/common.ts";
 import { DEFAULT_FLAGS, parseFlags, pipelineOptions } from "../src/flags.ts";
 import { providerFromEnv } from "../src/run.ts";
+
+describe("CLI parseArgs", () => {
+  it("keeps positional arguments when boolean flags (--no-build, --confirm-real-call, --dry-run, --all, --no-*) appear before them", () => {
+    expect(parseArgs(["--no-build", "results/B0", "results/B1", "--theme", "chalk"])).toEqual({
+      positional: ["results/B0", "results/B1"],
+      opts: { "no-build": "true", theme: "chalk" },
+    });
+    expect(parseArgs(["--confirm-real-call", "fixtures/out.json", "--target", "text"])).toEqual({
+      positional: ["fixtures/out.json"],
+      opts: { "confirm-real-call": "true", target: "text" },
+    });
+    expect(parseArgs(["--dry-run", "dirA", "--all", "dirB", "--no-render=false", "dirC"])).toEqual({
+      positional: ["dirA", "dirB", "dirC"],
+      opts: { "dry-run": "true", all: "true", "no-render": "false" },
+    });
+    expect(parseArgs(["--no-build", "false", "dirA"])).toEqual({
+      positional: ["dirA"],
+      opts: { "no-build": "false" },
+    });
+  });
+});
 
 describe("ablation flags", () => {
   it("defaults to the full pipeline", () => {

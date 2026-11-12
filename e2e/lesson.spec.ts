@@ -26,6 +26,18 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
 
   await page.waitForURL(/\/settings$/);
   await expect(page.getByTestId("pacing")).toBeVisible();
+  const customMinutes = page.getByLabel("自定义分钟 Custom minutes");
+  await customMinutes.fill("");
+  await customMinutes.pressSequentially("5");
+  await expect(customMinutes).toHaveValue("5");
+  await customMinutes.pressSequentially("0");
+  await expect(customMinutes).toHaveValue("50");
+  await customMinutes.fill("");
+  await customMinutes.pressSequentially("5");
+  await customMinutes.blur();
+  await expect(customMinutes).toHaveValue("10");
+  await page.getByRole("button", { name: "40 分钟" }).click();
+  await expect(customMinutes).toHaveValue("40");
   await shot(page, "03-settings");
   await page.getByRole("button", { name: /生成大纲 Draft outline/ }).click();
 

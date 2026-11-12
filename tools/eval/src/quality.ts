@@ -479,7 +479,7 @@ function textMessages(c: z.infer<typeof TextCase>): ChatMessage[] {
     {
       role: "system",
       content: [
-        "Use only the supplied synthetic source. Return one strict JSON object with keys summary, citations, quantities ({value,unit}), studentQuestion, teacherAnswer. Cite page numbers. The studentQuestion must ask for the result without revealing it; put the result only in teacherAnswer.",
+        "Use only the supplied synthetic source. Return one strict JSON object with keys summary, citations, quantities ({value,unit}), studentQuestion, teacherAnswer. Cite page numbers. In quantities, list all given and derived physical quantities with units from the passage and solution (not only the final answer). The studentQuestion must ask for the result without revealing it; put the result only in teacherAnswer.",
         `Return JSON only, matching this JSON Schema: ${JSON.stringify(jsonSchemaOf(TextAnswer))}`,
       ].join("\n"),
     },

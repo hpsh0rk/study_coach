@@ -190,6 +190,8 @@ describe("manual quality record/replay", () => {
         KJ_QUALITY_TEXT_HEADERS_JSON: '{"x-source":"manual-eval"}',
       });
       expect(textCalls).toHaveLength(2);
+      const sysPrompt = String((textCalls[0]!.body as { system?: string }).system ?? "");
+      expect(sysPrompt).toMatch(/given and derived physical quantities/i);
       expect(scoreFixture(textFixture).passed).toBe(true);
       expect(textFixture.metadata).toMatchObject({ inputTokens: 40, outputTokens: 30 });
 

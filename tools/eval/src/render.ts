@@ -36,7 +36,7 @@ async function main(argv: string[]) {
   const files = positional.flatMap((p) => (fs.statSync(p).isDirectory() ? deckFiles(p) : [p]));
   // /dev/render only exists in builds made with KJ_DEV_PAGES=1.
   const hasRenderPage = fs.existsSync(path.join(DIST, "assets")) && fs.readdirSync(path.join(DIST, "assets")).some((f) => f.startsWith("RenderPage"));
-  if (!opts["no-build"] || !hasRenderPage) {
+  if (opts["no-build"] !== "true" || !hasRenderPage) {
     console.log("building apps/web …");
     execFileSync("pnpm", ["--filter", "@kj/web", "build"], { cwd: ROOT, stdio: ["ignore", "ignore", "inherit"], env: { ...process.env, KJ_DEV_PAGES: "1" } });
   }

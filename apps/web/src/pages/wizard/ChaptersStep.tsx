@@ -124,6 +124,69 @@ function PastePanel({ documentId, run, labels, onDone }: { documentId: string; r
 
 const LOSSY: Partial<Record<PageKind, string>> = { "formula-lost": "公式没读出", scanned: "扫描", garbled: "乱码" };
 
+export function ChapterBadges({
+  chapter,
+  pageWords,
+  pageParsers,
+  pageKinds,
+  pageFlags,
+  labels,
+}: {
+  chapter: ChapterNode;
+  pageWords: number[];
+  pageParsers: Record<number, string>;
+  pageKinds: Record<number, PageKind>;
+  pageFlags: Record<number, PageFlag[]>;
+  labels: Map<number, string>;
+}) {
+  const nos = pagesInRanges([{ start: chapter.pageStart, end: chapter.pageEnd }]);
+  const unfixed = (p: number) => isMustFix(pageKinds[p]) && (pageParsers[p] ?? PDFJS_PARSER) === PDFJS_PARSER;
+  const empty = nos.filter((p) => isEmptyPage(pageWords[p - 1] ?? 0)).length;
+  const lossy = nos.filter((p) => unfixed(p) && !isEmptyPage(pageWords[p - 1] ?? 0));
+  const pasted = nos.filter((p) => pageParsers[p] === PASTE_PARSER && !isEmptyPage(pageWords[p - 1] ?? 0)).length;
+  const external = nos.filter((p) => isExternalParser(pageParsers[p]) && !isEmptyPage(pageWords[p - 1] ?? 0)).length;
+  const vision = nos.filter((p) => isVisionParser(pageParsers[p]) && !isEmptyPage(pageWords[p - 1] ?? 0)).length;
+  // Links and e-mails are common in textbook footers; only instruction-like text is worth a badge here.
+  const flagged = nos.filter((p) => pageFlags[p]?.includes("instruction"));
+  return (
+    <>
+      {pageWords.length > 0 && empty > 0 && (
+        <span className="badge warn" data-testid="chapter-empty" title="这些页没有文字层，可能是扫描图 · No text layer">
+          {empty} 页无文字
+        </span>
+      )}
+      {MUST_FIX_KINDS.map((k) => {
+        const n = lossy.filter((p) => pageKinds[p] === k).length;
+        return n > 0 ? (
+          <span key={k} className="badge warn" data-testid="chapter-lossy" title="浏览器读不出这些页的公式、数字或扫描内容 · Content the text layer missed">
+            {n} 页{LOSSY[k]}
+          </span>
+        ) : null;
+      })}
+      {pasted > 0 && (
+        <span className="badge note" data-testid="chapter-pasted" title="这些页的文字由老师粘贴 · Text pasted by the teacher">
+          {pasted} 页老师粘贴
+        </span>
+      )}
+      {external > 0 && (
+        <span className="badge note" data-testid="chapter-external" title="浏览器读不全这些页，文字由外部解析服务重新识别 · Re-read by the external parser">
+          {external} 页外部解析
+        </span>
+      )}
+      {vision > 0 && (
+        <span className="badge warn" data-testid="chapter-vision" title="这些页由看图模型从页面图片识别，公式和数字可能有误，请核对 · Read by the vision model: check the numbers">
+          {vision} 页看图识别
+        </span>
+      )}
+      {flagged.length > 0 && (
+        <span className="badge warn" data-testid="chapter-flagged" title="页面里有像“忽略之前的指令”这样的文字：生成时只当作教材内容，分享前请检查幻灯片 · Instruction-like text on these pages">
+          p.{flagged.map((p) => labelOf(labels, p)).join(", ")} 含像指令的文字
+        </span>
+      )}
+    </>
+  );
+}
+
 /** Books whose must-fix pages were already sent automatically in this tab (once per book, even if the step remounts). */
 const autoSent = new Set<string>();
 const AUTO_LIMIT = 300;
@@ -235,22 +298,15 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
   const advice = scopeAdvice(stats.words, lessonMinutes, stats.unread.length);
   const emptyRuns = runsOf(stats.empty);
   const pagesOf = (c: ChapterNode) => pagesInRanges([{ start: c.pageStart, end: c.pageEnd }]);
-  const emptyIn = (c: ChapterNode) => pagesOf(c).filter((p) => isEmptyPage(pageWords[p - 1] ?? 0)).length;
-  const pastedIn = (c: ChapterNode) => pagesOf(c).filter((p) => pageParsers[p] === PASTE_PARSER).length;
-  // Links and e-mails are common in textbook footers; only instruction-like text is worth a badge here.
-  const flaggedIn = (c: ChapterNode) => pagesOf(c).filter((p) => pageFlags[p]?.includes("instruction"));
 
   // Must-fix pages whose pdf.js text is still the only text: scans, garbled fonts, formulas drawn as outlines.
   const unfixed = (p: number) => isMustFix(pageKinds[p]) && (pageParsers[p] ?? PDFJS_PARSER) === PDFJS_PARSER;
-  const lossyIn = (c: ChapterNode) => pagesOf(c).filter((p) => unfixed(p) && !isEmptyPage(pageWords[p - 1] ?? 0));
   const bookLossy = MUST_FIX_KINDS.flatMap((kind) => {
     const count = Object.entries(pageKinds).filter(([no, k]) => k === kind && unfixed(Number(no))).length;
     return count ? [{ kind, count }] : [];
   });
   const lossyRuns = runsOf(pagesInRanges(ranges).filter((p) => unfixed(p) && !isEmptyPage(pageWords[p - 1] ?? 0)));
-  const externalIn = (c: ChapterNode) => pagesOf(c).filter((p) => isExternalParser(pageParsers[p])).length;
-  const visionIn = (c: ChapterNode) => pagesOf(c).filter((p) => isVisionParser(pageParsers[p])).length;
-  const visionRuns = runsOf(pagesInRanges(ranges).filter((p) => isVisionParser(pageParsers[p])));
+  const visionRuns = runsOf(pagesInRanges(ranges).filter((p) => isVisionParser(pageParsers[p]) && !isEmptyPage(pageWords[p - 1] ?? 0)));
   const reading = extRun?.kind === "running" || visRun?.kind === "running";
   // "精修本章": pages the text layer read but not well (formula-heavy, tables), plus must-fix ones still unread.
   const refinable = (c: ChapterNode) => pagesOf(c).filter((p) => unfixed(p) || (REFINE_KINDS.includes(pageKinds[p]!) && (pageParsers[p] ?? PDFJS_PARSER) === PDFJS_PARSER));
@@ -642,39 +698,7 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
                       <span className="muted small">
                         p.{labelOf(labels, c.pageStart)}–{labelOf(labels, c.pageEnd)} · {c.pageEnd - c.pageStart + 1} 页
                       </span>
-                      {pageWords.length > 0 && emptyIn(c) > 0 && (
-                        <span className="badge warn" data-testid="chapter-empty" title="这些页没有文字层，可能是扫描图 · No text layer">
-                          {emptyIn(c)} 页无文字
-                        </span>
-                      )}
-                      {MUST_FIX_KINDS.map((k) => {
-                        const n = lossyIn(c).filter((p) => pageKinds[p] === k).length;
-                        return n > 0 ? (
-                          <span key={k} className="badge warn" data-testid="chapter-lossy" title="浏览器读不出这些页的公式、数字或扫描内容 · Content the text layer missed">
-                            {n} 页{LOSSY[k]}
-                          </span>
-                        ) : null;
-                      })}
-                      {pastedIn(c) > 0 && (
-                        <span className="badge note" data-testid="chapter-pasted" title="这些页的文字由老师粘贴 · Text pasted by the teacher">
-                          {pastedIn(c)} 页老师粘贴
-                        </span>
-                      )}
-                      {externalIn(c) > 0 && (
-                        <span className="badge note" data-testid="chapter-external" title="浏览器读不全这些页，文字由外部解析服务重新识别 · Re-read by the external parser">
-                          {externalIn(c)} 页外部解析
-                        </span>
-                      )}
-                      {visionIn(c) > 0 && (
-                        <span className="badge warn" data-testid="chapter-vision" title="这些页由看图模型从页面图片识别，公式和数字可能有误，请核对 · Read by the vision model: check the numbers">
-                          {visionIn(c)} 页看图识别
-                        </span>
-                      )}
-                      {flaggedIn(c).length > 0 && (
-                        <span className="badge warn" data-testid="chapter-flagged" title="页面里有像“忽略之前的指令”这样的文字：生成时只当作教材内容，分享前请检查幻灯片 · Instruction-like text on these pages">
-                          p.{flaggedIn(c).map((p) => labelOf(labels, p)).join(", ")} 含像指令的文字
-                        </span>
-                      )}
+                      <ChapterBadges chapter={c} pageWords={pageWords} pageParsers={pageParsers} pageKinds={pageKinds} pageFlags={pageFlags} labels={labels} />
                     </label>
                     {external && !reading && refinable(c).some((p) => REFINE_KINDS.includes(pageKinds[p]!)) && (
                       <button
