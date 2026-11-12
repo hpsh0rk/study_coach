@@ -304,7 +304,7 @@ async function main(argv: string[]) {
   const out = opts.out ?? path.join(path.dirname(from), "faults");
   fs.rmSync(out, { recursive: true, force: true });
   const injected = writeInjected(from, out, evalDir);
-  if (!opts["no-render"]) execFileSync("pnpm", ["-s", "eval:render", out, "--no-build"], { stdio: "inherit" });
+  if (opts["no-render"] !== "true") execFileSync("pnpm", ["-s", "eval:render", out, "--no-build"], { stdio: "inherit" });
   const { rows: slide, falseFlags } = await slideMatrix(from, injected, evalDir);
   const { rows: outline, clean } = outlineMatrix(from, Number(opts.seeds ?? 8), evalDir);
   writeJson(path.join(out, "matrix.json"), { slide, outline, falseFlags, cleanOutline: clean });

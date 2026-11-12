@@ -253,6 +253,83 @@ describe("writer safety nets", () => {
     await expect(writeSlide(fakeAi([wrongLayout, wrongLayout]).ai, { ...outline, slides: [qSpec] }, "sp-q", input())).rejects.toThrow(/invalid output twice/);
     await expect(writeSlide(fakeAi([{ notes: "empty" }, { notes: "still empty" }]).ai, { ...outline, slides: [qSpec] }, "sp-q", input())).rejects.toThrow(/invalid output twice/);
   });
+
+  it("tailors steps prompt schema for worked vs faded and normalizes null/0 fadeFrom, string steps, and step/why aliases without weakening SLOT_SCHEMAS.steps", async () => {
+    const workedSpec: SlideSpec = { ...spec, id: "sp-w", pageType: "worked", layout: "steps", title: "Calculate wave speed", visual: "formula" };
+    const fadedSpec: SlideSpec = { ...spec, id: "sp-f", pageType: "faded", layout: "steps", title: "Complete the wave speed calculation", visual: "formula" };
+
+    const workedPrompt = buildMessages(workedSpec, input(), { ...outline, slides: [workedSpec] })[0]!.content;
+    expect(workedPrompt).not.toContain('"kind":"flow"');
+    const workedSchema = JSON.parse(/matching this JSON Schema: (\{.*\})$/m.exec(workedPrompt)![1]!) as {
+      properties: { content: { properties: Record<string, unknown> } };
+    };
+    expect(workedSchema.properties.content.properties).not.toHaveProperty("fadeFrom");
+
+    const fadedPrompt = buildMessages(fadedSpec, input(), { ...outline, slides: [fadedSpec] })[0]!.content;
+    const fadedSchema = JSON.parse(/matching this JSON Schema: (\{.*\})$/m.exec(fadedPrompt)![1]!) as {
+      properties: { content: { properties: { fadeFrom?: { minimum?: number; maximum?: number } } } };
+    };
+    expect(fadedSchema.properties.content.properties.fadeFrom).toMatchObject({ minimum: 1, maximum: 3 });
+
+    // Worked slide with fadeFrom: null, why: null, notes: null, and string/aliased step items succeeds cleanly without stub fallback.
+    const workedReply = {
+      content: {
+        layout: "steps",
+        title: "Calculate wave speed",
+        question: "A wave has $f = 4$ Hz and $\\lambda = 0.5$ m. Find $v$.",
+        steps: ["Write $v = f\\lambda$", { step: "Substitute $v = 4 \\times 0.5$", reason: "Use SI units" }, { text: "$v = 2$ m/s", why: null }],
+        fadeFrom: null,
+      },
+      notes: null,
+    };
+    const wa = fakeAi([workedReply]);
+    const wRes = await writeSlide(wa.ai, { ...outline, slides: [workedSpec] }, "sp-w", input());
+    expect(wa.requests).toHaveLength(1);
+    expect(wRes.content).toEqual({
+      layout: "steps",
+      title: "Calculate wave speed",
+      problem: "A wave has $f = 4$ Hz and $\\lambda = 0.5$ m. Find $v$.",
+      steps: [
+        { text: "Write $v = f\\lambda$", why: "" },
+        { text: "Substitute $v = 4 \\times 0.5$", why: "Use SI units" },
+        { text: "$v = 2$ m/s", why: "" },
+      ],
+    });
+    expect(wRes.warnings.some((w) => w.includes("deterministic fallback"))).toBe(false);
+
+    // Worked slide with fadeFrom: 0 also clears invalid fadeFrom instead of triggering deterministic fallback.
+    const zeroFade = {
+      content: {
+        layout: "steps",
+        title: "Calculate wave speed",
+        problem: "Find $v$ when $f = 4$ Hz and $\\lambda = 0.5$ m.",
+        steps: [{ text: "Write $v = f\\lambda$", why: "" }, { text: "$v = 4 \\times 0.5 = 2$ m/s", why: "" }],
+        fadeFrom: 0,
+      },
+      notes: "Walk through each line.",
+    };
+    const zRes = await writeSlide(fakeAi([zeroFade]).ai, { ...outline, slides: [workedSpec] }, "sp-w", input());
+    expect(zRes.content.layout === "steps" && zRes.content.fadeFrom).toBeUndefined();
+    expect(zRes.warnings.some((w) => w.includes("deterministic fallback"))).toBe(false);
+
+    // Faded slide with string fadeFrom "2" and string steps normalizes cleanly on turn 1.
+    const fadedReply = {
+      layout: "steps",
+      title: "Complete the wave speed calculation",
+      problem: "Find $v$ when $f = 5$ Hz and $\\lambda = 0.4$ m.",
+      steps: ["Write $v = f\\lambda$", "Substitute $v = 5 \\times 0.4$", "$v = 2$ m/s"],
+      fadeFrom: "2",
+      notes: "Reveal the final line after pair work.",
+    };
+    const fa = fakeAi([fadedReply]);
+    const fRes = await writeSlide(fa.ai, { ...outline, slides: [fadedSpec] }, "sp-f", input());
+    expect(fa.requests).toHaveLength(1);
+    expect(fRes.content.layout === "steps" && fRes.content.fadeFrom).toBe(2);
+
+    // Still strictly rejects structurally invalid steps (< 1 problem or empty steps).
+    const emptySteps = { content: { layout: "steps", title: "Bad", problem: "", steps: [] }, notes: "" };
+    await expect(writeSlide(fakeAi([emptySteps, emptySteps]).ai, { ...outline, slides: [workedSpec] }, "sp-w", input())).rejects.toThrow(/invalid output twice/);
+  });
 });
 
 describe("slideKey", () => {

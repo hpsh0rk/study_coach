@@ -320,7 +320,7 @@ async function main(argv: string[]) {
   const { opts } = parseArgs(argv);
   const evalDir = resolveEvalDir(opts["eval-dir"]);
   const manifest = readJson<Manifest>(path.join(evalDir, "manifest.json"));
-  const ids = opts.all ? manifest.scenarios.map((s) => s.id) : opts.scenarios ? opts.scenarios.split(",").map((s) => s.trim()) : manifest.scenarios.filter((s) => s.core).map((s) => s.id);
+  const ids = opts.all === "true" ? manifest.scenarios.map((s) => s.id) : opts.scenarios ? opts.scenarios.split(",").map((s) => s.trim()) : manifest.scenarios.filter((s) => s.core).map((s) => s.id);
   const scenarios = ids.map((id) => {
     const s = manifest.scenarios.find((x) => x.id === id);
     if (!s) throw new Error(`unknown scenario ${id}`);

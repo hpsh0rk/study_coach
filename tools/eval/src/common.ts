@@ -2,18 +2,28 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 
-export function parseArgs(argv: string[]): { positional: string[]; opts: Record<string, string> } {
+const DEFAULT_BOOLEAN_FLAGS = new Set(["all", "confirm-real-call", "dry-run", "help", "no-build", "no-render"]);
+
+export function parseArgs(argv: string[], booleanFlags: ReadonlySet<string> = DEFAULT_BOOLEAN_FLAGS): { positional: string[]; opts: Record<string, string> } {
   const positional: string[] = [];
   const opts: Record<string, string> = {};
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
+    if (a === "--") {
+      positional.push(...argv.slice(i + 1));
+      break;
+    }
     if (!a.startsWith("--")) {
       positional.push(a);
       continue;
     }
     const [k, inline] = a.slice(2).split("=", 2) as [string, string | undefined];
+    const isBool = booleanFlags.has(k) || k.startsWith("no-");
     if (inline !== undefined) opts[k] = inline;
-    else if (argv[i + 1] && !argv[i + 1]!.startsWith("--")) opts[k] = argv[++i]!;
+    else if (isBool) {
+      if (argv[i + 1] === "true" || argv[i + 1] === "false") opts[k] = argv[++i]!;
+      else opts[k] = "true";
+    } else if (argv[i + 1] && !argv[i + 1]!.startsWith("--")) opts[k] = argv[++i]!;
     else opts[k] = "true";
   }
   return { positional, opts };

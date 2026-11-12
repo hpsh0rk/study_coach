@@ -10,7 +10,7 @@ import { optionsOf, type PipelineOptions } from "./options.ts";
 import { neutralizeSource, SOURCE_RULE, suspiciousContent } from "./safety.ts";
 import { stubSlide } from "./slide-stub.ts";
 
-export const SLIDE_PROMPT_VERSION = "slide.write@8";
+export const SLIDE_PROMPT_VERSION = "slide.write@9";
 /** Source characters the writer sees for one slide. */
 export const SLIDE_SOURCE_CHARS = 12_000;
 
@@ -97,21 +97,60 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+function normalizeStepsSlot(slot: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...slot };
+  if (out.problem === undefined || out.problem === null) {
+    const alias = out.question ?? out.prompt ?? out.task;
+    if (typeof alias === "string") out.problem = alias;
+  }
+  if (Array.isArray(out.steps)) {
+    out.steps = out.steps.map((item) => {
+      if (typeof item === "string") return { text: item, why: "" };
+      if (!isRecord(item)) return item;
+      const text =
+        typeof item.text === "string"
+          ? item.text
+          : typeof item.step === "string"
+            ? item.step
+            : typeof item.label === "string"
+              ? item.label
+              : typeof item.content === "string"
+                ? item.content
+                : typeof item.formula === "string"
+                  ? item.formula
+                  : item.text;
+      const rawWhy = item.why ?? item.reason ?? item.explanation ?? item.note;
+      return { ...item, ...(text !== undefined ? { text } : {}), why: typeof rawWhy === "string" ? rawWhy : "" };
+    });
+  }
+  let fade = out.fadeFrom;
+  if (typeof fade === "string" && /^\s*-?\d+\s*$/.test(fade)) fade = Number(fade);
+  if (fade === null || (typeof fade === "number" && (!Number.isInteger(fade) || fade < 1))) delete out.fadeFrom;
+  else if (fade !== undefined) out.fadeFrom = fade;
+  return out;
+}
+
 /**
  * Normalises bare top-level slot objects (`{"layout":"questions","title":...,"items":[...],"notes":"..."}`)
- * into the canonical `{"content": ..., "notes": "..."}` envelope before strict Zod slot validation runs.
+ * and common `steps` output quirks (`fadeFrom: null`, string steps, field aliases) into the canonical
+ * `{"content": ..., "notes": "..."}` envelope before strict Zod slot validation runs.
  */
 function unwrapSlideEnvelope(layout: LayoutId, raw: unknown): unknown {
   if (!isRecord(raw)) return raw;
+  const finishSlot = (slot: Record<string, unknown>) => {
+    const withLayout = slot.layout === undefined ? { layout, ...slot } : slot;
+    return layout === "steps" ? normalizeStepsSlot(withLayout) : withLayout;
+  };
   if ("content" in raw) {
-    if (!isRecord(raw.content) || Object.keys(raw.content).length === 0 || raw.content.layout !== undefined) return raw;
-    return { ...raw, content: { layout, ...raw.content } };
+    const notes = raw.notes === null ? "" : raw.notes;
+    if (!isRecord(raw.content) || Object.keys(raw.content).length === 0) return notes !== raw.notes ? { ...raw, notes } : raw;
+    return { ...raw, content: finishSlot(raw.content), ...(notes !== undefined ? { notes } : {}) };
   }
   const { notes, ...slot } = raw;
-  if (Object.keys(slot).length === 0) return raw;
+  if (Object.keys(slot).length === 0) return notes === null ? { notes: "" } : raw;
   return {
-    content: slot.layout === undefined ? { layout, ...slot } : slot,
-    ...(notes !== undefined ? { notes } : {}),
+    content: finishSlot(slot),
+    ...(notes !== undefined ? { notes: notes === null ? "" : notes } : {}),
   };
 }
 
@@ -123,12 +162,24 @@ const outputSchemas = Object.fromEntries(
   }),
 ) as unknown as Record<LayoutId, z.ZodType<{ content: SlideContent; notes: string }>>;
 
-const envelopeSchemaJson = new Map<LayoutId, string>();
-function envelopeSchemaText(layout: LayoutId): string {
-  let json = envelopeSchemaJson.get(layout);
+const envelopeSchemaJson = new Map<string, string>();
+function envelopeSchemaText(spec: Pick<SlideSpec, "layout" | "pageType">): string {
+  const key = spec.layout === "steps" ? (spec.pageType === "faded" ? "steps:faded" : "steps:worked") : spec.layout;
+  let json = envelopeSchemaJson.get(key);
   if (!json) {
-    const envelope = z.object({ content: SLOT_SCHEMAS[layout], notes: z.string() });
-    envelopeSchemaJson.set(layout, (json = JSON.stringify(jsonSchemaOf(envelope))));
+    const envelope = structuredClone(jsonSchemaOf(z.object({ content: SLOT_SCHEMAS[spec.layout], notes: z.string() }))) as {
+      properties?: { content?: { properties?: Record<string, unknown>; required?: string[] } };
+    };
+    const contentSchema = envelope.properties?.content;
+    if (spec.layout === "steps" && contentSchema?.properties) {
+      if (spec.pageType === "faded") {
+        contentSchema.properties.fadeFrom = { type: "integer", minimum: 1, maximum: BUDGETS.steps.steps.max - 1 };
+        if (Array.isArray(contentSchema.required) && !contentSchema.required.includes("fadeFrom")) contentSchema.required.push("fadeFrom");
+      } else {
+        delete contentSchema.properties.fadeFrom;
+      }
+    }
+    envelopeSchemaJson.set(key, (json = JSON.stringify(envelope)));
   }
   return json;
 }
@@ -187,7 +238,11 @@ export function buildMessages(spec: SlideSpec, input: WriteInput, outline: Outli
       " Put explanations, a question to ask, the expected answer or common misconception, and timing into `notes` (60–150 words).",
     glossaryText(outline.glossary),
     visualRule,
-    spec.pageType === "faded" ? "This is a faded example: set fadeFrom so the last 1–2 steps are left for students (1 ≤ fadeFrom ≤ steps − 1)." : "",
+    spec.pageType === "faded"
+      ? 'This is a faded example: each item in `steps` is {"text":"...","why":"..."}; set fadeFrom so the last 1–2 steps are left for students (1 ≤ fadeFrom ≤ steps − 1).'
+      : spec.layout === "steps"
+        ? 'Worked example: each item in `steps` is {"text":"...","why":"..."}; omit `fadeFrom` so every step is shown.'
+        : "",
     (spec.pageType === "faded" || spec.pageType === "practice") && input.workedProblem
       ? `Use the same problem structure as the preceding worked example, with new numbers: "${input.workedProblem}".`
       : "",
@@ -199,16 +254,16 @@ export function buildMessages(spec: SlideSpec, input: WriteInput, outline: Outli
       ? 'Ordering activity: for a sequence or process, mode "order" with the cards in the correct order; for term ↔ definition or cause ↔ effect pairs, mode "match" with each card\'s partner in `match`. The player shuffles the cards; put the answer key in the notes.'
       : "",
     sim ? `The sim slot must be {"kind":"sim","embedId":"${sim.id}"} (${sim.title.en}); write predict/observe/explain for that simulation. Set \`outcome\` to the 0-based index of the prediction the simulation confirms.` : "",
-    WIDGET_RULES,
+    LAYOUTS[spec.layout].visual === "required" ? WIDGET_RULES : "",
     SOURCE_RULE,
-    `Return ONE JSON object with top-level keys "content" and "notes" only (never put slide fields like "layout" or "title" at top level), matching this JSON Schema: ${envelopeSchemaText(spec.layout)}`,
+    `Return ONE JSON object with top-level keys "content" and "notes" only (never put slide fields like "layout" or "title" at top level), matching this JSON Schema: ${envelopeSchemaText(spec)}`,
   ]
     .filter(Boolean)
     .join("\n");
   const user = [
     `Lesson: ${input.lessonTitle}. Objectives: ${outline.objectives.join("; ")}`,
     neighbours(spec, outline) ? `Context: ${neighbours(spec, outline)}` : "",
-    `Slide plan: ${JSON.stringify({ title: spec.title, purpose: spec.purpose, keyPoints: spec.keyPoints, ...(o.visualPlanning === "outline" ? { visual: spec.visual } : {}), layout: spec.layout })}`,
+    `Slide plan: ${JSON.stringify({ title: spec.title, purpose: spec.purpose, keyPoints: spec.keyPoints, ...(o.visualPlanning === "outline" && LAYOUTS[spec.layout].visual === "required" ? { visual: spec.visual } : {}), layout: spec.layout })}`,
     pages.length ? `<source>\n${neutralizeSource(pages.map((p) => `[p.${p.no}] ${p.text}`).join("\n"))}\n</source>` : "",
     problems?.length ? `Your previous answer had these problems; fix them:\n${problems.map((p) => `- ${p}`).join("\n")}` : "",
   ]

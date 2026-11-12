@@ -249,13 +249,63 @@ const round = (v: number) => (Math.abs(v) >= 1e6 || (Math.abs(v) < 1e-3 && v !==
 const LATIN_FUNCS = /\b(?:sin|cos|tan|log|ln|sqrt|exp|max|min)\b/g;
 const GREEK_WORDS = new RegExp(String.raw`\b(${Object.keys(GREEK).join("|")})\b`, "gi");
 
+const MATH_SPAN_CHARS = /[A-Za-zα-ωΑ-Ω\d.+\-−*×·/÷^()²³\s]/;
+const OP_EDGE_END = /[+\-−*×·/÷^(]$/;
+const OP_EDGE_START = /^[+\-−*×·/÷^)]/;
+
+function isMathProductToken(word: string): boolean {
+  if (/[α-ωΑ-Ω]/.test(word)) return true;
+  if (word.length <= 3) return true;
+  return word.length === 4 && /[A-Z]/.test(word.slice(1));
+}
+
+function juxtaposedEquationSymbols(s: string, out: Set<string>): void {
+  for (let at = s.indexOf("="); at >= 0; at = s.indexOf("=", at + 1)) {
+    let l = at;
+    while (l > 0 && MATH_SPAN_CHARS.test(s[l - 1]!)) l--;
+    const leftTokens = s.slice(l, at).trim().split(/\s+/).filter(Boolean);
+    const picked: string[] = [];
+    if (leftTokens.length) {
+      picked.push(leftTokens[leftTokens.length - 1]!);
+      for (let i = leftTokens.length - 2; i >= 0; i--) {
+        const prev = leftTokens[i]!;
+        const curr = leftTokens[i + 1]!;
+        if (OP_EDGE_END.test(prev) || OP_EDGE_START.test(curr) || prev === "x" || curr === "x") picked.push(prev);
+        else break;
+      }
+    }
+    let r = at + 1;
+    while (r < s.length && MATH_SPAN_CHARS.test(s[r]!)) r++;
+    const rightTokens = s.slice(at + 1, r).trim().split(/\s+/).filter(Boolean);
+    if (rightTokens.length) {
+      picked.push(rightTokens[0]!);
+      for (let i = 1; i < rightTokens.length; i++) {
+        const prev = rightTokens[i - 1]!;
+        const next = rightTokens[i]!;
+        if (OP_EDGE_END.test(prev) || OP_EDGE_START.test(next) || prev === "x" || next === "x" || /^[\d.()/²³^+-]+$/.test(prev)) picked.push(next);
+        else break;
+      }
+    }
+    for (const token of picked) {
+      for (const word of token.split(/[^A-Za-zα-ωΑ-Ω]+/)) {
+        if (word.length >= 2 && isMathProductToken(word)) {
+          for (const ch of word) out.add(ch);
+        }
+      }
+    }
+  }
+}
+
 /** Symbols of a formula: single letters (TeX juxtaposition = product), Greek as Unicode, subscripts dropped. */
 export function symbolsOf(formula: string, tex: boolean): Set<string> {
   let s = tex ? texToPlain(formula) : formula;
   s = s.replace(GREEK_WORDS, (w) => GREEK[w] ?? GREEK[w.toLowerCase()] ?? w).replace(LATIN_FUNCS, " ").replace(/_\s*\(?[\p{L}\d]+\)?/gu, "");
   const out = new Set<string>();
   if (tex) for (const ch of s.replace(/\b(?:sin|cos|tan|log|ln|sqrt|exp)\b/g, "")) if (/[A-Za-zα-ωΑ-Ω]/.test(ch)) out.add(ch);
-  if (!tex) for (const w of s.split(/[^A-Za-zα-ωΑ-Ω]+/)) if (w.length === 1) out.add(w);
+  if (!tex) {
+    for (const w of s.split(/[^A-Za-zα-ωΑ-Ω]+/)) if (w.length === 1) out.add(w);
+    juxtaposedEquationSymbols(s, out);
+  }
   return out;
 }
 
@@ -307,11 +357,11 @@ function formulaFingerprint(raw: string): string | undefined {
   const plain = texToPlain(raw);
   const at = plain.indexOf("=");
   if (at < 0) return undefined;
-  const lhsToken = /(?:^|[\s:])([A-Za-zα-ωΑ-Ω])\s*$/.exec(plain.slice(0, at))?.[1];
+  const lhsToken = /(?<![A-Za-zα-ωΑ-Ω\d.])([A-Za-zα-ωΑ-Ω])\s*$/.exec(plain.slice(0, at))?.[1];
   if (!lhsToken) return undefined;
   const right = plain
     .slice(at + 1)
-    .split(/[.;,，。；]|(?:\s{2,})/)[0]!
+    .split(/[=≈.;,，。；！？（:\uff1a\p{Script=Han}]|(?:\s{2,})/u)[0]!
     .trim();
   const lhs = monomialOf(lhsToken);
   const rhs = monomialOf(right);
@@ -336,7 +386,7 @@ function sourceFormulas(source: string): SourceFormula[] {
     .filter((s) => /=/.test(s))
     .map((text) => ({ symbols: symbolsOf(text, true), fingerprint: formulaFingerprint(text) }));
   const proseLines = source
-    .split(/(?<=[.!?。！？])\s+|\n/)
+    .split(/(?<=[.!?;])\s+|(?<=[。；！？])\s*|[,，]\s*(?=[^,，\n]*=)|[\p{Script=Han}：（）]+|\n/u)
     .filter((s) => /=/.test(s))
     .map((text) => ({ symbols: symbolsOf(text, false), fingerprint: formulaFingerprint(text) }));
   return [...mathSpans, ...proseLines];

@@ -300,7 +300,7 @@ PipelineOptions = { budgetsInPrompt, outlineCheckRetry, slideCheckRetry, truncat
 - `POST /lessons/:id/duplicate`：新课复制最新已确认版本（大纲、参数与范围快照、确认时间）和它的全部页面（新 id，`spec_hash` 不变，`prev_*` 清空，所以没有可撤销的上一步），有更新的草稿时也复制；所有复制的版本 `rev` = 0；分享链接、起草锁和单元归属都不复制。之后“修改大纲”→ 确认时由 `carryOverSlides` 按 `slideKey` 复用，只有改过的页需要模型。
 - `POST /lessons/unit`：把所选范围按叶子章节（父章节在第一个子章节之前的引言页归父章节）切成片，`pedagogy.planUnit(pieces, 课时, count?)` 按字数均分成 N 节（单片超过目标 1.25 倍或超过 115% 课时时在页边界切开，标题加“(1)”“(2)”；不给 count 时从估算节数起逐个加一，直到每节 ≤ 115% 课时），`?dryRun=1` 只返回预览 `{lessons[{title, ranges, estimatedMinutes, over}], maxMinutes}` 不写库；建课时每节课一个新 lesson，课名 = 单元名 · 节号范围，`scope.unit` 记下单元；向导里那节还没有大纲的课作为第 1 节复用。只够一节课 → 400 `UNIT_TOO_SMALL`；要复用的课已有大纲或正在起草 → 409 `LESSON_IN_USE`。
 
-**提示词版本**：`outline.draft@6`（排序配对页规则）、`slide.write@8`（先投票、排序 / 配对、实验结果、外层 `{content, notes}` JSON Schema 与裸槽位解包）。
+**提示词版本**：`outline.draft@6`（排序配对页规则）、`slide.write@9`（先投票、排序 / 配对、实验结果、外层 `{content, notes}` JSON Schema 与 `steps` 例题 / 渐隐定制 Schema 及裸槽位解包）。
 
 **免费版约束**：我的课列表是一条带相关子查询的 SQL；页面上传每批 40 页（每页一条 upsert，留出鉴权等查询余量）；复用插入每批 5 行（D1 每条语句 ≤ 100 个绑定参数）；JSON Schema 预计算并缓存。
 
