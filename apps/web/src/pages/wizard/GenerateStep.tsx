@@ -11,11 +11,8 @@ import { documentApi, type TextbookPage } from "../../textbook/api.ts";
 import { SourcePage } from "../../textbook/SourcePage.tsx";
 import { downloadOfflineHtml } from "../../offline/exportDeck.ts";
 import { downloadPptx } from "../../offline/exportPptx.ts";
+import { generateMissingSlides, generateSlideWithLock } from "./slideGeneration.ts";
 import { Stepper, StepIntro, type StepKey } from "./Stepper.tsx";
-
-const CONCURRENCY = 2;
-const SLIDE_BUSY_POLL_MS = 4000;
-const SLIDE_BUSY_MAX_MS = 180_000;
 
 /**
  * Share link status: copy, unshare, move to the current version, and the pre-share review of flagged pages.
@@ -171,46 +168,29 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
   const labels = view.pageLabels;
   const generateOne = useCallback(
     async (specId: string, regenerate = false) => {
-      if (!confirmed) return;
-      setRunning((r) => new Set(r).add(specId));
-      setFailed(({ [specId]: _drop, ...rest }) => rest);
-      try {
-        let slide: Slide | null = null;
-        for (let wait = 0; !slide; wait += SLIDE_BUSY_POLL_MS) {
-          try {
-            slide = (await lessonApi.generate(view.lesson.id, confirmed.id, specId, regenerate)).slide;
-          } catch (e) {
-            // Another tab is writing this slide: wait for its result instead of paying for a second one.
-            if (!(e instanceof ApiError && e.code === "SLIDE_IN_PROGRESS") || wait > SLIDE_BUSY_MAX_MS) throw e;
-            regenerate = false;
-            await new Promise((r) => setTimeout(r, SLIDE_BUSY_POLL_MS));
-          }
-        }
-        setSlides((m) => ({ ...m, [specId]: slide }));
-      } catch (e) {
-        setFailed((f) => ({ ...f, [specId]: e instanceof ApiError ? e.message : (e as Error).message }));
-      } finally {
-        setRunning((r) => {
-          const n = new Set(r);
-          n.delete(specId);
-          return n;
-        });
-      }
+      if (!confirmed) return { ok: false, rateLimited: false };
+      return generateSlideWithLock(specId, regenerate, {
+        request: async (id, regen) => (await lessonApi.generate(view.lesson.id, confirmed.id, id, regen)).slide,
+        onStart: (id) => {
+          setRunning((r) => new Set(r).add(id));
+          setFailed(({ [id]: _drop, ...rest }) => rest);
+        },
+        onSlide: (id, slide) => setSlides((m) => ({ ...m, [id]: slide })),
+        onError: (id, msg) => setFailed((f) => ({ ...f, [id]: msg })),
+        onDone: (id) =>
+          setRunning((r) => {
+            const n = new Set(r);
+            n.delete(id);
+            return n;
+          }),
+      });
     },
     [confirmed, view.lesson.id],
   );
 
   async function generateAll() {
-    const missing = specs.filter((s) => !slides[s.id]);
-    // Worked examples first, so faded and practice pages can mirror their problem.
-    for (const todo of [missing.filter((s) => s.pageType === "worked"), missing.filter((s) => s.pageType !== "worked")].map((l) => l.map((s) => s.id))) {
-      let next = 0;
-      await Promise.all(
-        Array.from({ length: CONCURRENCY }, async () => {
-          while (next < todo.length) await generateOne(todo[next++]!);
-        }),
-      );
-    }
+    const existing = new Set(specs.filter((s) => slides[s.id]).map((s) => s.id));
+    await generateMissingSlides(specs, existing, (specId) => generateOne(specId));
   }
 
   // Arriving from "confirm outline" (?generate=1) starts generation; a reload or a later visit does not.

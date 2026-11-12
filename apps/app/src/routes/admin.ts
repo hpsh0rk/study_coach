@@ -116,14 +116,18 @@ export const adminRoutes = new Hono<AppBindings>()
     const me = c.get("user");
     const id = c.req.param("id");
     if (id === me.id) throw new HttpError(400, "SELF", "You cannot disable yourself");
-    await db(c.env).update(users).set({ disabledAt: Date.now(), updatedAt: Date.now() }).where(and(eq(users.id, id), eq(users.orgId, me.orgId)));
+    const res = await db(c.env).update(users).set({ disabledAt: Date.now(), updatedAt: Date.now() }).where(and(eq(users.id, id), eq(users.orgId, me.orgId))).returning({ id: users.id });
+    if (!res.length) throw new HttpError(404, "NOT_FOUND", "User not found");
     await destroyUserSessions(c.env, id);
     await db(c.env).insert(auditLog).values({ orgId: me.orgId, actorId: me.id, action: "admin.user_disabled", target: id });
     return c.json({ ok: true });
   })
   .post("/users/:id/enable", async (c) => {
     const me = c.get("user");
-    await db(c.env).update(users).set({ disabledAt: null, updatedAt: Date.now() }).where(and(eq(users.id, c.req.param("id")), eq(users.orgId, me.orgId)));
+    const id = c.req.param("id");
+    const res = await db(c.env).update(users).set({ disabledAt: null, updatedAt: Date.now() }).where(and(eq(users.id, id), eq(users.orgId, me.orgId))).returning({ id: users.id });
+    if (!res.length) throw new HttpError(404, "NOT_FOUND", "User not found");
+    await db(c.env).insert(auditLog).values({ orgId: me.orgId, actorId: me.id, action: "admin.user_enabled", target: id });
     return c.json({ ok: true });
   })
 

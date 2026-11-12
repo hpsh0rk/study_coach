@@ -80,6 +80,22 @@ describe("whitelist auth", () => {
     expect(audit.length).toBeLessThanOrEqual(20);
     expect(audit[0]).toMatchObject({ action: "auth.login", actor: "wang" });
     expect(audit.map((x: any) => x.action)).toContain("admin.user_created");
+
+    const wangId = created.json.user.id as string;
+    expect((await admin.req("POST", "/api/admin/users/usr_missing/disable")).status).toBe(404);
+    expect((await admin.req("POST", "/api/admin/users/usr_missing/enable")).status).toBe(404);
+    expect((await admin.req("POST", `/api/admin/users/${wangId}/disable`)).status).toBe(200);
+    expect((await teacher.req("GET", "/api/lessons")).status).toBe(401);
+    expect((await new Client().req("POST", "/api/auth/login", { username: "wang", password: "Teach12345" })).status).toBe(401);
+
+    expect((await admin.req("POST", `/api/admin/users/${wangId}/enable`)).status).toBe(200);
+    expect((await new Client().req("POST", "/api/auth/login", { username: "wang", password: "Teach12345" })).status).toBe(200);
+    const afterToggle = (await admin.req("GET", "/api/admin/audit")).json.entries as { action: string; target: string | null; actor: string | null }[];
+    expect(afterToggle.filter((x) => x.target === wangId).map((x) => ({ action: x.action, actor: x.actor }))).toEqual([
+      { action: "admin.user_enabled", actor: "admin" },
+      { action: "admin.user_disabled", actor: "admin" },
+      { action: "admin.user_created", actor: "admin" },
+    ]);
   });
 
   it("admin AI config keeps exactly one enabled provider and model", async () => {

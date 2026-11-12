@@ -663,7 +663,9 @@ describe("model gateway errors", () => {
     const t = await loggedIn("gwteacher", "Teach12345");
     const lessonId = await newLesson(t, await uploadDoc(t));
     const added = await admin.req("POST", "/api/admin/ai/providers", { kind: "custom", name: "Gateway", baseUrl: "https://gw.test/v1", apiKey: "sk-live-ABCD12345678", model: "m" });
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({ error: { message: "Incorrect API key provided: sk-live-ABCD****5678" } }), { status: 401 }));
+    let status = 401;
+    let body = "Incorrect API key provided: sk-live-ABCD****5678";
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({ error: { message: body } }), { status }));
     try {
       const res = await t.req("POST", `/api/lessons/${lessonId}/outline`);
       expect(res.status).toBe(502);
@@ -671,6 +673,13 @@ describe("model gateway errors", () => {
       expect(res.json.error.message).not.toMatch(/sk-live|Incorrect/);
       const logged = await e.DB.prepare("SELECT error FROM ai_calls WHERE user_id = 'usr_gw' AND status = 'error' LIMIT 1").first<string>("error");
       expect(logged).toContain("sk-live-ABCD****5678");
+
+      status = 429;
+      body = "Rate limit exceeded for key sk-live-ABCD****5678";
+      const limited = await t.req("POST", `/api/lessons/${lessonId}/outline`);
+      expect(limited.status).toBe(429);
+      expect(limited.json.error).toMatchObject({ code: "AI_PROVIDER", message: expect.stringContaining("限流") });
+      expect(limited.json.error.message).not.toMatch(/sk-live|Rate limit exceeded/);
     } finally {
       fetchSpy.mockRestore();
       await admin.req("DELETE", `/api/admin/ai/providers/${added.json.id}`);
