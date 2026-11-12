@@ -1,0 +1,20 @@
+{
+  "fixtureVersion": 1,
+  "corpusVersion": 1,
+  "caseId": "parser-table-v1",
+  "target": "parser",
+  "recordedAt": "2026-11-12T00:00:00.000Z",
+  "implementation": {
+    "kind": "synthetic-mock",
+    "version": "fixture-v1"
+  },
+  "output": {
+    "raw": "SYNTHETIC TABLE\n\n| time | velocity |\n| --- | --- |\n| 0 s | 12 m/s |\n| 2 s | 20 m/s |"
+  },
+  "metadata": {
+    "latencyMs": 0,
+    "inputTokens": null,
+    "outputTokens": null,
+    "costUsd": null
+  }
+}

@@ -7,17 +7,19 @@
  *                 [--reuse-outlines results/B0] [--out results/B0] [--concurrency 4]
  *                 [--noise realistic|heavy|none[,overBudget=0.3,fixRate=0.7,...]] [--seed kj]
  *
- * Provider: KJ_EVAL_API_KEY (+ KJ_EVAL_PROVIDER deepseek|glm|custom, KJ_EVAL_MODEL, KJ_EVAL_BASE_URL),
+ * Provider: KJ_EVAL_API_KEY (+ KJ_EVAL_PROVIDER deepseek|glm|custom, KJ_EVAL_MODEL, KJ_EVAL_BASE_URL,
+ * KJ_EVAL_PROTOCOL openai|messages, KJ_EVAL_MAX_TOKENS, KJ_EVAL_HEADERS_JSON),
  * or DEEPSEEK_API_KEY / GLM_API_KEY. Without a key every call uses the deterministic stubs.
  * --noise replaces the provider with the fault-injecting stub (noisy.ts), even when a key is set.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { createAiLayer, PROVIDER_PRESETS, type AiCallRecord, type AiConfig, type ProviderKind } from "@kj/ai";
+import { createAiLayer, PROVIDER_PRESETS, ProviderKind, ProviderProtocol, type AiCallRecord, type AiConfig } from "@kj/ai";
 import { draftOutline, OUTLINE_PROMPT_VERSION, OUTLINE_SOURCE_CHARS, SLIDE_PROMPT_VERSION, sourcePagesFor, stubOutline, stubSlide, workedSpecFor, writeSlide, type DraftInput, type PlannerSection } from "@kj/generation";
 import { pagesInRanges, sourceForRanges } from "@kj/textbook";
 import { LessonParams, Outline, type PageRange, type PageText, type SlideSpec } from "@kj/schema";
 import { layoutForPageType } from "@kj/templates";
+import { z } from "zod";
 import { parseArgs, readJson, writeJson } from "./common.ts";
 import { DIRECT_PROMPT_VERSION, writeDeckDirect } from "./direct.ts";
 import { parseFlags, pipelineOptions, type AblationFlags } from "./flags.ts";
@@ -49,7 +51,7 @@ interface Manifest {
 }
 
 export function providerFromEnv(env: NodeJS.ProcessEnv = process.env): { config: AiConfig; label: string } | null {
-  let kind = env.KJ_EVAL_PROVIDER as ProviderKind | undefined;
+  let kind = env.KJ_EVAL_PROVIDER;
   let apiKey = env.KJ_EVAL_API_KEY;
   if (!apiKey && env.DEEPSEEK_API_KEY) {
     apiKey = env.DEEPSEEK_API_KEY;
@@ -61,13 +63,17 @@ export function providerFromEnv(env: NodeJS.ProcessEnv = process.env): { config:
   }
   if (!apiKey) return null;
   kind ??= "deepseek";
-  const preset = PROVIDER_PRESETS[kind];
+  const parsedKind = ProviderKind.parse(kind);
+  const preset = PROVIDER_PRESETS[parsedKind];
   const baseUrl = env.KJ_EVAL_BASE_URL || preset.baseUrl;
   const model = env.KJ_EVAL_MODEL || preset.models[0];
-  if (!baseUrl || !model) throw new Error(`provider "${kind}" needs KJ_EVAL_BASE_URL and KJ_EVAL_MODEL`);
+  if (!baseUrl || !model) throw new Error(`provider "${parsedKind}" needs KJ_EVAL_BASE_URL and KJ_EVAL_MODEL`);
+  const protocol = env.KJ_EVAL_PROTOCOL ? ProviderProtocol.parse(env.KJ_EVAL_PROTOCOL) : undefined;
+  const maxTokens = env.KJ_EVAL_MAX_TOKENS ? z.coerce.number().int().positive().parse(env.KJ_EVAL_MAX_TOKENS) : undefined;
+  const headers = env.KJ_EVAL_HEADERS_JSON ? z.record(z.string(), z.string()).parse(JSON.parse(env.KJ_EVAL_HEADERS_JSON)) : undefined;
   return {
-    label: `${kind}/${model}`,
-    config: { active: { provider: { id: "eval", kind, name: preset.label, baseUrl, apiKey }, model } },
+    label: `${parsedKind}/${model} (${protocol ?? "openai"})`,
+    config: { active: { provider: { id: "eval", kind: parsedKind, name: preset.label, baseUrl, apiKey, protocol, maxTokens, headers }, model } },
   };
 }
 

@@ -1,0 +1,20 @@
+{
+  "fixtureVersion": 1,
+  "corpusVersion": 1,
+  "caseId": "parser-ocr-v1",
+  "target": "parser",
+  "recordedAt": "2026-11-12T00:00:00.000Z",
+  "implementation": {
+    "kind": "synthetic-mock",
+    "version": "fixture-v1"
+  },
+  "output": {
+    "raw": "SYNTHETIC TEST\nSPEED: 12 M/S\nTIME: 3 S\nDISTANCE = 36 M"
+  },
+  "metadata": {
+    "latencyMs": 0,
+    "inputTokens": null,
+    "outputTokens": null,
+    "costUsd": null
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "fixtureVersion": 1,
+  "corpusVersion": 1,
+  "caseId": "vision-transcription-v1",
+  "target": "vision",
+  "recordedAt": "2026-11-12T00:00:00.000Z",
+  "implementation": {
+    "kind": "synthetic-mock",
+    "model": "fixture-v1",
+    "protocol": "offline"
+  },
+  "output": {
+    "raw": "SYNTHETIC EVAL\nSPEED: 12 M/S\nTIME: 3 S\nDISTANCE = 36 M"
+  },
+  "metadata": {
+    "latencyMs": 0,
+    "inputTokens": null,
+    "outputTokens": null,
+    "costUsd": null
+  }
+}
