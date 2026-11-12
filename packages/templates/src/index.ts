@@ -110,7 +110,7 @@ export const SLOT_SCHEMAS = {
     title: str("title", B.steps.title),
     problem: str("problem", B.steps.problem),
     steps: arr(z.object({ text: str("step", B.steps.steps.item), why: optStr("why", B.steps.why) }), B.steps.steps),
-  }),
+  }).refine((s) => s.fadeFrom === undefined || (s.fadeFrom >= 1 && s.fadeFrom < s.steps.length), { message: "fadeFrom must index a blank step", path: ["fadeFrom"] }),
   experiment: ExperimentContent.extend({
     title: str("title", B.experiment.title),
     predict: z.object({ question: str("prediction question", B.experiment.question), options: arr(str("option", B.experiment.options.item), B.experiment.options) }),

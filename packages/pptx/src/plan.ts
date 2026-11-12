@@ -365,7 +365,7 @@ export function shuffledOrder(keys: string[]): number[] {
   return Array.from({ length: n }, (_, i) => (i + 1) % n);
 }
 
-function body(c: SlideContent, p: Palette, notes: Notes): Item[] {
+function body(c: SlideContent, p: Palette, notes: Notes, pageType?: PageType): Item[] {
   switch (c.layout) {
     case "title": {
       const items: Item[] = [
@@ -422,7 +422,7 @@ function body(c: SlideContent, p: Palette, notes: Notes): Item[] {
       const n = c.steps.length;
       const gap = 6;
       const h = (BODY_H - gap * (n - 1)) / n;
-      const fade = c.fadeFrom ?? n;
+      const fade = c.fadeFrom ?? (pageType === "faded" && n > 1 ? n - 1 : n);
       c.steps.forEach((s, i) => {
         const y = BODY_Y + i * (h + gap);
         items.push(badge(String(i + 1), { x: rx, y: y + 8, w: 64, h: 64 }, p));
@@ -543,7 +543,7 @@ function unverifiedNote(u: Unverified[] | undefined): string[] {
 export function planSlide(slide: Pick<Slide, "content" | "notes" | "sources" | "unverified"> & { pageType?: PageType }, ctx: PlanContext): SlidePlan {
   const p = PALETTES[ctx.theme] ?? PALETTES.classic;
   const notes: Notes = { answers: [], interaction: [], other: [], degraded: [] };
-  const items = body(slide.content, p, notes);
+  const items = body(slide.content, p, notes, slide.pageType);
   const src = sourcesLine(slide as Slide, ctx, p);
   if (src) items.push(src);
   for (const it of items) if (it.kind === "text") it.fontPx = fitFont(it).fontPx;

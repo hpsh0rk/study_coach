@@ -53,8 +53,12 @@ export function truncateLists(c: SlideContent, pageType?: PageType): SlideConten
       return { ...c, takeaways: c.takeaways.slice(0, B.chart.takeaways.max), chart: trimTable(c.chart, B.table) };
     case "steps":
       return { ...c, steps: c.steps.slice(0, B.steps.steps.max), ...(c.fadeFrom !== undefined ? { fadeFrom: Math.min(c.fadeFrom, Math.min(c.steps.length, B.steps.steps.max) - 1) } : {}) };
-    case "experiment":
-      return { ...c, predict: { ...c.predict, options: c.predict.options.slice(0, B.experiment.options.max) }, observe: c.observe.slice(0, B.experiment.observe.max) };
+    case "experiment": {
+      const options = c.predict.options.slice(0, B.experiment.options.max);
+      const outcome = c.outcome !== undefined && c.outcome < options.length ? c.outcome : undefined;
+      const { outcome: _drop, ...rest } = c;
+      return { ...rest, ...(outcome !== undefined ? { outcome } : {}), predict: { ...c.predict, options }, observe: c.observe.slice(0, B.experiment.observe.max) };
+    }
     case "quiz": {
       const options = c.options.slice(0, B.quiz.options.max);
       return { ...c, options, answer: Math.min(c.answer, options.length - 1) };

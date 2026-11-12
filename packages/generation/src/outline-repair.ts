@@ -20,20 +20,23 @@ function checkPageAfter(last: SlideSpec, id: string): SlideSpec {
   };
 }
 
+export const MAX_OUTLINE_SLIDES = 40;
+
 /**
  * Planner-enforced check cadence: wherever lecture pages would run past MAX_LECTURE_RUN minutes
- * without a student activity, a check-for-understanding page is inserted after the last lecture page.
+ * without a student activity, a check-for-understanding page is inserted after the last lecture page
+ * while keeping total slide count within Outline's hard schema ceiling.
  */
-export function enforceCheckCadence(slides: SlideSpec[]): SlideSpec[] {
+export function enforceCheckCadence(slides: SlideSpec[], maxSlides = MAX_OUTLINE_SLIDES): SlideSpec[] {
   const ids = new Set(slides.map((s) => s.id));
   const out: SlideSpec[] = [];
   let run = 0;
   let last: SlideSpec | undefined;
   let k = 0;
-  for (const s of slides) {
+  for (const [idx, s] of slides.entries()) {
     const mode = PAGE_TYPES[s.pageType].mode;
     if (mode === "lecture") {
-      if (last && run > 0 && run + s.minutes > MAX_LECTURE_RUN) {
+      if (last && run > 0 && run + s.minutes > MAX_LECTURE_RUN && out.length + (slides.length - idx) < maxSlides) {
         let id: string;
         do id = `cfu${++k}`;
         while (ids.has(id));

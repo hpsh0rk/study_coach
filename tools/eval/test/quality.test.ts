@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { PDFDocument } from "pdf-lib";
 import { describe, expect, it, vi } from "vitest";
-import { assertFixtureSafe, assertManualRecordAllowed, loadCorpus, qualityParserPdf, QUALITY_RECORDINGS, redactFixture, replayFiles, scoreFixture, syntheticPage } from "../src/quality.ts";
+import { assertFixtureSafe, assertManualRecordAllowed, loadCorpus, qualityParserPdf, QUALITY_RECORDINGS, recordCase, redactFixture, replayFiles, scoreFixture, syntheticPage } from "../src/quality.ts";
 
 describe("manual quality record/replay", () => {
   it("replays every committed fixture offline and passes objective checks", () => {
@@ -101,5 +101,99 @@ describe("manual quality record/replay", () => {
     const flattened = scoreFixture(table);
     expect(flattened.passed).toBe(false);
     expect(flattened.checks.numbersUnits.passed).toBe(false);
+  });
+
+  it("records text via createAiLayer.callStructured (with 1-turn repair) and vision via callVision + cleanVisionText", async () => {
+    const textCalls: Record<string, unknown>[] = [];
+    const textReplies = [
+      '{"summary":"bad"}',
+      JSON.stringify({
+        summary: "Constant-speed cart travels 36 m in 3 s.",
+        citations: [1, 2],
+        quantities: [
+          { value: 12, unit: "m/s" },
+          { value: 3, unit: "s" },
+          { value: 36, unit: "m" },
+        ],
+        studentQuestion: "A cart moves at 12 m/s for 3 s. How far does it travel?",
+        teacherAnswer: "36 m",
+      }),
+    ];
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      textCalls.push({ headers: init?.headers, body: JSON.parse(String(init?.body ?? "{}")) });
+      const text = textReplies.shift()!;
+      const events = [
+        { type: "message_start", message: { model: "glm-5.3-flash", usage: { input_tokens: 20, output_tokens: 2 } } },
+        { type: "content_block_delta", delta: { type: "text_delta", text } },
+        { type: "message_delta", usage: { output_tokens: 15 } },
+        { type: "message_stop" },
+      ];
+      return new Response(events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
+    });
+    try {
+      const textFixture = await recordCase("text", undefined, {
+        KJ_QUALITY_TEXT_API_KEY: "sk-secret-local-1234",
+        KJ_QUALITY_TEXT_BASE_URL: "https://gateway.example.test/v1",
+        KJ_QUALITY_TEXT_MODEL: "glm-5.3-flash",
+        KJ_QUALITY_TEXT_PROVIDER: "custom",
+        KJ_QUALITY_TEXT_PROTOCOL: "messages",
+        KJ_QUALITY_TEXT_HEADERS_JSON: '{"x-source":"manual-eval"}',
+      });
+      expect(textCalls).toHaveLength(2);
+      expect(scoreFixture(textFixture).passed).toBe(true);
+      expect(textFixture.metadata).toMatchObject({ inputTokens: 40, outputTokens: 30 });
+
+      spy.mockImplementationOnce(async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        expect(body.thinking).toEqual({ type: "disabled" });
+        return Response.json({
+          model: "glm-4.6v-flash",
+          choices: [{ message: { content: "```markdown\nSYNTHETIC EVAL\nSPEED: 12 M/S\nTIME: 3 S\nDISTANCE = 36 M\n```" } }],
+          usage: { prompt_tokens: 100, completion_tokens: 18 },
+        });
+      });
+      const visionFixture = await recordCase("vision", undefined, {
+        KJ_QUALITY_VISION_API_KEY: "sk-vision-secret-1234",
+        KJ_QUALITY_VISION_BASE_URL: "https://vision.example.test/v4",
+        KJ_QUALITY_VISION_MODEL: "glm-4.6v-flash",
+        KJ_QUALITY_VISION_PROVIDER: "glm",
+      });
+      expect(visionFixture.output.raw).not.toContain("```");
+      expect(scoreFixture(visionFixture).passed).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("records MinerU agent mode with KJPAGE separators and host allowlisting alongside selfhost mode", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const target = String(url);
+      if (target === "https://mineru.net/api/v1/agent/parse/file") {
+        expect(JSON.parse(String(init?.body))).toMatchObject({ is_ocr: true, enable_formula: true, enable_table: true });
+        return Response.json({ code: 0, data: { task_id: "t-ocr", file_url: "https://mineru.oss-cn-shanghai.aliyuncs.com/upload.pdf" } });
+      }
+      if (target === "https://mineru.oss-cn-shanghai.aliyuncs.com/upload.pdf") {
+        const uploaded = await PDFDocument.load(init?.body as Uint8Array);
+        expect(uploaded.getPageCount()).toBe(2);
+        return new Response(null, { status: 200 });
+      }
+      if (target === "https://mineru.net/api/v1/agent/parse/t-ocr") {
+        return Response.json({ code: 0, data: { state: "done", markdown_url: "https://cdn-mineru.openxlab.org.cn/t-ocr/full.md" } });
+      }
+      if (target === "https://cdn-mineru.openxlab.org.cn/t-ocr/full.md") {
+        return new Response("KJPAGE 1\nSYNTHETIC TEST\nSPEED: 12 M/S\nTIME: 3 S\nDISTANCE = 36 M\n");
+      }
+      throw new Error(`unexpected URL ${target}`);
+    });
+    try {
+      const agentFixture = await recordCase("parser", "parser-ocr-v1", { KJ_QUALITY_PARSER_MODE: "agent" });
+      expect(agentFixture.implementation).toEqual({ kind: "mineru-agent", version: null });
+      expect(scoreFixture(agentFixture).passed).toBe(true);
+
+      spy.mockImplementationOnce(async () => Response.json({ code: 0, data: { task_id: "t-bad", file_url: "https://evil.example/upload.pdf" } }));
+      await expect(recordCase("parser", "parser-ocr-v1", { KJ_QUALITY_PARSER_MODE: "agent" })).rejects.toThrow(/unexpected upload URL/);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

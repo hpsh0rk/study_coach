@@ -117,6 +117,24 @@ describe("external parsing in the browser", () => {
     expect(out.saved.map((p) => p.no)).toEqual([3]);
   });
 
+  it("keeps already-reused pages out of missed when the remaining job fails", async () => {
+    const { deps } = fakes({
+      async create(pages) {
+        return {
+          reused: [{ no: pages[0]!, words: 12, chars: 60, flags: [], parser: "mineru-agent/1" }],
+          job: { id: "job-partial", pages: pages.slice(1) },
+        };
+      },
+      async upload() {
+        throw new ApiError(503, "PARSER_BUSY", "外部解析服务正忙");
+      },
+    });
+    const out = await parseExternally([2, 4, 6].map((no) => ({ no, kind: "formula-lost" as const })), { ...info, maxPagesPerJob: 2 }, deps);
+    expect(out.saved.map((p) => p.no)).toEqual([2]);
+    expect(out.missed).toEqual([4, 6]);
+    expect(out.stopped).toContain("正忙");
+  });
+
   it("cuts the pages out of the book, each behind a separator page", async () => {
     const book = await PDFDocument.create();
     const font = await book.embedFont(StandardFonts.Helvetica);

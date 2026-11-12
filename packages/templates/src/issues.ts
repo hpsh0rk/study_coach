@@ -140,6 +140,7 @@ export function issueText(message: string): string {
   if (/one cell per column/.test(message)) return "每一行的格数要和表头的列数一样";
   if (/answer must index an option/.test(message)) return "请选出正确选项";
   if (/outcome must index a prediction option/.test(message)) return "请重新选择实验结果对应的预测";
+  if (/fadeFrom must index a blank step/.test(message)) return "留空的步骤要在第 2 步到最后一步之间";
   if (/match mode needs a matching card/.test(message)) return "配对活动：每张卡片都要写上配对的另一半";
   if ((m = /invalid expression: (.*)$/.exec(message))) return `表达式算不出来（${m[1]}）：只能用 x、参数名、数字、+ - * / ^、括号、pi、e 和 sin cos tan sqrt abs exp ln log min max`;
   if (/x range must be increasing/.test(message)) return "横轴范围要从小到大";

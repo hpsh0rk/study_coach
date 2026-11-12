@@ -17,6 +17,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { ThemeId } from "@kj/schema";
 import { galleryCells } from "@kj/templates/testing";
+import { CLASSROOM_FIXTURES } from "@kj/templates/testing/classroom";
 import { exportPptx, PALETTES, planDeck, PPTX_FONT, writePptx, type PptxDeck, type TextItem } from "../src/index.ts";
 
 const args = process.argv.slice(2);
@@ -37,9 +38,13 @@ fs.writeFileSync(
 const env = { ...process.env, FONTCONFIG_FILE: fontsConf, HOME: work };
 
 const decks: { name: string; deck: PptxDeck }[] = [];
-if (flag("--gallery"))
-  for (const theme of ["classic", "chalk"] as ThemeId[])
-    decks.push({ name: `gallery-${theme}`, deck: { title: `Layout gallery (${theme})`, theme, slides: galleryCells().map((c) => ({ content: c.content, notes: c.id, sources: [12, 13], pageType: "concept" })) } });
+if (flag("--gallery")) {
+  const gallerySlides: PptxDeck["slides"] = [
+    ...galleryCells().map((c) => ({ content: c.content, notes: c.id, sources: [12, 13], pageType: "concept" as const })),
+    ...CLASSROOM_FIXTURES.flatMap((fixture) => fixture.slides.map((s) => ({ content: s.content, notes: `${fixture.id}:${s.specId} ${s.notes}`, sources: s.sources, pageType: s.pageType }))),
+  ];
+  for (const theme of ["classic", "chalk"] as ThemeId[]) decks.push({ name: `gallery-${theme}`, deck: { title: `Layout gallery (${theme})`, theme, slides: gallerySlides } });
+}
 for (const f of files) {
   const d = JSON.parse(fs.readFileSync(f, "utf8"));
   decks.push({ name: path.basename(f, ".json"), deck: { title: d.lesson?.title ?? d.title ?? path.basename(f, ".json"), theme: d.lesson?.theme ?? d.theme ?? "classic", pageLabels: d.lesson?.pageLabels ?? {}, slides: d.slides } });

@@ -44,7 +44,7 @@ Record the commit SHA, model and gateway identity, protocol, prompt versions, co
 
 ## 2. Real MinerU, OCR, and tables
 
-Run all three fixed parser cases from [`tools/eval/QUALITY.md`](../tools/eval/QUALITY.md):
+Run all three fixed parser cases from [`tools/eval/QUALITY.md`](../tools/eval/QUALITY.md) against the configured MinerU backend (`KJ_QUALITY_PARSER_BASE_URL` for `selfhost`, or `KJ_QUALITY_PARSER_MODE=agent` for the cloud token-free agent API):
 
 1. `parser-kinematics-v1`: outlined formulas and units;
 2. `parser-ocr-v1`: a generated image-only page with exact text, values, and units;

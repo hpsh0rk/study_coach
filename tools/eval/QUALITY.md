@@ -42,7 +42,7 @@ KJ_QUALITY_VISION_PROVIDER='custom' \
 pnpm quality:record --target vision --confirm-real-call \
   --out tools/eval/fixtures/quality-recordings/vision-model-name-v1.json
 
-# Self-hosted MinerU 4+ parser
+# Self-hosted MinerU 4+ parser (default) or cloud token-free agent API (`KJ_QUALITY_PARSER_MODE=agent`)
 KJ_QUALITY_PARSER_BASE_URL='https://parser.example' \
 KJ_QUALITY_PARSER_API_KEY='...' \
 pnpm quality:record --target parser --case parser-kinematics-v1 \
@@ -59,7 +59,7 @@ pnpm quality:record --target parser --case parser-table-v1 \
   --confirm-real-call --out tools/eval/fixtures/quality-recordings/parser-table-v1.json
 ```
 
-Optional text/vision variables are `KJ_QUALITY_{TEXT,VISION}_PROTOCOL=openai|messages`, `KJ_QUALITY_{TEXT,VISION}_MAX_TOKENS`, and `KJ_QUALITY_{TEXT,VISION}_HEADERS_JSON` (a JSON object for gateway-specific headers). Keep all credentials and sensitive header values in local environment variables, never command arguments. Parser timeout can be changed with `KJ_QUALITY_PARSER_TIMEOUT_MS`.
+Optional text/vision variables are `KJ_QUALITY_{TEXT,VISION}_PROTOCOL=openai|messages`, `KJ_QUALITY_{TEXT,VISION}_MAX_TOKENS`, and `KJ_QUALITY_{TEXT,VISION}_HEADERS_JSON` (a JSON object for gateway-specific headers). Text recording runs through `@kj/ai` `createAiLayer.callStructured` (JSON Schema prompt + 1-turn repair loop) and vision recording runs through `createAiLayer.callVision` + `cleanVisionText`, matching production model calls. For MinerU's cloud token-free agent API instead of a self-hosted server, set `KJ_QUALITY_PARSER_MODE=agent` (wraps the PDF with `KJPAGE` separator pages and enforces the MinerU host allowlist). Keep all credentials and sensitive header values in local environment variables, never command arguments. Parser timeout can be changed with `KJ_QUALITY_PARSER_TIMEOUT_MS`.
 
 The command prints the score and exits nonzero for a quality failure, but still writes the sanitized fixture for review. Before committing a real recording:
 

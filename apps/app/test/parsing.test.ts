@@ -111,6 +111,20 @@ describe("external parser switch (外部解析服务)", () => {
     expect((await t7.req("POST", `/api/documents/${id}/parse/${job.id}/pages`, { pages: [{ no: 1, text: "not in the job" }] })).status).toBe(400);
     expect((await t7.req("POST", `/api/documents/${id}/parse/${job.id}/pages`, { pages: [{ no: 3, text: "t | v\n1 | 2" }] })).json.pages).toEqual([expect.objectContaining({ no: 3, parser: MINERU_AGENT_PARSER })]);
     expect((await t7.req("GET", `/api/documents/${id}/pages/1`)).json.parser).toBe("pdfjs/1");
+
+    const raceId = await newBook(t7, "5b".padEnd(64, "5"));
+    const raceJob = (await t7.req("POST", `/api/documents/${raceId}/parse`, { pages: [2, 4], reason: "auto" })).json.job;
+    await t7.raw("PUT", `/api/documents/${raceId}/parse/${raceJob.id}/file`, PDF);
+    await t7.req("GET", `/api/documents/${raceId}/parse/${raceJob.id}`);
+    await t7.req("POST", `/api/documents/${raceId}/pages/paste`, { start: 2, end: 2, text: "Teacher pasted equation v = u + at while MinerU was running." });
+    const raceSaved = await t7.req("POST", `/api/documents/${raceId}/parse/${raceJob.id}/pages`, {
+      pages: [
+        { no: 2, text: "MinerU late text" },
+        { no: 4, text: "MinerU page 4 text" },
+      ],
+    });
+    expect(raceSaved.json.pages).toEqual([expect.objectContaining({ no: 4, parser: MINERU_AGENT_PARSER })]);
+    expect((await t7.req("GET", `/api/documents/${raceId}/pages/2`)).json).toMatchObject({ parser: "paste", text: expect.stringContaining("Teacher pasted") });
   });
 
   it("reuses pages another copy of the same file by the same teacher already got, never another teacher's", async () => {

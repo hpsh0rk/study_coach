@@ -193,5 +193,11 @@ export async function saveJobPages(env: Env, user: SessionUser, doc: TextbookRow
   const rows = got.map((p) => ({ no: p.no, text: p.text, ...pageFacts(p.text), parser: job.parser }));
   if (rows.length) await writeParsed(env, doc.id, rows);
   await setJob(env, id, { state: "done" });
-  return rows.map(({ no, words, chars, flags, parser }) => ({ no, words, chars, flags, parser }));
+  if (!rows.length) return [];
+  const stored = await db(env)
+    .select({ no: pages.no, words: pages.words, chars: pages.chars, flags: pages.flags, parser: pages.parser })
+    .from(pages)
+    .where(and(eq(pages.documentId, doc.id), inArray(pages.no, rows.map((r) => r.no)), eq(pages.parser, job.parser)));
+  const byNo = new Map(stored.map((r) => [r.no, r]));
+  return rows.flatMap((r) => (byNo.has(r.no) ? [byNo.get(r.no)!] : []));
 }

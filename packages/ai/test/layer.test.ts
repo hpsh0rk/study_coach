@@ -74,6 +74,17 @@ describe("AI layer", () => {
     expect(res.output).toEqual({ title: "ok", n: 2 });
   });
 
+  it("extracts fenced or balanced JSON even when surrounding prose contains LaTeX braces", async () => {
+    const replies = [
+      'Here is the corrected JSON for $\\frac{d}{dt}$:\n```json\n{"title":"wave speed","n":4}\n```\nFormula $\\frac{\\lambda}{T}$ stays in notes.',
+      '{"title":"inline {braces}","n":5} — kept $\\frac{1}{2}mv^2$ concise.',
+    ];
+    const fetchImpl: FetchLike = async () => okResponse(replies.shift());
+    const { ai } = setup(only("a"), fetchImpl);
+    expect((await ai.callStructured(req)).output).toEqual({ title: "wave speed", n: 4 });
+    expect((await ai.callStructured(req)).output).toEqual({ title: "inline {braces}", n: 5 });
+  });
+
   it("calls the one configured provider and model and meters tokens", async () => {
     const calls: { url: string; model: string }[] = [];
     const fetchImpl: FetchLike = async (url, init) => {
