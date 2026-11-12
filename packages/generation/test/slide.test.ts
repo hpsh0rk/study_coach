@@ -200,6 +200,59 @@ describe("writer safety nets", () => {
     expect(res.unverified[0]!.detail).toContain("可能是 p.2");
     expect(sourceUnverified(spec)).toEqual([]);
   });
+
+  it("prints the outer {content, notes} JSON Schema in buildMessages and unwraps bare slot objects while preserving strict Zod checks", async () => {
+    const qSpec: SlideSpec = { ...spec, id: "sp-q", pageType: "practice", layout: "questions", title: "Practice wave speed", visual: "none" };
+    const expSpec: SlideSpec = { ...spec, id: "sp-e", pageType: "experiment", layout: "experiment", title: "Investigate wave frequency on a string", visual: "sim", minutes: 8 };
+
+    const sysPrompt = buildMessages(qSpec, input(), { ...outline, slides: [qSpec] })[0]!.content;
+    const schemaMatch = /matching this JSON Schema: (\{.*\})$/m.exec(sysPrompt);
+    expect(schemaMatch).not.toBeNull();
+    const parsedSchema = JSON.parse(schemaMatch![1]!) as { properties?: Record<string, unknown>; required?: string[] };
+    expect(parsedSchema.properties).toHaveProperty("content");
+    expect(parsedSchema.properties).toHaveProperty("notes");
+    expect(parsedSchema.required).toEqual(expect.arrayContaining(["content", "notes"]));
+
+    // 1. Bare top-level `questions` slot object (+ notes) succeeds in a single turn without burning repair.
+    const bareQuestions = {
+      layout: "questions",
+      title: "Check wave speed",
+      items: [
+        { q: "What moves along a wave?", a: "Energy" },
+        { q: "Write the wave speed formula.", a: "$v = f\\lambda$" },
+      ],
+      notes: "Give students two minutes in pairs.",
+    };
+    const qa = fakeAi([bareQuestions]);
+    const qRes = await writeSlide(qa.ai, { ...outline, slides: [qSpec] }, "sp-q", input());
+    expect(qa.requests).toHaveLength(1);
+    expect(qRes.content).toEqual({ layout: "questions", title: "Check wave speed", items: bareQuestions.items });
+    expect(qRes.notes).toBe("Give students two minutes in pairs.");
+
+    // 2. Bare top-level `experiment` missing `explain` on turn 1 surfaces `content.explain` immediately so 1 repair turn recovers.
+    const bareIncompleteExp = {
+      layout: "experiment",
+      title: "Shake the string faster",
+      predict: { question: "What changes?", options: ["Shorter", "Longer"] },
+      sim: { kind: "sim", embedId: "wave-string" },
+      observe: ["Count wave peaks", "Compare crest spacing"],
+      notes: "Vote before running the sim.",
+    };
+    const fixedExp = {
+      content: { ...bareIncompleteExp, explain: "Higher frequency shortens wavelength." },
+      notes: "Vote before running the sim.",
+    };
+    const ea = fakeAi([bareIncompleteExp, fixedExp]);
+    const eRes = await writeSlide(ea.ai, { ...outline, slides: [expSpec] }, "sp-e", input());
+    expect(ea.requests).toHaveLength(2);
+    expect(ea.requests[1]!.at(-1)!.content).toContain("content.explain");
+    expect(eRes.content.layout).toBe("experiment");
+
+    // 3. Strict Zod validation still rejects wrong layout or missing required fields across both turns.
+    const wrongLayout = { layout: "quiz", question: "Wrong?", options: [{ text: "A", misconception: "" }, { text: "B", misconception: "" }], answer: 0, explain: "A" };
+    await expect(writeSlide(fakeAi([wrongLayout, wrongLayout]).ai, { ...outline, slides: [qSpec] }, "sp-q", input())).rejects.toThrow(/invalid output twice/);
+    await expect(writeSlide(fakeAi([{ notes: "empty" }, { notes: "still empty" }]).ai, { ...outline, slides: [qSpec] }, "sp-q", input())).rejects.toThrow(/invalid output twice/);
+  });
 });
 
 describe("slideKey", () => {

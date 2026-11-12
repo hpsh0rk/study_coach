@@ -114,9 +114,9 @@ describe("vision-model fallback (看图模型)", () => {
     const id = await newBook("d".repeat(64));
     expect((await teacher.req("GET", `/api/documents/${id}`)).json.visionParser).toMatchObject({ model: "glm-4.6v-flash" });
 
-    const busy = provider(() => new Response("rate limited", { status: 429 }));
+    const busy = provider(() => new Response("rate limited", { status: 429, headers: { "retry-after-ms": "1" } }));
     expect((await readImage(id, 4)).json.error.code).toBe("PARSER_BUSY");
-    expect(busy).toHaveLength(1);
+    expect(busy).toHaveLength(3);
     expect((await teacher.req("GET", `/api/documents/${id}/pages/4`)).json.parser).toBe("pdfjs/1");
     vi.restoreAllMocks();
 
@@ -188,7 +188,7 @@ describe("vision-model fallback (看图模型)", () => {
 
     const tested = await admin.req("POST", `/api/admin/ai/providers/${vision.json.id}/test`, {});
     expect(tested.json).toMatchObject({ ok: true });
-    expect(bodies.at(-1)).toMatchObject({ model: "glm-4.6v-flash", max_tokens: 16 });
+    expect(bodies.at(-1)).toMatchObject({ model: "glm-4.6v-flash", max_tokens: 256 });
     expect(bodies.at(-1).messages[0].content[0].image_url.url).not.toMatch(/^data:/);
     expect((await admin.req("POST", `/api/admin/ai/providers/${text.json.id}/test`, {})).json).toMatchObject({ ok: true });
     expect(bodies.at(-1).messages[0].content).toEqual(expect.any(String));

@@ -34,6 +34,7 @@ test("看图模型 provider (local mock): with no text model, a vision provider 
     await card.getByLabel("名称 Name").fill("Local qwen mock");
     await card.getByTestId("vision-provider-model").fill("mock-qwen-vl");
     await card.getByTestId("vision-provider-base-url").fill(provider.baseUrl);
+    await expect(card.getByTestId("vision-provider-key")).toHaveAttribute("autocomplete", "new-password");
     await card.getByTestId("vision-provider-key").fill("sk-vision-only-key");
     await card.getByTestId("vision-provider-save").click();
     await expect(card.getByTestId("vision-in-use")).toContainText("Local qwen mock / mock-qwen-vl · In use");
@@ -96,6 +97,7 @@ test("Messages 协议 (local mock gateway): protocol, max_tokens and a custom he
     await form.getByTestId("model-base-url").fill(gateway.baseUrl);
     await form.getByTestId("model-max-tokens").fill("31200");
     await form.getByTestId("model-headers").fill("x-source: tensorhawk");
+    await expect(form.getByLabel("API Key")).toHaveAttribute("autocomplete", "new-password");
     await form.getByLabel("API Key").fill("sk-gateway-key");
     await shot(page, "36-admin-messages-form");
     await form.getByRole("button", { name: /保存并启用/ }).click();
@@ -171,6 +173,7 @@ test("MinerU 自部署 (local mock server): unconfigured until the URL is saved,
     await expect(page.getByTestId("parsing-state")).toHaveText(/未配置/);
 
     await page.getByTestId("selfhost-url").fill(`${school.baseUrl}/v1`);
+    await expect(page.getByTestId("selfhost-key")).toHaveAttribute("autocomplete", "new-password");
     await page.getByTestId("selfhost-key").fill("not-the-key");
     await page.getByTestId("selfhost-save").click();
     await expect(page.getByTestId("parsing-state")).toHaveText(/已开启/);

@@ -665,7 +665,7 @@ describe("model gateway errors", () => {
     const added = await admin.req("POST", "/api/admin/ai/providers", { kind: "custom", name: "Gateway", baseUrl: "https://gw.test/v1", apiKey: "sk-live-ABCD12345678", model: "m" });
     let status = 401;
     let body = "Incorrect API key provided: sk-live-ABCD****5678";
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({ error: { message: body } }), { status }));
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({ error: { message: body } }), { status, headers: { "retry-after-ms": "1" } }));
     try {
       const res = await t.req("POST", `/api/lessons/${lessonId}/outline`);
       expect(res.status).toBe(502);

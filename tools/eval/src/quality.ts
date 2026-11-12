@@ -136,9 +136,139 @@ const unit = (s: string) =>
   s
     .toLowerCase()
     .replace(/²/g, "^2")
+    .replace(/³/g, "^3")
     .replace(/\\(?:mathrm|mathtt|mathsf|mathbf|mathit|textrm|text)(?![a-z])/g, "")
+    .replace(/\\[,;:!]/g, "")
     .replace(/[{}$~\s]/g, "");
 const close = (a: number, b: number) => Math.abs(a - b) <= Math.max(1e-9, Math.abs(b) * 1e-9);
+
+const UNIT_ALIASES: Record<string, string> = {
+  meterspersecond: "m/s",
+  metrespersecond: "m/s",
+  meterpersecond: "m/s",
+  metrepersecond: "m/s",
+  "米/秒": "m/s",
+  kilometerspersecond: "km/s",
+  kilometrespersecond: "km/s",
+  kilometerpersecond: "km/s",
+  kilometrepersecond: "km/s",
+  "千米/秒": "km/s",
+  kilometersperhour: "km/h",
+  kilometresperhour: "km/h",
+  kilometerperhour: "km/h",
+  kilometreperhour: "km/h",
+  "千米/时": "km/h",
+  "米/秒^2": "m/s^2",
+  meters: "m",
+  metres: "m",
+  meter: "m",
+  metre: "m",
+  米: "m",
+  kilometers: "km",
+  kilometres: "km",
+  kilometer: "km",
+  kilometre: "km",
+  千米: "km",
+  centimeters: "cm",
+  centimetres: "cm",
+  centimeter: "cm",
+  centimetre: "cm",
+  厘米: "cm",
+  millimeters: "mm",
+  millimetres: "mm",
+  millimeter: "mm",
+  millimetre: "mm",
+  毫米: "mm",
+  seconds: "s",
+  second: "s",
+  secs: "s",
+  sec: "s",
+  秒: "s",
+  minutes: "min",
+  minute: "min",
+  mins: "min",
+  分钟: "min",
+  hours: "h",
+  hour: "h",
+  hrs: "h",
+  hr: "h",
+  小时: "h",
+  kilograms: "kg",
+  kilogram: "kg",
+  千克: "kg",
+  grams: "g",
+  gram: "g",
+  克: "g",
+  milligrams: "mg",
+  milligram: "mg",
+  newtons: "n",
+  newton: "n",
+  牛顿: "n",
+  牛: "n",
+  joules: "j",
+  joule: "j",
+  焦耳: "j",
+  watts: "w",
+  watt: "w",
+  瓦特: "w",
+  hertz: "hz",
+  赫兹: "hz",
+  kilohertz: "khz",
+};
+
+const canonicalUnit = (raw: string): string => {
+  const normalized = unit(raw);
+  return UNIT_ALIASES[normalized] ?? normalized;
+};
+
+const QUANTITY_UNIT_PATTERN = [
+  "kilometres?\\s+per\\s+(?:second|hour)",
+  "kilometers?\\s+per\\s+(?:second|hour)",
+  "metres?\\s+per\\s+second",
+  "meters?\\s+per\\s+second",
+  "(?:k|c|m)?m\\s*\\/\\s*(?:s|h)(?:\\^-?\\d+|²|³)?",
+  "kg\\s*\\/\\s*m(?:\\^3|³)",
+  "米\\s*\\/\\s*秒(?:\\^2|²)?",
+  "千米\\s*\\/\\s*(?:秒|时)",
+  "kilohertz|hertz|kilograms?|milligrams?|grams?|kilometres?|kilometers?|centimetres?|centimeters?|millimetres?|millimeters?|metres?|meters?|seconds?|secs?|minutes?|mins?|hours?|hrs?|newtons?|joules?|watts?",
+  "(?:k|c|m)?m(?:\\^[23]|²|³)?",
+  "kHz|MHz|Hz|kPa|Pa|kN|N|kJ|J|kW|W|kg|mg|g|mL|L|mol|ms|min|mA|A|V|Ω|K|°C|%|s|h",
+  "千米|厘米|毫米|米|分钟|小时|秒|千克|克|牛顿|牛|焦耳|瓦特|赫兹",
+].join("|");
+
+const EXTRACT_QUANTITY_RE = new RegExp(
+  String.raw`(?<![A-Za-z\d_.])([-+]?\d+(?:\.\d+)?(?:e[-+]?\d+)?)\s*(${QUANTITY_UNIT_PATTERN})(?![A-Za-z°%μΩ²³^/])`,
+  "giu",
+);
+
+export function extractQuantities(raw: string): z.infer<typeof Quantity>[] {
+  const plain = raw
+    .replace(/\\(?:mathrm|mathtt|mathsf|mathbf|mathit|textrm|text|operatorname)\s*\{([^{}]*)\}/g, " $1 ")
+    .replace(/\\(?:times|cdot)/g, " × ")
+    .replace(/\\[,;:!]/g, " ")
+    .replace(/[${}~]/g, " ")
+    .replace(/\s+/g, " ");
+  const out: z.infer<typeof Quantity>[] = [];
+  for (const m of plain.matchAll(EXTRACT_QUANTITY_RE)) {
+    const value = Number(m[1]);
+    if (!Number.isFinite(value)) continue;
+    out.push({ value, unit: canonicalUnit(m[2]!) });
+  }
+  return out;
+}
+
+const sameQuantity = (a: z.infer<typeof Quantity>, b: z.infer<typeof Quantity>) =>
+  close(a.value, b.value) && canonicalUnit(a.unit) === canonicalUnit(b.unit);
+
+function matchesTeacherAnswer(answer: string, expected: z.infer<typeof ExpectedText>): boolean {
+  const want = extractQuantities(expected.teacherAnswer);
+  if (!want.length) return canonicalUnit(answer) === canonicalUnit(expected.teacherAnswer);
+  if (/\b(?:not|isn't|is\s+not|never|rather\s+than|instead\s+of)\s+[-+$\\]*\d/i.test(answer)) return false;
+  const got = extractQuantities(answer);
+  if (!want.every((w) => got.some((g) => sameQuantity(g, w)))) return false;
+  const allowed = [...want, ...expected.quantities];
+  return got.every((g) => allowed.some((a) => sameQuantity(g, a)));
+}
 
 function numbersIn(text: string): number[] {
   return [...text.matchAll(/(?<![A-Za-z])[-+]?\d+(?:\.\d+)?/g)].map((m) => Number(m[0]));
@@ -159,8 +289,8 @@ function scoreText(c: z.infer<typeof TextCase>, raw: string): Omit<QualityScore[
   }
   const validPages = new Set(c.sourcePages.map((p) => p.no));
   const citationsOk = c.expected.citations.every((n) => parsed!.citations.includes(n)) && parsed.citations.every((n) => validPages.has(n));
-  const quantitiesOk = c.expected.quantities.every((want) => parsed!.quantities.some((got) => close(got.value, want.value) && unit(got.unit) === unit(want.unit)));
-  const answerOk = unit(parsed.teacherAnswer) === unit(c.expected.teacherAnswer);
+  const quantitiesOk = c.expected.quantities.every((want) => parsed!.quantities.some((got) => sameQuantity(got, want)));
+  const answerOk = matchesTeacherAnswer(parsed.teacherAnswer, c.expected);
   const student = parsed.studentQuestion.toLowerCase();
   const leakage = student.includes(c.expected.forbiddenStudentAnswer.toLowerCase()) || /\b(correct answer|answer\s*:)\b/i.test(student);
   return {

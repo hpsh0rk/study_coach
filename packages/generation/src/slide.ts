@@ -10,7 +10,7 @@ import { optionsOf, type PipelineOptions } from "./options.ts";
 import { neutralizeSource, SOURCE_RULE, suspiciousContent } from "./safety.ts";
 import { stubSlide } from "./slide-stub.ts";
 
-export const SLIDE_PROMPT_VERSION = "slide.write@7";
+export const SLIDE_PROMPT_VERSION = "slide.write@8";
 /** Source characters the writer sees for one slide. */
 export const SLIDE_SOURCE_CHARS = 12_000;
 
@@ -93,17 +93,43 @@ export class SpecNotFoundError extends Error {
 
 const NOTES_MAX = 2000;
 
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/**
+ * Normalises bare top-level slot objects (`{"layout":"questions","title":...,"items":[...],"notes":"..."}`)
+ * into the canonical `{"content": ..., "notes": "..."}` envelope before strict Zod slot validation runs.
+ */
+function unwrapSlideEnvelope(layout: LayoutId, raw: unknown): unknown {
+  if (!isRecord(raw)) return raw;
+  if ("content" in raw) {
+    if (!isRecord(raw.content) || Object.keys(raw.content).length === 0 || raw.content.layout !== undefined) return raw;
+    return { ...raw, content: { layout, ...raw.content } };
+  }
+  const { notes, ...slot } = raw;
+  if (Object.keys(slot).length === 0) return raw;
+  return {
+    content: slot.layout === undefined ? { layout, ...slot } : slot,
+    ...(notes !== undefined ? { notes } : {}),
+  };
+}
+
 const outputSchemas = Object.fromEntries(
   LAYOUT_IDS.map((layout) => {
     const content = SlideContent.options.find((o) => o.shape.layout.value === layout)!;
-    return [layout, z.object({ content, notes: z.string().max(NOTES_MAX * 2).default("") })];
+    const envelope = z.object({ content, notes: z.string().max(NOTES_MAX * 2).default("") });
+    return [layout, z.preprocess((raw) => unwrapSlideEnvelope(layout, raw), envelope)];
   }),
 ) as unknown as Record<LayoutId, z.ZodType<{ content: SlideContent; notes: string }>>;
 
-const slotSchemaJson = new Map<LayoutId, string>();
-function slotSchemaText(layout: LayoutId): string {
-  let json = slotSchemaJson.get(layout);
-  if (!json) slotSchemaJson.set(layout, (json = JSON.stringify(jsonSchemaOf(SLOT_SCHEMAS[layout]))));
+const envelopeSchemaJson = new Map<LayoutId, string>();
+function envelopeSchemaText(layout: LayoutId): string {
+  let json = envelopeSchemaJson.get(layout);
+  if (!json) {
+    const envelope = z.object({ content: SLOT_SCHEMAS[layout], notes: z.string() });
+    envelopeSchemaJson.set(layout, (json = JSON.stringify(jsonSchemaOf(envelope))));
+  }
   return json;
 }
 
@@ -175,7 +201,7 @@ export function buildMessages(spec: SlideSpec, input: WriteInput, outline: Outli
     sim ? `The sim slot must be {"kind":"sim","embedId":"${sim.id}"} (${sim.title.en}); write predict/observe/explain for that simulation. Set \`outcome\` to the 0-based index of the prediction the simulation confirms.` : "",
     WIDGET_RULES,
     SOURCE_RULE,
-    `Return JSON only: {"content": <slot object>, "notes": "..."} where content matches this JSON Schema: ${slotSchemaText(spec.layout)}`,
+    `Return ONE JSON object with top-level keys "content" and "notes" only (never put slide fields like "layout" or "title" at top level), matching this JSON Schema: ${envelopeSchemaText(spec.layout)}`,
   ]
     .filter(Boolean)
     .join("\n");

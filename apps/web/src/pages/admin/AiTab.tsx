@@ -116,7 +116,7 @@ function AdvancedEdit({ p, run, done }: { p: AiProviderRow; run: (fn: () => Prom
       {moved && (
         <label className="span2">
           API Key（改协议要重新填写）
-          <input type="password" required minLength={8} value={apiKey} onChange={(e) => setApiKey(e.target.value)} autoComplete="off" data-testid="edit-api-key" />
+          <input type="password" required minLength={8} value={apiKey} onChange={(e) => setApiKey(e.target.value)} autoComplete="new-password" data-testid="edit-api-key" />
           <span className="muted small">已保存的 Key 和请求头的值只发给原来的地址和协议；改了就要重新填写。· The stored key only goes where it was first sent.</span>
         </label>
       )}
@@ -244,7 +244,7 @@ export function AiPanel({ onSaved }: { onSaved: () => void }) {
         <AdvancedFields value={advanced} onChange={setAdvanced} prefix="model" />
         <label className="span2">
           API Key
-          <input type="password" value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} required autoComplete="off" />
+          <input type="password" value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} required autoComplete="new-password" />
         </label>
         <div className="form-actions">
           <button className="btn primary">保存并启用 Save &amp; enable</button>
@@ -423,7 +423,7 @@ function VisionProviderCard({ view, run, test }: { view: AiView; run: (fn: () =>
         <AdvancedFields value={advanced} onChange={setAdvanced} prefix="vision-provider" />
         <label className="span2">
           API Key
-          <input type="password" value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} required autoComplete="off" data-testid="vision-provider-key" />
+          <input type="password" value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} required autoComplete="new-password" data-testid="vision-provider-key" />
           <span className="muted small">加密保存在服务器上，浏览器里只显示开头几个字。· Encrypted on the server; only a hint comes back.</span>
         </label>
         <div className="form-actions">

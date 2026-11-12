@@ -138,7 +138,7 @@ export function ParsingPanel({ onSaved }: { onSaved: () => void }) {
             </label>
             <label>
               API Key（可选，服务用 --api-key 启动时填）
-              <input type="password" value={selfhostKey} onChange={(e) => setSelfhostKey(e.target.value)} placeholder={view.selfhostKeyHint ?? "—"} autoComplete="off" data-testid="selfhost-key" />
+              <input type="password" value={selfhostKey} onChange={(e) => setSelfhostKey(e.target.value)} placeholder={view.selfhostKeyHint ?? "—"} autoComplete="new-password" data-testid="selfhost-key" />
             </label>
             <p className="muted small span2">
               地址填到 /v1 之前，例如 <code>https://mineru.your-school.cn</code>。本站服务器要能访问到它（线上部署时用公网地址或 Cloudflare Tunnel；本机开发可以用 127.0.0.1）。地址和 Key 加密存在服务器上，浏览器里只显示开头几个字符。

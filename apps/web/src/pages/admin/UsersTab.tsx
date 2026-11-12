@@ -48,11 +48,11 @@ export function UsersPanel() {
         <h2>新建账号 Create account</h2>
         <label>
           用户名 Username
-          <input name="new-username" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} required placeholder="wang.li" />
+          <input name="new-username" autoComplete="off" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} required placeholder="wang.li" />
         </label>
         <label>
           显示名 Display name
-          <input name="new-display" value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} placeholder="王老师" />
+          <input name="new-display" autoComplete="off" value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} placeholder="王老师" />
         </label>
         <label>
           角色 Role
@@ -63,7 +63,7 @@ export function UsersPanel() {
         </label>
         <label>
           初始密码 Initial password
-          <input name="new-password" value={form.initialPassword} onChange={(e) => setForm({ ...form, initialPassword: e.target.value })} placeholder="留空自动生成 auto" />
+          <input name="new-password" autoComplete="new-password" value={form.initialPassword} onChange={(e) => setForm({ ...form, initialPassword: e.target.value })} placeholder="留空自动生成 auto" />
         </label>
         <div className="form-actions">
           <button className="btn primary">创建 Create</button>
