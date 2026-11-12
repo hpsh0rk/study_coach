@@ -254,6 +254,11 @@ describe("external parser results", () => {
 
   it("turns parser Markdown into page text", () => {
     expect(cleanParsedMarkdown("A ![fig](images/a.jpg) B\n\n\n\n<table><tr><td>t</td><td>v</td></tr><tr><td>1</td><td>2</td></tr></table>")).toBe("A  B\n\nt | v\n1 | 2");
+    expect(
+      cleanParsedMarkdown(
+        "## SYNTHETIC TABLE\n\n<table><tr><td rowspan=1 colspan=1> time</td><td rowspan=1 colspan=1>velocity </td></tr><tr><td rowspan=1 colspan=1>0s</td><td rowspan=1 colspan=1>12 m/s</td></tr><tr><td></td><td></td></tr></table>Table 1",
+      ),
+    ).toBe("## SYNTHETIC TABLE\n\ntime | velocity\n0s | 12 m/s\nTable 1");
   });
 
   it("vision answers: fences unwrapped; vlm pages are not counted as the external parser's", () => {

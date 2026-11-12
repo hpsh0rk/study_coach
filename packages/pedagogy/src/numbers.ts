@@ -20,11 +20,12 @@ const GREEK: Record<string, string> = {
 /** TeX to plain text: Greek letters to Unicode, operators to symbols, \frac{a}{b} to (a)/(b). */
 export function texToPlain(s: string): string {
   let t = s;
-  for (let i = 0; i < 4 && /\\frac\s*\{/.test(t); i++) t = t.replace(/\\[dt]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, "($1)/($2)");
+  for (let i = 0; i < 4 && /\\[dt]?frac\s*\{/.test(t); i++) t = t.replace(/\\[dt]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, "($1)/($2)");
   return t
-    .replace(/\\(?:text|mathrm|mathit|operatorname|textrm)\s*\{([^{}]*)\}/g, " $1 ")
+    .replace(/\\(?:text|mathrm|mathit|mathtt|mathsf|mathbf|operatorname|textrm)\s*\{([^{}]*)\}/g, " $1 ")
     .replace(/\\([A-Za-z]+)/g, (m, name: string) => (GREEK[name] ? GREEK[name]! : name === "times" || name === "cdot" ? "×" : name === "div" ? "÷" : name === "approx" ? "≈" : ["sin", "cos", "tan", "log", "ln", "sqrt", "exp"].includes(name) ? ` ${name} ` : " "))
-    .replace(/\\[,;:! ]/g, " ")
+    .replace(/\s*\^\s*\{\s*([^{}]*?)\s*\}/g, "^$1")
+    .replace(/\\[,;:! ]|~/g, " ")
     .replace(/[{}$]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -94,7 +95,7 @@ function normalizedUnit(raw: string): { dimension: string; factor: number } | un
 
 function quantitiesIn(raw: string): FoundQuantity[] {
   const out: FoundQuantity[] = [];
-  for (const match of raw.matchAll(QUANTITY_RE)) {
+  for (const match of texToPlain(raw).matchAll(QUANTITY_RE)) {
     const number = numbersIn(match[1]!)[0];
     const unit = normalizedUnit(match[2]!);
     if (!number || !unit) continue;
@@ -330,10 +331,15 @@ interface SourceFormula {
 }
 
 function sourceFormulas(source: string): SourceFormula[] {
-  return source
+  const mathSpans = [...source.matchAll(/\$\$([\s\S]*?)\$\$|\$([^$\n]+)\$/g)]
+    .map((m) => (m[1] ?? m[2] ?? "").trim())
+    .filter((s) => /=/.test(s))
+    .map((text) => ({ symbols: symbolsOf(text, true), fingerprint: formulaFingerprint(text) }));
+  const proseLines = source
     .split(/(?<=[.!?。！？])\s+|\n/)
     .filter((s) => /=/.test(s))
     .map((text) => ({ symbols: symbolsOf(text, false), fingerprint: formulaFingerprint(text) }));
+  return [...mathSpans, ...proseLines];
 }
 
 /** Equations that are symbolic (no digits on the right-hand side): candidates for the formula check. */

@@ -1,0 +1,20 @@
+{
+  "fixtureVersion": 1,
+  "corpusVersion": 1,
+  "caseId": "parser-table-v1",
+  "target": "parser",
+  "recordedAt": "2026-11-12T07:36:44.286Z",
+  "implementation": {
+    "kind": "mineru-agent",
+    "version": null
+  },
+  "output": {
+    "raw": "## SYNTHETIC TABLE\n\ntime | velocity\n0s | 12 m/s\n2s | 20 m/s"
+  },
+  "metadata": {
+    "latencyMs": 9297,
+    "inputTokens": null,
+    "outputTokens": null,
+    "costUsd": null
+  }
+}

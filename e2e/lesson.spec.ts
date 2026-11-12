@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { inflateRawSync } from "node:zlib";
 import type { Locator } from "@playwright/test";
 import { expect, test } from "./fixtures";
 import { expectChipsClear, PDF, shot, shotOf, toSettings } from "./helpers";
@@ -412,20 +413,75 @@ test("upload → chapters → settings → outline (gate) → generate → edit/
     await ctx.close();
   });
 
-  await test.step("editable PPTX export: one slide per deck slide, with speaker notes", async () => {
-    await page.goto(`/lessons/${lessonId}/slides`);
-    await page.getByText("导出 Export").click();
-    const [download] = await Promise.all([page.waitForEvent("download"), page.getByTestId("export-pptx").click()]);
-    const file = path.join(os.tmpdir(), `kj-${Date.now()}.pptx`);
-    await download.saveAs(file);
-    expect(download.suggestedFilename()).toMatch(/\.pptx$/);
-    const zip = fs.readFileSync(file).toString("latin1");
-    expect(zip.startsWith("PK")).toBe(true);
-    const names = (re: RegExp) => new Set(zip.match(re) ?? []).size;
-    const slides = await page.getByTestId("thumb").count();
-    expect(slides).toBeGreaterThan(3);
-    expect(names(/ppt\/slides\/slide\d+\.xml/g)).toBe(slides);
-    expect(names(/ppt\/notesSlides\/notesSlide\d+\.xml/g)).toBe(slides);
+  await test.step("editable PPTX export: one slide per deck slide, speaker notes, and real browser ECharts PNG rasterization across classic & chalk", async () => {
+    const unzipEntries = (pptxPath: string): Map<string, Buffer> => {
+      const buf = fs.readFileSync(pptxPath);
+      let eocd = buf.length - 22;
+      while (eocd >= 0 && buf.readUInt32LE(eocd) !== 0x06054b50) eocd--;
+      if (eocd < 0) throw new Error("missing ZIP EOCD");
+      const total = buf.readUInt16LE(eocd + 10);
+      let ptr = buf.readUInt32LE(eocd + 16);
+      const out = new Map<string, Buffer>();
+      for (let i = 0; i < total; i++) {
+        if (buf.readUInt32LE(ptr) !== 0x02014b50) throw new Error("invalid central directory entry");
+        const method = buf.readUInt16LE(ptr + 10);
+        const compSize = buf.readUInt32LE(ptr + 20);
+        const nameLen = buf.readUInt16LE(ptr + 28);
+        const extraLen = buf.readUInt16LE(ptr + 30);
+        const commentLen = buf.readUInt16LE(ptr + 32);
+        const localOff = buf.readUInt32LE(ptr + 42);
+        const name = buf.subarray(ptr + 46, ptr + 46 + nameLen).toString("utf8");
+        const lNameLen = buf.readUInt16LE(localOff + 26);
+        const lExtraLen = buf.readUInt16LE(localOff + 28);
+        const dataStart = localOff + 30 + lNameLen + lExtraLen;
+        const raw = buf.subarray(dataStart, dataStart + compSize);
+        if (!name.endsWith("/")) out.set(name, method === 0 ? Buffer.from(raw) : inflateRawSync(raw));
+        ptr += 46 + nameLen + extraLen + commentLen;
+      }
+      return out;
+    };
+
+    const teacherDeck = await (await page.request.get(`/api/lessons/${lessonId}/deck`)).json();
+    const conceptSlide = teacherDeck.slides.find((s: { content: { layout: string } }) => s.content.layout === "statement")!;
+    const patchRes = await page.request.patch(`/api/lessons/${lessonId}/slides/${conceptSlide.id}`, {
+      headers: { "x-kj-csrf": "1" },
+      data: {
+        content: {
+          ...conceptSlide.content,
+          visual: { kind: "function", expr: "1/x", x: [-2, 2], y: [-5, 5], xLabel: "x", yLabel: "y", params: [] },
+        },
+      },
+    });
+    expect(patchRes.status()).toBe(200);
+
+    const mediaBuffers: Record<string, Buffer> = {};
+    for (const theme of ["classic", "chalk"] as const) {
+      expect((await page.request.patch(`/api/lessons/${lessonId}`, { headers: { "x-kj-csrf": "1" }, data: { theme } })).status()).toBe(200);
+      await page.goto(`/lessons/${lessonId}/slides`);
+      await expect(page.getByTestId("thumb").first()).toBeVisible();
+      const slides = await page.getByTestId("thumb").count();
+      expect(slides).toBeGreaterThan(3);
+      await page.getByText("导出 Export").click();
+      const [download] = await Promise.all([page.waitForEvent("download"), page.getByTestId("export-pptx").click()]);
+      const file = path.join(os.tmpdir(), `kj-${theme}-${Date.now()}.pptx`);
+      await download.saveAs(file);
+      expect(download.suggestedFilename()).toMatch(/\.pptx$/);
+      const entries = unzipEntries(file);
+      const names = [...entries.keys()];
+      expect(names.filter((n) => /^ppt\/slides\/slide\d+\.xml$/.test(n))).toHaveLength(slides);
+      expect(names.filter((n) => /^ppt\/notesSlides\/notesSlide\d+\.xml$/.test(n))).toHaveLength(slides);
+      const mediaName = names.find((n) => /^ppt\/media\/.+\.png$/.test(n));
+      expect(mediaName, `${theme} browser-rasterized ECharts PNG`).toBeDefined();
+      const png = entries.get(mediaName!)!;
+      expect([...png.subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
+      expect(png.byteLength).toBeGreaterThan(1000);
+      expect(png.readUInt32BE(16)).toBeGreaterThan(100);
+      expect(png.readUInt32BE(20)).toBeGreaterThan(100);
+      mediaBuffers[theme] = png;
+    }
+    expect(mediaBuffers.classic!.equals(mediaBuffers.chalk!)).toBe(false);
+    expect((await page.request.patch(`/api/lessons/${lessonId}`, { headers: { "x-kj-csrf": "1" }, data: { theme: "classic" } })).status()).toBe(200);
+    expect((await page.request.post(`/api/lessons/${lessonId}/slides/${conceptSlide.id}/undo`, { headers: { "x-kj-csrf": "1" } })).status()).toBe(200);
   });
 
   await test.step("复制这节课到新学期: the copy keeps the confirmed outline and every slide", async () => {

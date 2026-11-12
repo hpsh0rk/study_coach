@@ -101,6 +101,16 @@ describe("manual quality record/replay", () => {
     const flattened = scoreFixture(table);
     expect(flattened.passed).toBe(false);
     expect(flattened.checks.numbersUnits.passed).toBe(false);
+
+    const liveFormula = scoreFixture({
+      ...base,
+      caseId: "parser-kinematics-v1",
+      target: "parser",
+      output: {
+        raw: "## 3.1 Equations of motion\n\n$$\n\\mathtt { v } = \\mathtt { u } + \\mathtt { a } \\mathtt { t }\n$$\n\n$$\n\\mathsf { s } = \\mathrm { u t } + \\mathsf { a t } ^ { 2 } / 2\n$$\n\nA car accelerating from rest at $2 ~ \\mathrm { m } / \\mathrm { s } ^ { 2 }$ reaches after ten seconds.",
+      },
+    });
+    expect(liveFormula.passed).toBe(true);
   });
 
   it("records text via createAiLayer.callStructured (with 1-turn repair) and vision via callVision + cleanVisionText", async () => {

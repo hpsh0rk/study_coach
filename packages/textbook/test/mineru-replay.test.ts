@@ -97,4 +97,20 @@ describe("recorded MinerU result against reviewed PDF goldens", () => {
       expect(saved).toBe(2);
     }
   });
+
+  it("verifies sanitized live MinerU agent recordings for formula, OCR, and HTML-table cases", () => {
+    const recordingsDir = resolve(root, "tools/eval/fixtures/quality-recordings");
+    const liveFormula = JSON.parse(readFileSync(resolve(recordingsDir, "parser-formula-v1.json"), "utf8")) as { implementation: { kind: string }; output: { raw: string } };
+    const liveOcr = JSON.parse(readFileSync(resolve(recordingsDir, "parser-ocr-v1.json"), "utf8")) as { implementation: { kind: string }; output: { raw: string } };
+    const liveTable = JSON.parse(readFileSync(resolve(recordingsDir, "parser-table-v1.json"), "utf8")) as { implementation: { kind: string }; output: { raw: string } };
+
+    expect([liveFormula.implementation.kind, liveOcr.implementation.kind, liveTable.implementation.kind]).toEqual([
+      "mineru-agent",
+      "mineru-agent",
+      "mineru-agent",
+    ]);
+    expect(issues(liveFormula.output.raw, recordedGolden)).toEqual([]);
+    expect(issues(liveOcr.output.raw, { required: ["SYNTHETIC TEST", "SPEED: 12 M/S", "TIME: 3 S", "DISTANCE 36 M"], formulas: [], table: [] })).toEqual([]);
+    expect(issues(liveTable.output.raw, { required: ["SYNTHETIC TABLE", "12 m/s", "20 m/s"], formulas: [], table: ["time | velocity", "0s | 12 m/s", "2s | 20 m/s"] })).toEqual([]);
+  });
 });

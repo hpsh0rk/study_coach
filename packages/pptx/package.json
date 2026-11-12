@@ -9,7 +9,8 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "render-check": "tsx scripts/render-check.ts --gallery --png --out ../../test-results/pptx"
+    "render-check": "tsx scripts/render-check.ts --gallery --png --out ../../test-results/pptx",
+    "browser-verify": "tsx scripts/browser-verify.ts --out ../../test-results/pptx-browser"
   },
   "dependencies": {
     "@kj/schema": "workspace:*",
@@ -18,6 +19,7 @@
     "pptxgenjs": "4.0.1"
   },
   "devDependencies": {
+    "@playwright/test": "1.64.0",
     "@types/node": "^22.20.5",
     "jszip": "^3.10.2",
     "vitest": "~4.1.11"
