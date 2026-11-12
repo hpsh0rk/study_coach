@@ -59,6 +59,46 @@ describe("manual quality record/replay", () => {
     expect(score.checks.answerLeakage.passed).toBe(false);
   });
 
+  it("accepts both bare quantities and worked full-sentence teacherAnswer strings while rejecting wrong numbers, units, or contradictions", () => {
+    const withAnswer = (teacherAnswer: string) => {
+      const fixture = JSON.parse(fs.readFileSync(path.join(QUALITY_RECORDINGS, "synthetic-text-v1.json"), "utf8"));
+      const response = JSON.parse(fixture.output.raw);
+      response.teacherAnswer = teacherAnswer;
+      fixture.output.raw = JSON.stringify(response);
+      return scoreFixture(fixture);
+    };
+
+    for (const valid of [
+      "36 m",
+      "$36\\,\\mathrm{m}$",
+      "36 meters",
+      "12 m/s × 3 s = 36 m",
+      "Distance equals speed multiplied by time: 12 m/s × 3 s = 36 m, so the cart travels 36 m.",
+      "The cart travels 36 m because d = 12 m/s × 3 s.",
+    ]) {
+      const score = withAnswer(valid);
+      expect(score.passed, `expected valid teacherAnswer to pass: ${valid}`).toBe(true);
+      expect(score.checks.numbersUnits.passed).toBe(true);
+    }
+
+    for (const invalid of [
+      "36 km",
+      "48 m",
+      "36 m/s",
+      "36 min",
+      "136 m",
+      "36",
+      "12 m/s × 3 s = 36 km",
+      "12 m/s × 3 s = 48 m",
+      "Not 36 m; the cart travels 48 m.",
+      "36 m or 48 m",
+    ]) {
+      const score = withAnswer(invalid);
+      expect(score.passed, `expected invalid teacherAnswer to fail: ${invalid}`).toBe(false);
+      expect(score.checks.numbersUnits.passed).toBe(false);
+    }
+  });
+
   it("generates a stable PNG data URL without loading a document", () => {
     const lines = ["SYNTHETIC EVAL", "SPEED: 12 M/S", "TIME: 3 S", "DISTANCE = 36 M"];
     const first = syntheticPage(lines);

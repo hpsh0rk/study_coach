@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { newId } from "@kj/schema";
-import { chatCompletion, ProviderError, type AiConfigSource, type ChatMessage, type ChatRequest, type FetchLike, type ProviderConfig } from "./providers.ts";
+import { chatCompletion, ProviderError, type AiConfigSource, type ChatMessage, type ChatRequest, type FetchLike, type ProviderConfig, type RetryOptions } from "./providers.ts";
 
 /** What a call is for; recorded with every call for metering. */
 export type CapabilityName = "outline.draft" | "slide.write" | "page.read";
@@ -47,6 +47,8 @@ export interface AiLayerOptions {
    * retries included, gets at most what is left, so a request ends well inside the Worker and draft-lock limits.
    */
   deadlineMs?: number;
+  /** Transport retry policy for retriable `429` / `5xx` / stream failures. */
+  retry?: RetryOptions;
 }
 
 /** A call is not started with less than this left of the request deadline. */
@@ -157,9 +159,14 @@ export function jsonSchemaOf(schema: z.ZodType): unknown {
 /** The single entry point for every model call in the system. */
 export function createAiLayer(opts: AiLayerOptions) {
   const deadline = opts.deadlineMs === undefined ? Infinity : Date.now() + opts.deadlineMs;
+  const retryPolicy = (): RetryOptions => ({
+    ...opts.retry,
+    deadlineAtMs: opts.retry?.deadlineAtMs !== undefined ? Math.min(deadline, opts.retry.deadlineAtMs) : deadline,
+    minRemainingMs: opts.retry?.minRemainingMs ?? MIN_CALL_MS,
+  });
   const timeoutFor = (wanted: number): number => {
     const left = deadline - Date.now();
-    if (left < MIN_CALL_MS) throw new ProviderError("模型调用超出本次请求的时间上限，请稍后重试 · The model took too long for this request; try again", 504);
+    if (left < MIN_CALL_MS) throw new ProviderError("模型调用超出本次请求的时间上限，请稍后重试 · The model took too long for this request; try again", 504, false);
     return Math.min(wanted, left);
   };
 
@@ -182,7 +189,11 @@ export function createAiLayer(opts: AiLayerOptions) {
     try {
       const messages: ChatMessage[] = [...req.messages];
       for (let attempt = 0; attempt < 2; attempt++) {
-        const res = await chatCompletion(provider, { model, messages, temperature: req.temperature ?? 0.4, json: true, timeoutMs: timeoutFor(req.timeoutMs ?? 90_000) }, opts.fetch);
+        const res = await chatCompletion(
+          provider,
+          { model, messages, temperature: req.temperature ?? 0.4, json: true, timeoutMs: timeoutFor(req.timeoutMs ?? 90_000), retry: retryPolicy() },
+          opts.fetch,
+        );
         inputTokens += res.usage.inputTokens;
         outputTokens += res.usage.outputTokens;
         let problem: string;
@@ -225,6 +236,7 @@ export function createAiLayer(opts: AiLayerOptions) {
           temperature: 0,
           maxTokens: req.maxTokens ?? 4096,
           timeoutMs: timeoutFor(req.timeoutMs ?? 90_000),
+          retry: retryPolicy(),
         },
         opts.fetch,
       );
@@ -275,30 +287,40 @@ export function classifyTestFailure(err: unknown, provider: ProviderConfig, mode
 async function runTest(provider: ProviderConfig, model: string, req: Omit<ChatRequest, "model">, fetchImpl?: FetchLike): Promise<ConnectionTest> {
   const started = Date.now();
   try {
-    const res = await chatCompletion(provider, { model, ...req }, fetchImpl);
+    const res = await chatCompletion(provider, { model, retry: { maxRetries: 0 }, ...req }, fetchImpl);
     const latencyMs = Date.now() - started;
     const reply = res.text.replace(/\s+/g, " ").trim().slice(0, 60);
+    if (!reply) throw new ProviderError(`${provider.name}: empty completion`, 200, false, true);
     return { ok: true, model: res.model, latencyMs, reply, message: `连接成功 · ${latencyMs} ms · 模型 ${res.model} 回复：“${reply}”` };
   } catch (err) {
     return { ok: false, latencyMs: Date.now() - started, error: (err as Error).message.slice(0, 300), ...classifyTestFailure(err, provider, model) };
   }
 }
 
+/** Small token ceiling for connection probes: enough for reasoning/thinking blocks before the reply, without long rambles. */
+export const TEST_PROBE_MAX_TOKENS = 256;
+
 /** Used by the admin "test connection" button. */
 export function testProvider(provider: ProviderConfig, model: string, fetchImpl?: FetchLike): Promise<ConnectionTest> {
-  return runTest(provider, model, { messages: [{ role: "user", content: 'Reply with the JSON object {"ok":true}' }], json: true, timeoutMs: 20_000, temperature: 0 }, fetchImpl);
+  const maxTokens = Math.max(provider.maxTokens ?? 0, TEST_PROBE_MAX_TOKENS);
+  return runTest(provider, model, { messages: [{ role: "user", content: 'Reply with the JSON object {"ok":true}' }], json: true, maxTokens, timeoutMs: 20_000, temperature: 0 }, fetchImpl);
 }
 
 /** A 32×32 white PNG: some vision APIs reject images under 10–28 px on a side. */
 const TEST_IMAGE =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAJklEQVR42u3NMQ0AAAwDoPo33arYsQQMkB6LQCAQCAQCgUAg+BIMi1X0ptsIcT0AAAAASUVORK5CYII=";
 
-/** The admin "测试连接" for a vision model: one tiny image, a few tokens back. Sends no page. */
+/** The admin "测试连接" for a vision model: one tiny image, capped tokens (leaving room for thinking_delta). Sends no page. */
 export function testVision(provider: ProviderConfig, model: string, fetchImpl?: FetchLike): Promise<ConnectionTest> {
   return runTest(
     provider,
     model,
-    { messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: TEST_IMAGE } }, { type: "text", text: "What colour is this image? One word." }] }], maxTokens: 16, timeoutMs: 30_000, temperature: 0 },
+    {
+      messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: TEST_IMAGE } }, { type: "text", text: "What colour is this image? One word." }] }],
+      maxTokens: TEST_PROBE_MAX_TOKENS,
+      timeoutMs: 30_000,
+      temperature: 0,
+    },
     fetchImpl,
   );
 }

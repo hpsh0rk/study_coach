@@ -14,7 +14,8 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { createAiLayer, PROVIDER_PRESETS, ProviderKind, ProviderProtocol, type AiCallRecord, type AiConfig } from "@kj/ai";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { createAiLayer, PROVIDER_PRESETS, ProviderError, ProviderKind, ProviderProtocol, type AiCallRecord, type AiConfig } from "@kj/ai";
 import { draftOutline, OUTLINE_PROMPT_VERSION, OUTLINE_SOURCE_CHARS, SLIDE_PROMPT_VERSION, sourcePagesFor, stubOutline, stubSlide, workedSpecFor, writeSlide, type DraftInput, type PlannerSection } from "@kj/generation";
 import { pagesInRanges, sourceForRanges } from "@kj/textbook";
 import { LessonParams, Outline, type PageRange, type PageText, type SlideSpec } from "@kj/schema";
@@ -89,17 +90,67 @@ function sectionsFor(item: ManifestItem, ids: string[] | "all"): PlannerSection[
   return picked.map((s) => ({ title: s.title, pageStart: s.pdfPages[0], pageEnd: s.pdfPages[1] }));
 }
 
-async function pool<T>(items: T[], limit: number, fn: (t: T, i: number) => Promise<void>): Promise<void> {
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(limit, items.length) }, async () => {
-      while (next < items.length) {
-        const i = next++;
-        await fn(items[i]!, i);
-      }
-    }),
-  );
+export const FALLBACK_EVAL_CONCURRENCY = 2;
+
+export interface SlidePoolOptions {
+  initialConcurrency: number;
+  fallbackConcurrency?: number;
 }
+
+/**
+ * Runs worked examples before the remaining slides, stepping concurrency down (e.g. 4 → 2) for the
+ * remainder of the run after any slide encounters HTTP 429 — matching the web wizard's `generateMissingSlides`.
+ */
+export async function runSlidePool<T extends Pick<SlideSpec, "id" | "pageType">>(
+  specs: readonly T[],
+  runOne: (spec: T) => Promise<{ rateLimited: boolean }>,
+  opts: SlidePoolOptions,
+): Promise<{ finalConcurrency: number }> {
+  let concurrency = Math.max(1, opts.initialConcurrency);
+  const fallback = Math.min(concurrency, Math.max(1, opts.fallbackConcurrency ?? FALLBACK_EVAL_CONCURRENCY));
+  const phases = [specs.filter((s) => s.pageType === "worked"), specs.filter((s) => s.pageType !== "worked")];
+
+  for (const todo of phases) {
+    if (todo.length > 0) {
+      let next = 0;
+      let inFlight = 0;
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        const fail = (err: unknown) => {
+          if (!settled) {
+            settled = true;
+            reject(err);
+          }
+        };
+        const pump = () => {
+          if (!settled) {
+            if (next >= todo.length && inFlight === 0) {
+              settled = true;
+              resolve();
+            } else {
+              while (inFlight < concurrency && next < todo.length) {
+                const spec = todo[next++]!;
+                inFlight++;
+                Promise.resolve()
+                  .then(() => runOne(spec))
+                  .then((res) => {
+                    inFlight--;
+                    if (res.rateLimited && concurrency > fallback) concurrency = fallback;
+                    pump();
+                  }, fail);
+              }
+            }
+          }
+        };
+        pump();
+      });
+    }
+  }
+
+  return { finalConcurrency: concurrency };
+}
+
+const rateLimitScope = new AsyncLocalStorage<{ hit: boolean }>();
 
 interface RunOptions {
   manifest: Manifest;
@@ -141,6 +192,14 @@ export async function runScenario(o: RunOptions) {
       config: { load: async () => o.provider?.config ?? { active: null } },
       meter,
       allowStubFallback: true,
+      retry: {
+        onRetry: ({ error }) => {
+          if (error.status === 429) {
+            const store = rateLimitScope.getStore();
+            if (store) store.hit = true;
+          }
+        },
+      },
     });
 
   const options = pipelineOptions(flags);
@@ -191,16 +250,18 @@ export async function runScenario(o: RunOptions) {
     const specs = outline.slides;
     slides = new Array(specs.length);
     const problems = new Map<string, string>();
-    const write = async (spec: SlideSpec) => {
+    const write = async (spec: SlideSpec): Promise<{ rateLimited: boolean }> => {
       const i = specs.indexOf(spec);
       const worked = workedSpecFor(confirmed, spec.id);
       const input = { lessonTitle, params, pages, ctx, options, workedProblem: worked ? problems.get(worked) : undefined };
       const base = { id: `s${i + 1}`, specId: spec.id, layout: spec.layout, pageType: spec.pageType, minutes: spec.minutes };
+      const scope = { hit: false };
       try {
-        const w = await withSpec(spec.id, () => writeSlide(ai, confirmed, spec.id, input));
+        const w = await rateLimitScope.run(scope, () => withSpec(spec.id, () => writeSlide(ai, confirmed, spec.id, input)));
         if (w.content.layout === "steps" && spec.pageType === "worked") problems.set(spec.id, w.content.problem);
         slides[i] = { ...base, content: w.content, notes: w.notes, sources: w.sources, warnings: w.warnings };
       } catch (err) {
+        if (err instanceof ProviderError && err.status === 429) scope.hit = true;
         // The web app leaves such a slide in an error state for the teacher to regenerate; keep the
         // deck scorable with the clean stub and flag it.
         const stub = stubSlide({ spec, outline: confirmed, lessonTitle, pages: sourcePagesFor(spec, input) });
@@ -211,10 +272,10 @@ export async function runScenario(o: RunOptions) {
         const marker = noisy.log.filter((e) => e.spec === spec.id && e.marker).pop()?.marker;
         slides[i]!.noise = { injected: first?.faults ?? [], marker, attempts: new Set(noisy.log.filter((e) => e.spec === spec.id).map((e) => e.attempt)).size };
       }
+      return { rateLimited: scope.hit };
     };
-    // Worked examples first, so faded/practice pages can mirror them (as in the web app's generate-all).
-    await pool(specs.filter((s) => s.pageType === "worked"), o.concurrency, write);
-    await pool(specs.filter((s) => s.pageType !== "worked"), o.concurrency, write);
+    // Worked examples first, so faded/practice pages can mirror them; step concurrency 4 → 2 on HTTP 429.
+    await runSlidePool(specs, write, { initialConcurrency: o.concurrency });
   }
 
   const ok = calls.filter((c) => c.status === "ok");

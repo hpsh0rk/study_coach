@@ -97,6 +97,8 @@ export class ProviderError extends Error {
     readonly retriable = true,
     /** The message quotes the gateway's own error text (some echo part of the key): it goes to `ai_calls.error` only. */
     readonly fromGateway = false,
+    /** Server-advised wait in ms parsed from `retry-after-ms` or `Retry-After`, when present on an error response. */
+    readonly retryAfterMs?: number,
   ) {
     super(message);
     this.name = "ProviderError";
@@ -117,6 +119,22 @@ export class ProviderError extends Error {
 
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
+export interface RetryOptions {
+  /** Retries after the initial attempt on retriable ProviderError (default 2; 0 disables retries). */
+  maxRetries?: number;
+  /** Initial exponential backoff delay in ms (default 500). */
+  baseDelayMs?: number;
+  /** Cap on any single retry wait in ms, including Retry-After (default 8_000). */
+  maxDelayMs?: number;
+  /** Absolute request deadline (Date.now() ms) after which another retry + call cannot start. */
+  deadlineAtMs?: number;
+  /** Minimum ms remaining after sleeping required to start another attempt (default 5_000). */
+  minRemainingMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+  random?: () => number;
+  onRetry?: (info: { attempt: number; delayMs: number; error: ProviderError }) => void;
+}
+
 export interface ChatRequest {
   model: string;
   messages: (ChatMessage | ImageMessage)[];
@@ -124,6 +142,31 @@ export interface ChatRequest {
   json?: boolean;
   maxTokens?: number;
   timeoutMs?: number;
+  retry?: RetryOptions;
+}
+
+export const DEFAULT_MAX_RETRIES = 2;
+export const DEFAULT_BASE_DELAY_MS = 500;
+export const DEFAULT_MAX_DELAY_MS = 8_000;
+const DEFAULT_MIN_REMAINING_MS = 5_000;
+
+const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** Parses HTTP `retry-after-ms` or `Retry-After` (delta-seconds or HTTP-date) into non-negative ms. */
+export function parseRetryAfterMs(headers: Headers, now = Date.now()): number | undefined {
+  const msHeader = headers.get("retry-after-ms")?.trim();
+  if (msHeader && /^\d+(?:\.\d+)?$/.test(msHeader)) {
+    const ms = Math.round(Number(msHeader));
+    if (Number.isFinite(ms) && ms >= 0) return ms;
+  }
+  const raw = headers.get("retry-after")?.trim();
+  if (!raw) return undefined;
+  if (/^\d+(?:\.\d+)?$/.test(raw)) {
+    const ms = Math.round(Number(raw) * 1000);
+    return Number.isFinite(ms) && ms >= 0 ? ms : undefined;
+  }
+  const at = Date.parse(raw);
+  return Number.isFinite(at) ? Math.max(0, at - now) : undefined;
 }
 
 const trimBase = (url: string) => url.replace(/\/+$/, "");
@@ -261,11 +304,7 @@ async function collectMessages(res: Response): Promise<Collected> {
 
 const isSse = (res: Response) => (res.headers.get("content-type") ?? "").includes("text/event-stream") && res.body !== null;
 
-/**
- * One chat turn, streamed (SSE) in either dialect and assembled into the full text. A server that ignores
- * `stream: true` and answers with plain JSON is accepted too.
- */
-export async function chatCompletion(provider: ProviderConfig, req: ChatRequest, fetchImpl: FetchLike = fetch): Promise<ChatResult> {
+async function chatCompletionOnce(provider: ProviderConfig, req: ChatRequest, fetchImpl: FetchLike): Promise<ChatResult> {
   const messagesProtocol = provider.protocol === "messages";
   const url = messagesProtocol ? messagesUrl(provider.baseUrl) : `${trimBase(provider.baseUrl)}/chat/completions`;
   const body = messagesProtocol ? messagesBody(provider, req) : openaiBody(provider, req);
@@ -288,8 +327,9 @@ export async function chatCompletion(provider: ProviderConfig, req: ChatRequest,
     throw new ProviderError(`network error calling ${provider.name}: ${(err as Error).message}`, undefined, true, true);
   }
   if (!res.ok) {
+    const retryAfterMs = parseRetryAfterMs(res.headers);
     const text = (await res.text()).slice(0, 500);
-    throw new ProviderError(`${provider.name} HTTP ${res.status}: ${text}`, res.status, res.status >= 500 || res.status === 429, true);
+    throw new ProviderError(`${provider.name} HTTP ${res.status}: ${text}`, res.status, res.status >= 500 || res.status === 429, true, retryAfterMs);
   }
   try {
     collected = messagesProtocol ? await collectMessages(res) : await collectOpenai(res);
@@ -299,4 +339,42 @@ export async function chatCompletion(provider: ProviderConfig, req: ChatRequest,
   }
   if (!collected.text) throw new ProviderError(`${provider.name}: empty completion`, res.status, true, true);
   return { text: collected.text, model: collected.model ?? req.model, usage: { inputTokens: collected.inputTokens, outputTokens: collected.outputTokens } };
+}
+
+/**
+ * One chat turn, streamed (SSE) in either dialect and assembled into the full text, with bounded
+ * exponential backoff + `Retry-After` on retriable `429` / `5xx` / transient stream errors.
+ */
+export async function chatCompletion(provider: ProviderConfig, req: ChatRequest, fetchImpl: FetchLike = fetch): Promise<ChatResult> {
+  const retry = req.retry;
+  const maxRetries = Math.max(0, retry?.maxRetries ?? DEFAULT_MAX_RETRIES);
+  const baseDelayMs = Math.max(0, retry?.baseDelayMs ?? DEFAULT_BASE_DELAY_MS);
+  const maxDelayMs = Math.max(baseDelayMs, retry?.maxDelayMs ?? DEFAULT_MAX_DELAY_MS);
+  const deadlineAtMs = retry?.deadlineAtMs ?? Infinity;
+  const minRemainingMs = retry?.minRemainingMs ?? DEFAULT_MIN_REMAINING_MS;
+  const sleep = retry?.sleep ?? defaultSleep;
+  const random = retry?.random ?? Math.random;
+
+  for (let attempt = 0; ; attempt++) {
+    let timeoutMs = req.timeoutMs ?? 60_000;
+    if (deadlineAtMs !== Infinity) {
+      const left = deadlineAtMs - Date.now();
+      if (left < minRemainingMs) {
+        throw new ProviderError("模型调用超出本次请求的时间上限，请稍后重试 · The model took too long for this request; try again", 504, false);
+      }
+      timeoutMs = Math.min(timeoutMs, left);
+    }
+    try {
+      return await chatCompletionOnce(provider, { ...req, timeoutMs }, fetchImpl);
+    } catch (err) {
+      if (!(err instanceof ProviderError) || !err.retriable || attempt >= maxRetries) throw err;
+      const jitter = 1 + 0.25 * Math.min(1, Math.max(0, random()));
+      const expMs = Math.round(baseDelayMs * 2 ** attempt * jitter);
+      const rawDelayMs = err.retryAfterMs !== undefined && err.retryAfterMs > 0 ? Math.round(err.retryAfterMs * jitter) : expMs;
+      const delayMs = Math.min(maxDelayMs, rawDelayMs);
+      if (deadlineAtMs !== Infinity && deadlineAtMs - Date.now() - delayMs < minRemainingMs) throw err;
+      retry?.onRetry?.({ attempt: attempt + 1, delayMs, error: err });
+      if (delayMs > 0) await sleep(delayMs);
+    }
+  }
 }

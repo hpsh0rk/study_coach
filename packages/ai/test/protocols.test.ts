@@ -75,7 +75,7 @@ describe("Messages protocol", () => {
 
   it("turns a stream error event and HTTP errors into ProviderError", async () => {
     const broken = capture(() => sse([ev("error", { type: "error", error: { type: "overloaded_error", message: "Overloaded" } })]));
-    await expect(chatCompletion(llmbox, { model: "x", messages: [{ role: "user", content: "hi" }] }, broken.fetchImpl)).rejects.toThrow(/Overloaded/);
+    await expect(chatCompletion(llmbox, { model: "x", messages: [{ role: "user", content: "hi" }], retry: { maxRetries: 0 } }, broken.fetchImpl)).rejects.toThrow(/Overloaded/);
     const denied = capture(() => new Response('{"error":"bad key"}', { status: 401 }));
     const err = await chatCompletion(llmbox, { model: "x", messages: [{ role: "user", content: "hi" }] }, denied.fetchImpl).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ProviderError);
@@ -102,7 +102,7 @@ describe("Messages protocol", () => {
         ev("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "## 4.2 牛顿第二定律\nF = " } }),
       ]),
     );
-    const err = await chatCompletion(llmbox, { model: "glm-5.3-flash", messages: [{ role: "user", content: "read" }] }, cut.fetchImpl).catch((e: unknown) => e);
+    const err = await chatCompletion(llmbox, { model: "glm-5.3-flash", messages: [{ role: "user", content: "read" }], retry: { maxRetries: 0 } }, cut.fetchImpl).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ProviderError);
     expect((err as ProviderError).message).toMatch(/stream broke off/);
     expect((err as ProviderError).publicMessage).toContain("AI 模型的回复中断了");
@@ -127,7 +127,7 @@ describe("OpenAI protocol streaming", () => {
     const chunk = (content: string) => `data: ${JSON.stringify({ model: "glm-4.5", choices: [{ delta: { content } }] })}\n\n`;
     const cut = capture(() => sse([chunk("Partial "), chunk("page text")]));
     const provider: ProviderConfig = { id: "o", kind: "glm", name: "glm", baseUrl: "https://open.example.test/v4/", apiKey: "k" };
-    const err = await chatCompletion(provider, { model: "glm-4.5", messages: [{ role: "user", content: "hi" }] }, cut.fetchImpl).catch((e: unknown) => e);
+    const err = await chatCompletion(provider, { model: "glm-4.5", messages: [{ role: "user", content: "hi" }], retry: { maxRetries: 0 } }, cut.fetchImpl).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ProviderError);
     expect((err as ProviderError).message).toMatch(/stream broke off/);
     expect((err as ProviderError).publicMessage).toContain("AI 模型的回复中断了");
@@ -166,5 +166,54 @@ describe("测试连接 results", () => {
     };
     expect((await testProvider(llmbox, "m", slow)).message).toContain("在规定时间内没有回应");
     expect(await testProvider(llmbox, "m", capture(() => messagesStream([])).fetchImpl)).toMatchObject({ ok: false, kind: "empty" });
+  });
+
+  it("allocates enough max_tokens (>= 256) in testVision and testProvider so thinking_delta models emit text_delta", async () => {
+    const mockGateway: ProviderConfig = {
+      id: "gw",
+      kind: "custom",
+      name: "MockGateway",
+      baseUrl: "http://127.0.0.1:8787",
+      apiKey: "sk-mock-demo-key",
+      protocol: "messages",
+      headers: { "x-gateway-source": "demo" },
+    };
+    const seenMaxTokens: number[] = [];
+    const thinkingGateway = (answerChunks: string[]): FetchLike => async (_url, init) => {
+      const body = JSON.parse(String(init.body)) as { model: string; max_tokens: number };
+      seenMaxTokens.push(body.max_tokens);
+      const events = [
+        ev("message_start", { type: "message_start", message: { model: body.model, usage: { input_tokens: 42, output_tokens: 1 } } }),
+        ev("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } }),
+        ev("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "Inspecting the 32x32 image pixels and verifying RGB values..." } }),
+        ev("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "All pixels are (255,255,255), so the colour is white." } }),
+        ev("content_block_stop", { type: "content_block_stop", index: 0 }),
+      ];
+      // Simulate reasoning models exhausting tiny token budgets (< 128) inside thinking_delta before emitting text_delta.
+      if (body.max_tokens >= 128) {
+        events.push(
+          ev("content_block_start", { type: "content_block_start", index: 1, content_block: { type: "text", text: "" } }),
+          ...answerChunks.map((t) => ev("content_block_delta", { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: t } })),
+          ev("content_block_stop", { type: "content_block_stop", index: 1 }),
+          ev("message_delta", { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 96 } }),
+        );
+      } else {
+        events.push(ev("message_delta", { type: "message_delta", delta: { stop_reason: "max_tokens" }, usage: { output_tokens: body.max_tokens } }));
+      }
+      events.push(ev("message_stop", { type: "message_stop" }));
+      return sse(events);
+    };
+
+    const visionRes = await testVision(mockGateway, "deepseek-v4-flash", thinkingGateway(["Whi", "te"]));
+    expect(visionRes).toMatchObject({ ok: true, model: "deepseek-v4-flash", reply: "White" });
+
+    const textRes = await testProvider(mockGateway, "kimi-k3", thinkingGateway(['{"ok":', "true}"]));
+    expect(textRes).toMatchObject({ ok: true, model: "kimi-k3", reply: '{"ok":true}' });
+
+    // Even if a provider row saved a tiny maxTokens (e.g. 16), testProvider bumps the probe budget to at least 256.
+    const tinyProviderRes = await testProvider({ ...mockGateway, maxTokens: 16 }, "deepseek-v4-flash", thinkingGateway(['{"ok":true}']));
+    expect(tinyProviderRes).toMatchObject({ ok: true, model: "deepseek-v4-flash", reply: '{"ok":true}' });
+
+    expect(seenMaxTokens).toEqual([256, 256, 256]);
   });
 });
