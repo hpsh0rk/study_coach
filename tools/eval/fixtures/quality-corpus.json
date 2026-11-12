@@ -65,6 +65,7 @@
       "id": "parser-ocr-v1",
       "target": "parser",
       "promptVersion": "quality.parser@2",
+      "ocrMode": "ocr",
       "input": {
         "kind": "synthetic-ocr",
         "lines": [

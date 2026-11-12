@@ -67,6 +67,7 @@ const ParserCase = z.object({
   id: z.string(),
   target: z.literal("parser"),
   promptVersion: z.string(),
+  ocrMode: z.enum(["auto", "ocr"]).default("auto"),
   input: ParserInput,
   expected: ExpectedTranscription,
 });
@@ -428,7 +429,7 @@ async function recordParser(c: z.infer<typeof ParserCase>, env: NodeJS.ProcessEn
   const started = Date.now();
   const health = await parserJson<{ version?: string }>(`${base}/v1/health`, key);
   const pdf = await qualityParserPdf(c.input);
-  const query = new URLSearchParams({ filename: `${c.id}.pdf`, ocr_mode: "auto", output_formats: "markdown" });
+  const query = new URLSearchParams({ filename: `${c.id}.pdf`, ocr_mode: c.ocrMode, output_formats: "markdown" });
   const created = await parserJson<{ task_id?: string }>(`${base}/v1/tasks?${query}`, key, {
     method: "POST",
     headers: { "content-type": "application/octet-stream" },

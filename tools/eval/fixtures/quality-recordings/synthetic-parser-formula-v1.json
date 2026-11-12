@@ -1,0 +1,20 @@
+{
+  "fixtureVersion": 1,
+  "corpusVersion": 1,
+  "caseId": "parser-kinematics-v1",
+  "target": "parser",
+  "recordedAt": "2026-11-12T00:00:00.000Z",
+  "implementation": {
+    "kind": "synthetic-mock",
+    "version": "fixture-v1"
+  },
+  "output": {
+    "raw": "v = u + at\ns = ut + at^2 / 2\nacceleration: 2 m/s^2\nvelocity: 20 m/s"
+  },
+  "metadata": {
+    "latencyMs": 0,
+    "inputTokens": null,
+    "outputTokens": null,
+    "costUsd": null
+  }
+}

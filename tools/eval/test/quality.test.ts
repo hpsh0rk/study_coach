@@ -10,7 +10,7 @@ describe("manual quality record/replay", () => {
     const scores = replayFiles();
     expect(network).not.toHaveBeenCalled();
     network.mockRestore();
-    expect(scores.length).toBeGreaterThan(0);
+    expect([...new Set(scores.map((score) => score.caseId))].sort()).toEqual(loadCorpus().cases.map((c) => c.id).sort());
     expect(scores).toEqual(scores.map(() => expect.objectContaining({ passed: true })));
     expect(scores[0]!.checks).toMatchObject({
       schema: { passed: true },

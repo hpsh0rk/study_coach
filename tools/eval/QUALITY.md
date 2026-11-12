@@ -2,7 +2,7 @@
 
 This is a small smoke benchmark for real text models, vision models, and a self-hosted MinerU parser. It is separate from connection-test buttons: those prove reachability, while this checks fixed tasks for schema, citations, numbers/units, student-answer leakage, OCR, table-row structure, and available latency/token/cost metadata.
 
-The corpus is repository-authored synthetic material in `fixtures/quality-corpus.json`. Vision and OCR images and the parser table PDF are generated deterministically in memory; the formula parser case uses `fixtures/pdfs/kinematics-outlines.pdf`. There is no option to upload or select another document.
+The corpus is repository-authored synthetic material in `fixtures/quality-corpus.json`. Vision and OCR images and the parser table PDF are generated deterministically in memory; the formula parser case uses `fixtures/pdfs/kinematics-outlines.pdf`. The OCR case explicitly requests MinerU's `ocr` mode; formula and table cases use `auto`. There is no option to upload or select another document.
 
 ## Offline replay (CI-safe)
 
@@ -10,7 +10,7 @@ The corpus is repository-authored synthetic material in `fixtures/quality-corpus
 pnpm quality:replay
 ```
 
-Replay reads `fixtures/quality-recordings/*.json`, makes no network calls, and exits nonzero when an objective check or fixture redaction check fails. The same replay runs in the eval package's Vitest suite, where `fetch` is trapped and asserted to have zero calls, so normal CI (`pnpm test`) covers it. Recording also refuses to run whenever `CI` is set. The committed `synthetic-text-v1.json` proves the complete fixture/scoring path without an external call.
+Replay reads `fixtures/quality-recordings/*.json`, makes no network calls, and exits nonzero when an objective check or fixture redaction check fails. The same replay runs in the eval package's Vitest suite, where `fetch` is trapped and asserted to have zero calls, so normal CI (`pnpm test`) covers it. Recording also refuses to run whenever `CI` is set. One explicitly labelled `synthetic-mock` fixture per corpus case proves every scoring path without an external call; none is evidence of a real provider or parser result.
 
 ## Record a real result manually
 
