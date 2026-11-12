@@ -29,6 +29,20 @@ async function activeWithHash(env: Env, ownerId: string, sha256: string, except?
 
 const alreadyUploaded = (id: string) => new HttpError(409, "DOCUMENT_EXISTS", "这本教材已经上传过，请直接使用 · This PDF is already uploaded", { id });
 
+async function assertTextbookQuota(env: Env, user: SessionUser, addPages: number): Promise<void> {
+  const [used] = await db(env)
+    .select({ books: count(), pages: sql<number>`COALESCE(SUM(${documents.pageCount}), 0)` })
+    .from(documents)
+    .where(and(eq(documents.orgId, user.orgId), eq(documents.ownerId, user.id), isNull(documents.archivedAt)));
+  if ((used?.books ?? 0) >= MAX_TEXTBOOKS || (used?.pages ?? 0) + addPages > MAX_TEXTBOOK_PAGES) {
+    throw new HttpError(
+      409,
+      "TEXTBOOK_QUOTA",
+      `每位老师最多 ${MAX_TEXTBOOKS} 本未归档教材、共 ${MAX_TEXTBOOK_PAGES} 页；请先归档或删除不用的教材 · Textbook limit reached; archive or delete one first`,
+    );
+  }
+}
+
 export async function createTextbook(
   env: Env,
   user: SessionUser,
@@ -40,13 +54,7 @@ export async function createTextbook(
     const existing = await activeWithHash(env, user.id, meta.sha256);
     if (existing) throw alreadyUploaded(existing.id);
   }
-  const [used] = await d
-    .select({ books: count(), pages: sql<number>`COALESCE(SUM(${documents.pageCount}), 0)` })
-    .from(documents)
-    .where(and(eq(documents.orgId, user.orgId), eq(documents.ownerId, user.id), isNull(documents.archivedAt)));
-  if ((used?.books ?? 0) >= MAX_TEXTBOOKS || (used?.pages ?? 0) + meta.pageCount > MAX_TEXTBOOK_PAGES) {
-    throw new HttpError(409, "TEXTBOOK_QUOTA", `每位老师最多 ${MAX_TEXTBOOKS} 本教材、共 ${MAX_TEXTBOOK_PAGES} 页；请先删除不用的教材 · Textbook limit reached; delete one first`);
-  }
+  await assertTextbookQuota(env, user, meta.pageCount);
   const { sha256, ...rest } = meta;
   const id = newId("doc");
   const writes: any[] = [d.insert(documents).values({ id, orgId: user.orgId, ownerId: user.id, ...rest, fileSha256: sha256 ?? null, hasBookmarks: tree.length > 0 })];
@@ -131,9 +139,12 @@ export async function purgeTextbook(env: Env, user: SessionUser, doc: TextbookRo
 /** Soft delete or restore, with an audit record in the same batch. A restore never makes a second live copy of the same file. */
 export async function setTextbookArchived(env: Env, user: SessionUser, doc: TextbookRow, archived: boolean): Promise<void> {
   const d = db(env);
-  if (!archived && doc.fileSha256) {
-    const live = await activeWithHash(env, doc.ownerId, doc.fileSha256, doc.id);
-    if (live) throw alreadyUploaded(live.id);
+  if (!archived) {
+    if (doc.fileSha256) {
+      const live = await activeWithHash(env, doc.ownerId, doc.fileSha256, doc.id);
+      if (live) throw alreadyUploaded(live.id);
+    }
+    if (doc.archivedAt !== null) await assertTextbookQuota(env, user, doc.pageCount);
   }
   await d.batch([
     d.update(documents).set({ archivedAt: archived ? Date.now() : null }).where(eq(documents.id, doc.id)),

@@ -114,6 +114,8 @@ CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=... AI_CONFIG_KEY=... pnpm run de
 
 `scripts/deploy.sh` 创建或找到 D1 数据库，把真实的数据库 id 写进 `apps/app/.wrangler.deploy.jsonc`，在远端执行迁移，构建前端，设置密钥并运行 `wrangler deploy`。GitHub Actions 的 `.github/workflows/deploy.yml` 执行同样的步骤（手动触发，使用仓库 secrets）。部署后创建第一个管理员：`pnpm admin:create --remote --config .wrangler.deploy.jsonc`（远端会生成随机密码并打印出来）。生产环境请把 `AI_ALLOW_STUB` 设为 `"false"`。
 
+密钥轮换注意：`AI_CONFIG_KEY` 同时用于签名分享链接（HMAC）和加密后台保存的 AI 模型 / 解析服务密钥（含自定义请求头与自部署地址）。轮换 `AI_CONFIG_KEY` 会使所有已发出的分享链接立即失效，且已封存的模型与解析密钥无法解密，管理员需在后台重新填写。
+
 中国大陆说明：字体（Arimo、Noto Sans SC）、KaTeX 和仿真都自己托管，不用第三方 CDN。自定义域名（sh0rk.cn）还没有配置。
 
 ## 待办

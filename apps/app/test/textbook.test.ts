@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { createTextbook, MAX_TEXTBOOKS } from "../src/textbook/write.ts";
+import { createTextbook, MAX_TEXTBOOK_PAGES, MAX_TEXTBOOKS } from "../src/textbook/write.ts";
 import { e, loggedIn, seedUser, type Client } from "./client.ts";
 
 const SHA_A = "a".repeat(64);
@@ -72,18 +72,41 @@ describe("textbook file hash: one copy per teacher, resumable uploads", () => {
     expect((await t4.req("POST", "/api/documents/lookup", { sha256: SHA_B })).json).toMatchObject({ status: "incomplete", document: { id: oldId } });
   });
 
-  it("caps live textbooks per teacher; deleting one frees a slot", async () => {
+  it("caps non-archived textbooks and pages per teacher; archiving frees quota and restore enforces it", async () => {
     const now = Date.now();
     const insert = e.DB.prepare(
-      "INSERT INTO documents (id, org_id, owner_id, filename, title, size_bytes, page_count, pages_received, has_bookmarks, created_at) VALUES (?, 'org_default', 'usr_t6', 'x.pdf', 'X', 1, 10, 10, 0, ?)",
+      "INSERT INTO documents (id, org_id, owner_id, filename, title, size_bytes, page_count, pages_received, has_bookmarks, created_at, archived_at) VALUES (?, 'org_default', 'usr_t6', 'x.pdf', 'X', 1, ?, 10, 0, ?, ?)",
     );
-    await e.DB.batch(Array.from({ length: MAX_TEXTBOOKS }, (_, i) => insert.bind(`doc_q${i}`, now + i)));
+    // Pre-existing archived books do not count toward MAX_TEXTBOOKS.
+    await e.DB.batch([
+      ...Array.from({ length: 5 }, (_, i) => insert.bind(`doc_arch${i}`, 500, now - 100 + i, now - 50)),
+      ...Array.from({ length: MAX_TEXTBOOKS }, (_, i) => insert.bind(`doc_q${i}`, 10, now + i, null)),
+    ]);
     const t6 = await loggedIn("teacher6", "Teach12345");
     const full = await t6.req("POST", "/api/documents", book(undefined));
     expect(full.status).toBe(409);
     expect(full.json.error.code).toBe("TEXTBOOK_QUOTA");
-    expect((await t6.req("DELETE", "/api/documents/doc_q0")).status).toBe(200);
+
+    // Archiving via /archive frees a book slot; restoring while back at MAX_TEXTBOOKS is refused until another is archived.
+    expect((await t6.req("POST", "/api/documents/doc_q0/archive")).status).toBe(200);
     expect((await t6.req("POST", "/api/documents", book(undefined))).status).toBe(201);
+    const restoreAtCap = await t6.req("POST", "/api/documents/doc_q0/restore", {});
+    expect(restoreAtCap.status).toBe(409);
+    expect(restoreAtCap.json.error.code).toBe("TEXTBOOK_QUOTA");
+    expect((await t6.req("DELETE", "/api/documents/doc_q1")).status).toBe(200);
+    expect((await t6.req("POST", "/api/documents/doc_q0/restore", {})).status).toBe(200);
+
+    // Page quota also counts only non-archived textbooks.
+    await seedUser("usr_t6p", "teacher6pages", "Teach12345", { mustChange: false });
+    const insertPages = e.DB.prepare(
+      "INSERT INTO documents (id, org_id, owner_id, filename, title, size_bytes, page_count, pages_received, has_bookmarks, created_at) VALUES (?, 'org_default', 'usr_t6p', 'p.pdf', 'P', 1, ?, 10, 0, ?)",
+    );
+    await e.DB.batch(Array.from({ length: 25 }, (_, i) => insertPages.bind(`doc_pg${i}`, MAX_TEXTBOOK_PAGES / 25, now + i)));
+    const t6p = await loggedIn("teacher6pages", "Teach12345");
+    expect((await t6p.req("POST", "/api/documents", book(undefined, 6))).json.error.code).toBe("TEXTBOOK_QUOTA");
+    expect((await t6p.req("POST", "/api/documents/doc_pg0/archive")).status).toBe(200);
+    expect((await t6p.req("POST", "/api/documents", book(undefined, 10))).status).toBe(201);
+    expect((await t6p.req("POST", "/api/documents/doc_pg0/restore", {})).json.error.code).toBe("TEXTBOOK_QUOTA");
   });
 });
 
