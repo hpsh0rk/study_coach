@@ -17,6 +17,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
+      - run: pnpm quality:replay
       - run: pnpm build
       - name: Production bundle has no /dev pages
         run: "! grep -rlE 'kjMeasure|measureReady' apps/web/dist/assets"

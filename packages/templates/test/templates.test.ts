@@ -77,6 +77,12 @@ describe("layouts", () => {
     if (exp.layout !== "experiment") throw new Error("layout");
     expect(SLOT_SCHEMAS.experiment.safeParse({ ...exp, outcome: exp.predict.options.length }).success).toBe(false);
     expect(SLOT_SCHEMAS.experiment.safeParse({ ...exp, outcome: undefined }).success).toBe(true);
+    const steps = maxBudgetContent("steps", "en");
+    if (steps.layout !== "steps") throw new Error("layout");
+    expect(SLOT_SCHEMAS.steps.safeParse({ ...steps, fadeFrom: 0 }).success).toBe(false);
+    expect(SLOT_SCHEMAS.steps.safeParse({ ...steps, fadeFrom: steps.steps.length }).success).toBe(false);
+    expect(SLOT_SCHEMAS.steps.safeParse({ ...steps, fadeFrom: steps.steps.length - 1 }).success).toBe(true);
+    expect(slotIssues({ ...steps, fadeFrom: steps.steps.length }).map(describeIssue)).toContain("留空的步骤：留空的步骤要在第 2 步到最后一步之间");
   });
 });
 

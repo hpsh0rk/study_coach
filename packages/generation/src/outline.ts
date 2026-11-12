@@ -168,7 +168,7 @@ export function rebalanceMinutes(outline: Outline, params: LessonParams): Outlin
       return { ...s, minutes: m };
     });
   }
-  return { ...outline, slides: enforceCheckCadence(slides) };
+  return Outline.parse({ ...outline, slides: enforceCheckCadence(slides) });
 }
 
 export async function draftOutline(ai: AiLayer, input: DraftInput): Promise<DraftResult> {

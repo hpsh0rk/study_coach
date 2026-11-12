@@ -94,6 +94,19 @@ describe("Messages protocol", () => {
     const out = await ai.callStructured({ capability: "outline.draft", promptVersion: "t", schema: z.object({ title: z.string() }), messages: [{ role: "user", content: "x" }], stub: () => ({}), ctx: { orgId: "o", userId: "u" } });
     expect(out.output).toEqual({ title: "运动" });
   });
+
+  it("rejects a Messages SSE stream that closes before message_stop instead of returning truncated text", async () => {
+    const cut = capture(() =>
+      sse([
+        ev("message_start", { type: "message_start", message: { model: "glm-5.3-flash", usage: { input_tokens: 11, output_tokens: 1 } } }),
+        ev("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "## 4.2 牛顿第二定律\nF = " } }),
+      ]),
+    );
+    const err = await chatCompletion(llmbox, { model: "glm-5.3-flash", messages: [{ role: "user", content: "read" }] }, cut.fetchImpl).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ProviderError);
+    expect((err as ProviderError).message).toMatch(/stream broke off/);
+    expect((err as ProviderError).publicMessage).toContain("AI 模型的回复中断了");
+  });
 });
 
 describe("OpenAI protocol streaming", () => {
@@ -108,6 +121,16 @@ describe("OpenAI protocol streaming", () => {
     expect(calls[0]!.url).toBe("https://open.example.test/v4/chat/completions");
     expect(calls[0]!.headers["x-source"]).toBe("t");
     expect(calls[0]!.body).toMatchObject({ stream: true, max_tokens: 900 });
+  });
+
+  it("rejects an OpenAI SSE stream that closes without [DONE] or finish_reason", async () => {
+    const chunk = (content: string) => `data: ${JSON.stringify({ model: "glm-4.5", choices: [{ delta: { content } }] })}\n\n`;
+    const cut = capture(() => sse([chunk("Partial "), chunk("page text")]));
+    const provider: ProviderConfig = { id: "o", kind: "glm", name: "glm", baseUrl: "https://open.example.test/v4/", apiKey: "k" };
+    const err = await chatCompletion(provider, { model: "glm-4.5", messages: [{ role: "user", content: "hi" }] }, cut.fetchImpl).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ProviderError);
+    expect((err as ProviderError).message).toMatch(/stream broke off/);
+    expect((err as ProviderError).publicMessage).toContain("AI 模型的回复中断了");
   });
 });
 

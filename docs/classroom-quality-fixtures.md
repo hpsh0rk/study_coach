@@ -60,7 +60,7 @@ The follow-up keeps that gallery gate (`224/224` after adding the reviewed wave-
 - the existing full-flow checks for bidirectional presenter sync and a network-blocked offline file, including its embedded simulation.
 
 The baseline run was green and the expanded matrix found no production defect. Only test/dev fixture surfaces changed; runtime behavior was not altered.
-The completed branch passes `362/362` unit/API tests and `15/15` Playwright tests; the latter includes bidirectional presenter sync and the zero-network offline run.
+When published, that branch passed `362/362` unit/API tests and `15/15` Playwright tests; the latter includes bidirectional presenter sync and the zero-network offline run.
 
 ## Frozen student payloads
 
@@ -78,7 +78,7 @@ The audience boundary now seeds and checks answer-bearing data in:
 
 The same fixtures are checked in canonical JSON, rendered preview DOM/attributes and offline embedded JSON. The embedded JSON is stable and escapes script-closing text; the whole HTML file is not byte-hash-gated because it also contains built runtime, CSS and font bytes.
 
-On the final stacked deck, the hash gate serializes every current classroom replay slide—including the SC-27 wave-string investigation—plus the order/match audience probes. The stacked branch passes `376/376` unit/API tests and `15/15` Playwright tests.
+On the stacked PR #63 branch, the hash gate serialized every classroom replay slide—including the SC-27 wave-string investigation—plus the order/match audience probes (`376/376` unit/API tests and `15/15` Playwright tests at branch publication). On integrated `main`, the classroom fixtures are also included in `pnpm --filter @kj/pptx render-check` (`52 × 2 = 104` LibreOffice slides across both themes) alongside the full workspace Vitest, `quality:replay`, and Playwright suites.
 
 ## Deliberate limits
 

@@ -85,6 +85,7 @@ export async function parseExternally(
   onProgress(0, pages.length);
   while (queue.length) {
     const chunk = queue.shift()!;
+    let pending = chunk.nos;
     try {
       let pdf = await deps.cut(chunk.nos);
       if (pdf.byteLength > info.maxBytes) {
@@ -97,6 +98,7 @@ export async function parseExternally(
       } else {
         const { reused, job } = await deps.create(chunk.nos, chunk.ocr);
         out.saved.push(...reused);
+        pending = job ? job.pages : [];
         if (job) {
           if (job.pages.length !== chunk.nos.length) pdf = await deps.cut(job.pages);
           await deps.upload(job.id, pdf);
@@ -114,7 +116,7 @@ export async function parseExternally(
         }
       }
     } catch (err) {
-      out.missed.push(...chunk.nos);
+      out.missed.push(...pending);
       out.failure = (err as Error).message;
       if (err instanceof ApiError && STOPS.has(err.status)) {
         out.stopped = err.message;

@@ -135,6 +135,29 @@ describe("table and 图示待补 visuals", () => {
     expect(fixed.layout === "statement" && fixed.visual).toMatchObject({ columns: ["a", "b"] });
     expect(problemsOf(fixed).errors).toEqual([]);
   });
+
+  it("clears out-of-range experiment outcome when truncating extra prediction options instead of falling back to stub", async () => {
+    const expSpec: SlideSpec = { ...spec, id: "sp-exp", pageType: "experiment", layout: "experiment", title: "Investigate wave frequency on a string", visual: "sim", minutes: 8 };
+    const overExp = {
+      content: {
+        layout: "experiment" as const,
+        title: "Shake the string faster",
+        predict: { question: "What changes?", options: ["Longer", "Same", "Zero", "Shorter"] },
+        sim: { kind: "sim" as const, embedId: "wave-string" },
+        observe: ["Count peaks", "Compare spacing"],
+        explain: "Higher frequency shortens wavelength.",
+        outcome: 3,
+      },
+      notes: "Take a show of hands before running the simulation.",
+    };
+    const res = await writeSlide(fakeAi([overExp, overExp]).ai, { ...outline, slides: [expSpec] }, "sp-exp", input());
+    expect(res.content.layout).toBe("experiment");
+    if (res.content.layout !== "experiment") throw new Error("layout");
+    expect(res.content.title).toBe("Shake the string faster");
+    expect(res.content.predict.options).toEqual(["Longer", "Same", "Zero"]);
+    expect(res.content.outcome).toBeUndefined();
+    expect(res.warnings.some((w) => w.includes("deterministic fallback"))).toBe(false);
+  });
 });
 
 describe("writer safety nets", () => {

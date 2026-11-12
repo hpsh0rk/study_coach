@@ -72,6 +72,43 @@ describe("check cadence (planner-enforced)", () => {
     const balanced = rebalanceMinutes(outline, { ...DEFAULT_PARAMS, minutes: 80 });
     expect(longestLectureRun(balanced.slides)).toBeLessThanOrEqual(MAX_LECTURE_RUN);
   });
+
+  it("never exceeds the 40-slide Outline schema ceiling during normalizeOutline or rebalanceMinutes", () => {
+    const nearCapDraft = {
+      objectives: ["Describe waves"],
+      slides: Array.from({ length: 40 }, (_, i) => ({
+        pageType: (i === 0 ? "cover" : i === 39 ? "exit" : i % 6 === 5 ? "check" : "concept") as PageType,
+        title: `Slide ${i + 1}`,
+        purpose: "",
+        keyPoints: [],
+        visual: "none" as const,
+        minutes: i >= 1 && i <= 4 ? 3.5 : 2,
+        sourcePages: [1],
+        loop: i === 0 || i === 39 ? 0 : 1,
+      })),
+    };
+    const normalized = normalizeOutline(nearCapDraft, { validPages: [1], simAvailable: false });
+    expect(normalized.slides).toHaveLength(40);
+    expect(checkOutline(normalized, DEFAULT_PARAMS).some((v) => v.code === "check-cadence")).toBe(true);
+
+    const exactTenMinDraft = {
+      objectives: ["Describe waves"],
+      slides: Array.from({ length: 40 }, (_, i) => ({
+        pageType: (i === 0 ? "cover" : i === 39 ? "exit" : i >= 1 && i <= 4 ? "concept" : "check") as PageType,
+        title: `Slide ${i + 1}`,
+        purpose: "",
+        keyPoints: [],
+        visual: "none" as const,
+        minutes: i === 0 ? 0.5 : i >= 1 && i <= 4 ? 2.5 : 1.5,
+        sourcePages: [1],
+        loop: i === 0 || i === 39 ? 0 : 1,
+      })),
+    };
+    const atCap = normalizeOutline(exactTenMinDraft, { validPages: [1], simAvailable: false });
+    expect(atCap.slides).toHaveLength(40);
+    const rebalanced = rebalanceMinutes(atCap, { ...DEFAULT_PARAMS, minutes: 90 });
+    expect(rebalanced.slides).toHaveLength(40);
+  });
 });
 
 const pages = [

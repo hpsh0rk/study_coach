@@ -135,6 +135,12 @@ describe("speaker notes and interactive pieces", () => {
     expect(texts(p).find((t) => t.slot === "steps.1")!.paras[0]!.runs[0]!.text).toBe("？");
     expect(onSlide(p)).not.toContain("v = 5 × 2");
     expect(p.notes).toContain("2. v = 5 × 2（substitute）");
+
+    const { fadeFrom: _missing, ...malformed } = c;
+    const closed = planSlide({ content: malformed, notes: "", sources: [], unverified: [], pageType: "faded" }, { theme: "classic" });
+    expect(texts(closed).find((t) => t.slot === "steps.2")!.paras[0]!.runs[0]!.text).toBe("？");
+    expect(onSlide(closed)).not.toContain("v = 10 m/s");
+    expect(closed.notes).toContain("3. v = 10 m/s");
   });
 
   it("lists 待核实 items in the notes", () => {

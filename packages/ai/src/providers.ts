@@ -200,13 +200,24 @@ async function collectOpenai(res: Response): Promise<Collected> {
     out.text = data.choices?.[0]?.message?.content ?? "";
     return out;
   }
+  let done = false;
   for await (const ev of readSse(res.body!)) {
-    if (ev.data === "[DONE]") break;
-    const d = JSON.parse(ev.data) as { model?: string; choices?: { delta?: { content?: string | null } }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } | null; error?: { message?: string } };
+    if (ev.data === "[DONE]") {
+      done = true;
+      break;
+    }
+    const d = JSON.parse(ev.data) as {
+      model?: string;
+      choices?: { delta?: { content?: string | null }; finish_reason?: string | null }[];
+      usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
+      error?: { message?: string };
+    };
     if (d.error) throw new ProviderError(d.error.message ?? "stream error", res.status, true, true);
     take(d);
+    if (d.choices?.some((c) => c.finish_reason)) done = true;
     out.text += d.choices?.[0]?.delta?.content ?? "";
   }
+  if (!done) throw new Error("incomplete SSE stream");
   return out;
 }
 
@@ -222,6 +233,7 @@ async function collectMessages(res: Response): Promise<Collected> {
     out.outputTokens = data.usage?.output_tokens ?? 0;
     return out;
   }
+  let done = false;
   for await (const ev of readSse(res.body!)) {
     const d = JSON.parse(ev.data) as {
       type?: string;
@@ -238,8 +250,12 @@ async function collectMessages(res: Response): Promise<Collected> {
       out.outputTokens = d.message?.usage?.output_tokens ?? 0;
     } else if (type === "content_block_delta" && d.delta?.type === "text_delta") out.text += d.delta.text ?? "";
     else if (type === "message_delta" && d.usage) out.outputTokens = d.usage.output_tokens ?? out.outputTokens;
-    else if (type === "message_stop") break;
+    else if (type === "message_stop") {
+      done = true;
+      break;
+    }
   }
+  if (!done) throw new Error("missing message_stop");
   return out;
 }
 

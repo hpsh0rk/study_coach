@@ -7,8 +7,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { deflateSync } from "node:zlib";
-import { chatCompletion, ProviderKind, ProviderProtocol, type ChatMessage, type ImageMessage, type ProviderConfig } from "@kj/ai";
-import { PDFDocument, StandardFonts } from "pdf-lib";
+import { AiOutputError, createAiLayer, jsonSchemaOf, ProviderKind, ProviderProtocol, type AiCallRecord, type ChatMessage, type ProviderConfig } from "@kj/ai";
+import { cleanVisionText, separatorText, splitSeparated } from "@kj/textbook";
+import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 import { z } from "zod";
 import { parseArgs, readJson, writeJson } from "./common.ts";
 
@@ -171,12 +172,13 @@ function scoreText(c: z.infer<typeof TextCase>, raw: string): Omit<QualityScore[
 }
 
 function scoreTranscription(c: z.infer<typeof VisionCase> | z.infer<typeof ParserCase>, raw: string): Omit<QualityScore["checks"], "metadata"> {
-  const normalized = unit(raw);
+  const cleaned = cleanVisionText(raw);
+  const normalized = unit(cleaned);
   const snippetsOk = c.expected.snippets.every((s) => normalized.includes(unit(s)));
-  const gotNumbers = numbersIn(raw);
+  const gotNumbers = numbersIn(cleaned);
   const numbersOk = c.expected.numbers.every((n) => gotNumbers.some((got) => close(got, n)));
   const unitsOk = c.expected.units.every((u) => normalized.includes(unit(u)));
-  const lines = raw
+  const lines = cleaned
     .replace(/<\/tr\s*>/gi, "\n")
     .replace(/<\/t[dh]\s*>/gi, " | ")
     .replace(/<[^>]+>/g, " ")
@@ -194,7 +196,7 @@ function scoreTranscription(c: z.infer<typeof VisionCase> | z.infer<typeof Parse
     }),
   );
   return {
-    schema: { passed: raw.trim().length > 0, detail: raw.trim() ? "non-empty transcription" : "empty transcription" },
+    schema: { passed: cleaned.trim().length > 0, detail: cleaned.trim() ? "non-empty transcription" : "empty transcription" },
     citations: { passed: true, detail: "not applicable to page transcription" },
     numbersUnits: {
       passed: snippetsOk && numbersOk && unitsOk && tableRowsOk,
@@ -352,8 +354,10 @@ function textMessages(c: z.infer<typeof TextCase>): ChatMessage[] {
   return [
     {
       role: "system",
-      content:
-        'Use only the supplied synthetic source. Return one strict JSON object with keys summary, citations, quantities ({value,unit}), studentQuestion, teacherAnswer. Cite page numbers. The studentQuestion must ask for the result without revealing it; put the result only in teacherAnswer.',
+      content: [
+        "Use only the supplied synthetic source. Return one strict JSON object with keys summary, citations, quantities ({value,unit}), studentQuestion, teacherAnswer. Cite page numbers. The studentQuestion must ask for the result without revealing it; put the result only in teacherAnswer.",
+        `Return JSON only, matching this JSON Schema: ${JSON.stringify(jsonSchemaOf(TextAnswer))}`,
+      ].join("\n"),
     },
     { role: "user", content: c.sourcePages.map((p) => `[p.${p.no}] ${p.text}`).join("\n") },
   ];
@@ -364,28 +368,107 @@ const VISION_PROMPT =
 
 async function recordModel(c: z.infer<typeof TextCase> | z.infer<typeof VisionCase>, env: NodeJS.ProcessEnv) {
   const configured = providerFromEnv(c.target, env);
-  const messages: (ChatMessage | ImageMessage)[] =
-    c.target === "text"
-      ? textMessages(c)
-      : [{ role: "user", content: [{ type: "image_url", image_url: { url: syntheticPage(c.image.lines) } }, { type: "text", text: VISION_PROMPT }] }];
-  const started = Date.now();
-  const response = await chatCompletion(configured.provider, {
-    model: configured.model,
-    messages,
-    temperature: 0,
-    json: c.target === "text",
-    maxTokens: c.target === "text" ? 900 : 500,
-    timeoutMs: 90_000,
+  const calls: AiCallRecord[] = [];
+  let lastRaw = "";
+  const pending: Promise<void>[] = [];
+  const ai = createAiLayer({
+    config: {
+      load: async () =>
+        c.target === "text"
+          ? { active: { provider: { ...configured.provider, maxTokens: configured.provider.maxTokens ?? 900 }, model: configured.model } }
+          : { active: null, vision: { provider: configured.provider, model: configured.model } },
+    },
+    meter: { record: async (r) => void calls.push(r) },
+    allowStubFallback: false,
+    fetch: async (url, init) => {
+      const res = await fetch(url, init);
+      pending.push(
+        res
+          .clone()
+          .text()
+          .then((t) => {
+            if (t) lastRaw = t;
+          })
+          .catch(() => undefined),
+      );
+      return res;
+    },
   });
+  const started = Date.now();
+  const ctx = { orgId: "quality", userId: "quality" };
+  let model = configured.model;
+  let raw: string;
+  if (c.target === "text") {
+    try {
+      const res = await ai.callStructured({
+        capability: "outline.draft",
+        promptVersion: c.promptVersion,
+        schema: TextAnswer,
+        messages: textMessages(c),
+        stub: () => ({}),
+        temperature: 0,
+        timeoutMs: 90_000,
+        ctx,
+      });
+      await Promise.all(pending);
+      model = res.model;
+      raw = JSON.stringify(res.output);
+    } catch (err) {
+      await Promise.all(pending);
+      if (!(err instanceof AiOutputError) || !lastRaw) throw err;
+      raw = lastRaw;
+    }
+  } else {
+    const res = await ai.callVision({
+      capability: "page.read",
+      promptVersion: c.promptVersion,
+      instructions: VISION_PROMPT,
+      image: syntheticPage(c.image.lines),
+      maxTokens: configured.provider.maxTokens ?? 500,
+      timeoutMs: 90_000,
+      ctx,
+    });
+    model = res.model;
+    raw = cleanVisionText(res.text);
+  }
+  const inputTokens = calls.length ? calls.reduce((n, r) => n + r.inputTokens, 0) : null;
+  const outputTokens = calls.length ? calls.reduce((n, r) => n + r.outputTokens, 0) : null;
   return {
-    implementation: { kind: configured.provider.kind, model: response.model, protocol: configured.provider.protocol ?? "openai" },
-    output: { raw: response.text },
-    metadata: { latencyMs: Date.now() - started, inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens, costUsd: null },
+    implementation: { kind: configured.provider.kind, model, protocol: configured.provider.protocol ?? "openai" },
+    output: { raw },
+    metadata: { latencyMs: Date.now() - started, inputTokens, outputTokens, costUsd: null },
     secrets: [configured.provider.apiKey, ...Object.values(configured.provider.headers ?? {})],
   };
 }
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const AGENT_API = "https://mineru.net/api/v1/agent";
+
+function isMineruHost(url: string | undefined): url is string {
+  if (!url) return false;
+  try {
+    const u = new URL(url);
+    const host = u.hostname;
+    return u.protocol === "https:" && (host === "mineru.net" || host.endsWith(".mineru.net") || host.endsWith(".openxlab.org.cn") || /^mineru\.oss-[a-z0-9-]+\.aliyuncs\.com$/.test(host));
+  } catch {
+    return false;
+  }
+}
+
+async function withSeparators(pdfBytes: Uint8Array): Promise<{ pdf: Uint8Array; pageCount: number }> {
+  const src = await PDFDocument.load(pdfBytes);
+  const out = await PDFDocument.create();
+  const font = await out.embedFont(StandardFonts.HelveticaBold);
+  const indices = Array.from({ length: src.getPageCount() }, (_, i) => i);
+  const copied = await out.copyPages(src, indices);
+  copied.forEach((p, i) => {
+    const { width, height } = p.getSize();
+    out.addPage([width, height]).drawText(separatorText(i + 1), { x: 60, y: height / 2, size: 28, font, color: rgb(0, 0, 0) });
+    out.addPage(p);
+  });
+  return { pdf: await out.save({ useObjectStreams: false }), pageCount: copied.length };
+}
 
 async function parserJson<T>(url: string, apiKey: string | undefined, init?: RequestInit): Promise<T> {
   const res = await fetch(url, { ...init, headers: { ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}), ...(init?.headers ?? {}) } });
@@ -421,7 +504,51 @@ export async function qualityParserPdf(input: z.infer<typeof ParserInput>): Prom
   return doc.save({ useObjectStreams: false });
 }
 
+async function recordAgentParser(c: z.infer<typeof ParserCase>, env: NodeJS.ProcessEnv) {
+  const started = Date.now();
+  const { pdf, pageCount } = await withSeparators(await qualityParserPdf(c.input));
+  const agentCall = async <T>(url: string, init?: RequestInit): Promise<T> => {
+    const res = await fetch(url, init);
+    if (!res.ok) throw new Error(`parser HTTP ${res.status}`);
+    const body = (await res.json()) as { code: number | string; msg?: string; data?: T };
+    if (String(body.code) !== "0" || !body.data) throw new Error(`parser error: ${body.msg ?? String(body.code)}`);
+    return body.data;
+  };
+  const submitted = await agentCall<{ task_id: string; file_url: string }>(`${AGENT_API}/parse/file`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ file_name: `${c.id}.pdf`, language: "ch", enable_formula: true, enable_table: true, is_ocr: c.ocrMode === "ocr" }),
+  });
+  if (!isMineruHost(submitted.file_url)) throw new Error("parser returned unexpected upload URL");
+  const up = await fetch(submitted.file_url, { method: "PUT", body: Buffer.from(pdf) });
+  if (!up.ok) throw new Error(`parser upload HTTP ${up.status}`);
+  const deadline = Date.now() + Number(env.KJ_QUALITY_PARSER_TIMEOUT_MS ?? 120_000);
+  let markdownUrl: string | undefined;
+  for (;;) {
+    if (Date.now() >= deadline) throw new Error("parser timed out");
+    const polled = await agentCall<{ state: string; markdown_url?: string; err_msg?: string }>(`${AGENT_API}/parse/${encodeURIComponent(submitted.task_id)}`);
+    if (polled.state === "done") {
+      markdownUrl = polled.markdown_url;
+      break;
+    }
+    if (polled.state === "failed") throw new Error(`parser failed: ${polled.err_msg ?? "failed"}`);
+    await pause(1_000);
+  }
+  if (!isMineruHost(markdownUrl)) throw new Error("parser returned unexpected result URL");
+  const mdRes = await fetch(markdownUrl);
+  if (!mdRes.ok) throw new Error(`parser result HTTP ${mdRes.status}`);
+  const pages = splitSeparated(await mdRes.text(), pageCount);
+  return {
+    implementation: { kind: "mineru-agent", version: null },
+    output: { raw: pages.join("\n\n") },
+    metadata: { latencyMs: Date.now() - started, inputTokens: null, outputTokens: null, costUsd: null },
+    secrets: [] as string[],
+  };
+}
+
 async function recordParser(c: z.infer<typeof ParserCase>, env: NodeJS.ProcessEnv) {
+  const mode = z.enum(["selfhost", "agent"]).parse(env.KJ_QUALITY_PARSER_MODE ?? "selfhost");
+  if (mode === "agent") return recordAgentParser(c, env);
   const entered = env.KJ_QUALITY_PARSER_BASE_URL;
   if (!entered) throw new Error("parser: set KJ_QUALITY_PARSER_BASE_URL locally (and KJ_QUALITY_PARSER_API_KEY when required)");
   const base = entered.replace(/\/+$/, "").replace(/\/v1$/, "");
@@ -467,7 +594,7 @@ function selectedCase(target: QualityCase["target"], caseId?: string): QualityCa
   return candidates[0]!;
 }
 
-async function recordCase(target: QualityCase["target"], caseId?: string, env: NodeJS.ProcessEnv = process.env): Promise<QualityFixture> {
+export async function recordCase(target: QualityCase["target"], caseId?: string, env: NodeJS.ProcessEnv = process.env): Promise<QualityFixture> {
   const corpus = loadCorpus();
   const c = selectedCase(target, caseId);
   const captured = c.target === "parser" ? await recordParser(c, env) : await recordModel(c, env);

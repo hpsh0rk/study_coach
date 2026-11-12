@@ -91,12 +91,50 @@ export interface VisionResult {
 
 export const STUB_PROVIDER_ID = "stub";
 
+function balancedObjects(text: string): string[] {
+  const out: string[] = [];
+  for (let i = text.indexOf("{"); i >= 0; i = text.indexOf("{", i + 1)) {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let j = i; j < text.length; j++) {
+      const ch = text[j]!;
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (inString) {
+        if (ch === "\\") escaped = true;
+        else if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') inString = true;
+      else if (ch === "{") depth++;
+      else if (ch === "}" && --depth === 0) {
+        out.push(text.slice(i, j + 1));
+        break;
+      }
+    }
+  }
+  return out;
+}
+
 function extractJson(text: string): unknown {
-  const trimmed = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-  const start = trimmed.indexOf("{");
-  const end = trimmed.lastIndexOf("}");
-  if (start < 0 || end < start) throw new AiOutputError("model did not return a JSON object");
-  return JSON.parse(trimmed.slice(start, end + 1));
+  const candidates: string[] = [];
+  for (const m of text.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) {
+    if (m[1]?.includes("{")) candidates.push(...balancedObjects(m[1]));
+  }
+  candidates.push(...balancedObjects(text));
+  let lastErr: unknown;
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  if (lastErr) throw lastErr;
+  throw new AiOutputError("model did not return a JSON object");
 }
 
 export function issuesText(error: z.ZodError): string {
