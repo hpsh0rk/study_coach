@@ -8,6 +8,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { deflateSync } from "node:zlib";
 import { chatCompletion, ProviderKind, ProviderProtocol, type ChatMessage, type ImageMessage, type ProviderConfig } from "@kj/ai";
+import { PDFDocument, StandardFonts } from "pdf-lib";
 import { z } from "zod";
 import { parseArgs, readJson, writeJson } from "./common.ts";
 
@@ -36,6 +37,7 @@ const ExpectedTranscription = z.object({
   snippets: z.array(z.string()),
   numbers: z.array(z.number()),
   units: z.array(z.string()),
+  tableRows: z.array(z.array(z.string()).min(2)).optional(),
 });
 const TextCase = z.object({
   id: z.string(),
@@ -51,11 +53,21 @@ const VisionCase = z.object({
   image: z.object({ generator: z.literal("synthetic-page-v1"), lines: z.array(z.string()).length(4) }),
   expected: ExpectedTranscription,
 });
+const ParserInput = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("pdf"), path: z.string() }),
+  z.object({ kind: z.literal("synthetic-ocr"), lines: z.array(z.string()).length(4) }),
+  z.object({
+    kind: z.literal("synthetic-table"),
+    title: z.string(),
+    columns: z.array(z.string()).length(2),
+    rows: z.array(z.array(z.string()).length(2)).min(1),
+  }),
+]);
 const ParserCase = z.object({
   id: z.string(),
   target: z.literal("parser"),
   promptVersion: z.string(),
-  pdf: z.string(),
+  input: ParserInput,
   expected: ExpectedTranscription,
 });
 const QualityCase = z.discriminatedUnion("target", [TextCase, VisionCase, ParserCase]);
@@ -163,12 +175,32 @@ function scoreTranscription(c: z.infer<typeof VisionCase> | z.infer<typeof Parse
   const gotNumbers = numbersIn(raw);
   const numbersOk = c.expected.numbers.every((n) => gotNumbers.some((got) => close(got, n)));
   const unitsOk = c.expected.units.every((u) => normalized.includes(unit(u)));
+  const lines = raw
+    .replace(/<\/tr\s*>/gi, "\n")
+    .replace(/<\/t[dh]\s*>/gi, " | ")
+    .replace(/<[^>]+>/g, " ")
+    .split(/\r?\n/)
+    .map(unit);
+  const tableRowsOk = (c.expected.tableRows ?? []).every((row) =>
+    lines.some((line) => {
+      let from = 0;
+      return row.every((cell) => {
+        const at = line.indexOf(unit(cell), from);
+        if (at < 0) return false;
+        from = at + unit(cell).length;
+        return true;
+      });
+    }),
+  );
   return {
     schema: { passed: raw.trim().length > 0, detail: raw.trim() ? "non-empty transcription" : "empty transcription" },
     citations: { passed: true, detail: "not applicable to page transcription" },
     numbersUnits: {
-      passed: snippetsOk && numbersOk && unitsOk,
-      detail: snippetsOk && numbersOk && unitsOk ? "required text, numbers, and units were transcribed" : "required text, numbers, or units are missing",
+      passed: snippetsOk && numbersOk && unitsOk && tableRowsOk,
+      detail:
+        snippetsOk && numbersOk && unitsOk && tableRowsOk
+          ? `required text, numbers, units${c.expected.tableRows?.length ? ", and table rows" : ""} were transcribed`
+          : "required text, numbers, units, or table-row structure are missing",
     },
     answerLeakage: { passed: true, detail: "not applicable to page transcription" },
   };
@@ -272,10 +304,7 @@ export function syntheticPage(lines: string[]): string {
         continue;
       }
       const glyph = FONT[char];
-      if (!glyph) {
-        x += 6 * scale;
-        continue;
-      }
+      if (!glyph) throw new Error(`synthetic-page-v1 has no glyph for ${JSON.stringify(char)}`);
       glyph.forEach((row, gy) =>
         [...row].forEach((on, gx) => {
           if (on !== "1") return;
@@ -314,7 +343,8 @@ function providerFromEnv(target: "text" | "vision", env: NodeJS.ProcessEnv): { p
   const kind = ProviderKind.parse(env[`${prefix}PROVIDER`] ?? "custom");
   const protocol = ProviderProtocol.parse(env[`${prefix}PROTOCOL`] ?? "openai");
   const maxTokens = env[`${prefix}MAX_TOKENS`] ? Number(env[`${prefix}MAX_TOKENS`]) : undefined;
-  return { provider: { id: `quality-${target}`, kind, name: `quality-${target}`, apiKey, baseUrl, protocol, maxTokens }, model };
+  const headers = env[`${prefix}HEADERS_JSON`] ? z.record(z.string(), z.string()).parse(JSON.parse(env[`${prefix}HEADERS_JSON`]!)) : undefined;
+  return { provider: { id: `quality-${target}`, kind, name: `quality-${target}`, apiKey, baseUrl, protocol, maxTokens, headers }, model };
 }
 
 function textMessages(c: z.infer<typeof TextCase>): ChatMessage[] {
@@ -362,6 +392,34 @@ async function parserJson<T>(url: string, apiKey: string | undefined, init?: Req
   return (await res.json()) as T;
 }
 
+export async function qualityParserPdf(input: z.infer<typeof ParserInput>): Promise<Uint8Array> {
+  if (input.kind === "pdf") return fs.readFileSync(path.resolve(path.dirname(QUALITY_CORPUS), input.path));
+  const doc = await PDFDocument.create();
+  doc.setTitle(input.kind === "synthetic-ocr" ? "Source-safe OCR quality fixture" : "Source-safe table quality fixture");
+  doc.setCreationDate(new Date("2026-01-01T00:00:00.000Z"));
+  doc.setModificationDate(new Date("2026-01-01T00:00:00.000Z"));
+  const page = doc.addPage([720, 500]);
+  if (input.kind === "synthetic-ocr") {
+    const png = syntheticPage(input.lines).split(",")[1]!;
+    const image = await doc.embedPng(Buffer.from(png, "base64"));
+    page.drawImage(image, { x: 0, y: 0, width: 720, height: 500 });
+  } else {
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    page.drawText(input.title, { x: 70, y: 430, size: 24, font });
+    const left = 70;
+    const top = 370;
+    const width = 580;
+    const rowHeight = 54;
+    const rows = [input.columns, ...input.rows];
+    for (let i = 0; i <= rows.length; i++) page.drawLine({ start: { x: left, y: top - i * rowHeight }, end: { x: left + width, y: top - i * rowHeight }, thickness: 1 });
+    for (const x of [left, left + width / 2, left + width]) page.drawLine({ start: { x, y: top }, end: { x, y: top - rows.length * rowHeight }, thickness: 1 });
+    rows.forEach((row, i) =>
+      row.forEach((cell, j) => page.drawText(cell, { x: left + j * (width / 2) + 18, y: top - i * rowHeight - 34, size: i === 0 ? 18 : 16, font })),
+    );
+  }
+  return doc.save({ useObjectStreams: false });
+}
+
 async function recordParser(c: z.infer<typeof ParserCase>, env: NodeJS.ProcessEnv) {
   const entered = env.KJ_QUALITY_PARSER_BASE_URL;
   if (!entered) throw new Error("parser: set KJ_QUALITY_PARSER_BASE_URL locally (and KJ_QUALITY_PARSER_API_KEY when required)");
@@ -369,12 +427,12 @@ async function recordParser(c: z.infer<typeof ParserCase>, env: NodeJS.ProcessEn
   const key = env.KJ_QUALITY_PARSER_API_KEY;
   const started = Date.now();
   const health = await parserJson<{ version?: string }>(`${base}/v1/health`, key);
-  const pdf = fs.readFileSync(path.resolve(path.dirname(QUALITY_CORPUS), c.pdf));
-  const query = new URLSearchParams({ filename: "synthetic-kinematics.pdf", ocr_mode: "auto", output_formats: "markdown" });
+  const pdf = await qualityParserPdf(c.input);
+  const query = new URLSearchParams({ filename: `${c.id}.pdf`, ocr_mode: "auto", output_formats: "markdown" });
   const created = await parserJson<{ task_id?: string }>(`${base}/v1/tasks?${query}`, key, {
     method: "POST",
     headers: { "content-type": "application/octet-stream" },
-    body: pdf,
+    body: Buffer.from(pdf),
   });
   if (!created.task_id) throw new Error("parser returned no task_id");
   const deadline = Date.now() + Number(env.KJ_QUALITY_PARSER_TIMEOUT_MS ?? 120_000);
@@ -396,10 +454,21 @@ async function recordParser(c: z.infer<typeof ParserCase>, env: NodeJS.ProcessEn
   };
 }
 
-async function recordCase(target: QualityCase["target"], env: NodeJS.ProcessEnv = process.env): Promise<QualityFixture> {
+function selectedCase(target: QualityCase["target"], caseId?: string): QualityCase {
   const corpus = loadCorpus();
-  const c = corpus.cases.find((item) => item.target === target);
-  if (!c) throw new Error(`no corpus case for ${target}`);
+  const candidates = corpus.cases.filter((item) => item.target === target);
+  if (caseId) {
+    const selected = candidates.find((item) => item.id === caseId);
+    if (!selected) throw new Error(`no ${target} case named ${caseId}`);
+    return selected;
+  }
+  if (candidates.length !== 1) throw new Error(`${target}: choose one case with --case (${candidates.map((item) => item.id).join(", ")})`);
+  return candidates[0]!;
+}
+
+async function recordCase(target: QualityCase["target"], caseId?: string, env: NodeJS.ProcessEnv = process.env): Promise<QualityFixture> {
+  const corpus = loadCorpus();
+  const c = selectedCase(target, caseId);
   const captured = c.target === "parser" ? await recordParser(c, env) : await recordModel(c, env);
   const fixture = redactFixture(
     {
@@ -443,7 +512,7 @@ async function main(argv: string[]): Promise<void> {
     assertManualRecordAllowed(opts["confirm-real-call"] === "true");
     const target = z.enum(["text", "vision", "parser"]).parse(opts.target);
     if (!opts.out) throw new Error("record requires --out <reviewable fixture.json>");
-    const fixture = await recordCase(target);
+    const fixture = await recordCase(target, opts.case);
     const score = scoreFixture(fixture);
     writeJson(opts.out, fixture);
     console.log(JSON.stringify(score, null, 2));
@@ -456,7 +525,7 @@ async function main(argv: string[]): Promise<void> {
     if (scores.some((s) => !s.passed)) process.exitCode = 1;
     return;
   }
-  throw new Error("usage: quality.ts record --target text|vision|parser --confirm-real-call --out <fixture.json> | replay [fixture-or-directory ...]");
+  throw new Error("usage: quality.ts record --target text|vision|parser [--case <case-id>] --confirm-real-call --out <fixture.json> | replay [fixture-or-directory ...]");
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname)) {

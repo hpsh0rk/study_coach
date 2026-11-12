@@ -51,11 +51,57 @@
       "id": "parser-kinematics-v1",
       "target": "parser",
       "promptVersion": "quality.parser@1",
-      "pdf": "../../../fixtures/pdfs/kinematics-outlines.pdf",
+      "input": {
+        "kind": "pdf",
+        "path": "../../../fixtures/pdfs/kinematics-outlines.pdf"
+      },
       "expected": {
         "snippets": ["v", "u", "a", "t", "s"],
         "numbers": [2, 20],
         "units": ["m/s^2", "m/s"]
+      }
+    },
+    {
+      "id": "parser-ocr-v1",
+      "target": "parser",
+      "promptVersion": "quality.parser@2",
+      "input": {
+        "kind": "synthetic-ocr",
+        "lines": [
+          "SYNTHETIC TEST",
+          "SPEED: 12 M/S",
+          "TIME: 3 S",
+          "DISTANCE = 36 M"
+        ]
+      },
+      "expected": {
+        "snippets": ["SYNTHETIC TEST", "SPEED", "TIME", "DISTANCE"],
+        "numbers": [12, 3, 36],
+        "units": ["m/s", "s", "m"]
+      }
+    },
+    {
+      "id": "parser-table-v1",
+      "target": "parser",
+      "promptVersion": "quality.parser@2",
+      "input": {
+        "kind": "synthetic-table",
+        "title": "SYNTHETIC TABLE",
+        "columns": ["time", "velocity"],
+        "rows": [
+          ["0 s", "12 m/s"],
+          ["2 s", "20 m/s"]
+        ]
+      },
+      "expected": {
+        "snippets": ["SYNTHETIC TABLE", "time", "velocity"],
+        "numbers": [0, 12, 2, 20],
+        "units": ["s", "m/s"],
+        "tableRows": [
+          ["time", "velocity"],
+          ["0 s", "12 m/s"],
+          ["2 s", "20 m/s"]
+        ]
       }
     }
   ]

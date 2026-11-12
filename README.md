@@ -93,7 +93,7 @@ pnpm test:e2e --project=overflow --project=e2e   # Playwright：每种版式在�
 SHOTS_DIR=out pnpm test:e2e --project=e2e        # 同样的流程，每一步保存截图
 ```
 
-测试和 CI 不连接任何外部服务：MinerU 用录制的响应回放，模型提供方和自部署服务用本机 mock。CI 安装 `fonts-noto-cjk`，溢出测试量的是真实中文字形。`node scripts/make-fixture-pdf.mjs` 重新生成 e2e 与 PDF 分类样例；双语分类语料、逐页真值和路由指标见 [`docs/pdf-fixtures.md`](docs/pdf-fixtures.md)。`node scripts/bench-pbkdf2.mjs` 测密码哈希的耗时（见 architecture §9）。
+测试和 CI 不连接任何外部服务：MinerU 用录制的响应回放，模型提供方和自部署服务用本机 mock。CI 安装 `fonts-noto-cjk`，溢出测试量的是真实中文字形。`node scripts/make-fixture-pdf.mjs` 重新生成 e2e 与 PDF 分类样例；双语分类语料、逐页真值和路由指标见 [`docs/pdf-fixtures.md`](docs/pdf-fixtures.md)。真实模型、MinerU OCR/表格、WPS/PowerPoint/Keynote、课堂硬件和老师评审的明确手工流程见 [`docs/manual-quality-gates.md`](docs/manual-quality-gates.md)。`node scripts/bench-pbkdf2.mjs` 测密码哈希的耗时（见 architecture §9）。
 
 ## 评测（`tools/eval`）
 
@@ -104,7 +104,7 @@ pnpm eval:run --eval-dir <含 manifest.json + pdfs/ 或 pages.json 的目录> --
 pnpm eval:render results/B0      # 在 Chromium 里渲染每一页，写入 slides[].overflow
 ```
 
-提供方：`KJ_EVAL_API_KEY`（加 `KJ_EVAL_PROVIDER` deepseek|glm|custom、`KJ_EVAL_MODEL`、`KJ_EVAL_BASE_URL`），或 `DEEPSEEK_API_KEY` / `GLM_API_KEY`。没有 Key 时所有调用都用确定性的 stub。`--flags` 对应 `@kj/generation` 的 `PipelineOptions`（默认 = 完整流程）以及评测专用开关（`scope`、`outline`、`renderMode`、`autoConfirm`）。
+提供方：`KJ_EVAL_API_KEY`（加 `KJ_EVAL_PROVIDER` deepseek|glm|custom、`KJ_EVAL_MODEL`、`KJ_EVAL_BASE_URL`；Messages 网关再设 `KJ_EVAL_PROTOCOL=messages`，可选 `KJ_EVAL_MAX_TOKENS` 和 `KJ_EVAL_HEADERS_JSON`），或 `DEEPSEEK_API_KEY` / `GLM_API_KEY`。没有 Key 时所有调用都用确定性的 stub。`--flags` 对应 `@kj/generation` 的 `PipelineOptions`（默认 = 完整流程）以及评测专用开关（`scope`、`outline`、`renderMode`、`autoConfirm`）。
 
 ## 部署到 Cloudflare（还没有实际运行过）
 
