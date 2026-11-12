@@ -10,7 +10,7 @@ The corpus is repository-authored synthetic material in `fixtures/quality-corpus
 pnpm quality:replay
 ```
 
-Replay reads `fixtures/quality-recordings/*.json`, makes no network calls, and exits nonzero when an objective check or fixture redaction check fails. The same replay runs in the eval package's Vitest suite, where `fetch` is trapped and asserted to have zero calls, so normal CI (`pnpm test`) covers it. Recording also refuses to run whenever `CI` is set. One explicitly labelled `synthetic-mock` fixture per corpus case proves every scoring path without an external call; none is evidence of a real provider or parser result.
+Replay reads `fixtures/quality-recordings/*.json`, makes no network calls, and exits nonzero when an objective check or fixture redaction check fails. The same replay runs in the eval package's Vitest suite, where `fetch` is trapped and asserted to have zero calls, so normal CI (`pnpm test`) covers it. Recording also refuses to run whenever `CI` is set. One explicitly labelled `synthetic-mock` fixture per corpus case proves every scoring path without an external call; the three `parser-{formula,ocr,table}-v1.json` fixtures are sanitized live `mineru-agent` recordings, while real text/vision model recordings remain manual owner gates.
 
 ## Record a real result manually
 

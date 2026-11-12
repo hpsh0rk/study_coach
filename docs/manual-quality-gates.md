@@ -7,8 +7,8 @@ These checks require credentials, desktop software, classroom hardware, or teach
 | Gate | Automated evidence | Required manual evidence |
 | --- | --- | --- |
 | Real text model and Messages gateway | `packages/ai/test/protocols.test.ts`; source-safe record/replay in `tools/eval` | one current recording per protocol/model plus S01–S08 core-scenario runs |
-| Real MinerU | adapter/API tests and recorded formula replay | current formula, image-only OCR, and table-row recordings |
-| WPS / PowerPoint / Keynote | OOXML semantic tests and LibreOffice geometry | the same browser-exported decks opened and inspected in each application |
+| Real MinerU | adapter/API tests, recorded formula replay, and committed `mineru-agent` formula/OCR/table recordings (`tools/eval/fixtures/quality-recordings/parser-{formula,ocr,table}-v1.json`) | re-record on service/self-host upgrades and verify publisher multi-column/merged-table pages |
+| WPS / PowerPoint / Keynote | OOXML semantic tests, real Chromium ECharts-rasterized PPTX E2E + `pnpm --filter @kj/pptx browser-verify`, and LibreOffice geometry | the same browser-exported decks opened and inspected in each desktop application |
 | Classroom environment | deterministic player/viewport/E2E matrix | projector, presenter laptop, clicker/pen, offline, and real-network observations |
 | Teacher validation | bilingual reviewed fixtures and bounded mutation gates | blind review by 2–3 teachers and an explicit release decision |
 
@@ -65,10 +65,11 @@ A three-case pass is a compact drift check, not evidence for multi-column pages,
 
 Generate one classic-theme and one chalk-theme lesson through the browser export path. The pair must include Chinese and Latin text, formula, native table, native chart, raster chart/function fallback, quiz answer in notes, sources, and an interaction that degrades to static PPTX.
 
-Before opening them:
+Before opening them (or use `pnpm --filter @kj/pptx browser-verify` to produce a reproducible 10-slide classic/chalk browser-exported pair and verify OOXML, raster PNG dimensions, and LibreOffice bounds automatically):
 
 ```bash
 pnpm --filter @kj/pptx render-check
+pnpm --filter @kj/pptx browser-verify
 sha256sum classic.pptx chalk.pptx
 ```
 

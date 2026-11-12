@@ -1,0 +1,20 @@
+{
+  "fixtureVersion": 1,
+  "corpusVersion": 1,
+  "caseId": "parser-ocr-v1",
+  "target": "parser",
+  "recordedAt": "2026-11-12T07:36:34.385Z",
+  "implementation": {
+    "kind": "mineru-agent",
+    "version": null
+  },
+  "output": {
+    "raw": "SYNTHETIC TEST\n\nSPEED: 12 M/S\n\nTIME: 3 S\n\nDISTANCE 36 M"
+  },
+  "metadata": {
+    "latencyMs": 45594,
+    "inputTokens": null,
+    "outputTokens": null,
+    "costUsd": null
+  }
+}

@@ -105,4 +105,20 @@ describe("verifyNumbers", () => {
     const c = statement(["In 3 s sound travels $340 \\times 3 = 1020$ m"]);
     expect(verifyNumbers(c, SOURCE)).toEqual([]);
   });
+
+  it("supports live MinerU LaTeX quantities (~ spacing, braced exponents) and font-wrapped formulas", () => {
+    const mineruSource = [
+      "$$",
+      "\\mathtt { v } = \\mathtt { u } + \\mathtt { a } \\mathtt { t }",
+      "$$",
+      "$$",
+      "\\mathsf { s } = \\mathrm{ut} + \\mathsf{at} ^ { 2 } / 2",
+      "$$",
+      "A car accelerates at $2 ~ \\mathrm { m } / \\mathrm { s } ^ { 2 }$ and cruises at $12 ~ \\mathrm { m } / \\mathrm { s }$.",
+    ].join("\n");
+    expect(verifyNumbers(statement(["Acceleration is 2 m/s² and speed is 12 m/s"], { kind: "formula", tex: "s = ut + \\frac{1}{2}at^2" }), mineruSource)).toEqual([]);
+    expect(verifyNumbers(statement(["Acceleration is 2 m/s"], { kind: "formula", tex: "v = u + at" }), mineruSource)).toEqual([
+      expect.objectContaining({ kind: "number", text: "2 m/s" }),
+    ]);
+  });
 });

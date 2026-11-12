@@ -1,0 +1,20 @@
+{
+  "fixtureVersion": 1,
+  "corpusVersion": 1,
+  "caseId": "parser-kinematics-v1",
+  "target": "parser",
+  "recordedAt": "2026-11-12T07:35:48.177Z",
+  "implementation": {
+    "kind": "mineru-agent",
+    "version": null
+  },
+  "output": {
+    "raw": "## Chapter 3 Motion in a straight line\n\nThis chapter describes motion with displacement, velocity and acceleration, and derives the equations that link them for constant acceleration. You will use these equations to predict where a moving object will be and how fast it will be going.\n\n## 3.1 Equations of motion\n\nFor an object that starts with velocity u and moves with constant acceleration a for a time t, the final velocity and the displacement are given by the two equations below. The equations are typeset as outlines, as in many published physics books, so the text layer of this page has no formulas at all.\n\n$$\n\\mathtt { v } = \\mathtt { u } + \\mathtt { a } \\mathtt { t }\n$$\n\n$$\n\\mathsf { s } = \\mathrm { u t } + \\mathsf { a t } ^ { 2 } / 2\n$$\n\nA car accelerating from rest at $2 ~ \\mathrm { m } / \\mathrm { s } ^ { 2 }$ reaches after ten seconds.\n\n## 3.2 Using the equations\n\nChoose the equation that contains the three quantities you know and the one you want. Write down the known values with units before substituting, and check that the answer has a sensible size and unit."
+  },
+  "metadata": {
+    "latencyMs": 65784,
+    "inputTokens": null,
+    "outputTokens": null,
+    "costUsd": null
+  }
+}
