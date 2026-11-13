@@ -19,6 +19,8 @@ export default defineConfig({
     { name: "lesson", testMatch: /[\\/]lesson\.spec\.ts$/, dependencies: ["auth"], use: authenticated },
     { name: "textbook", testMatch: /[\\/]textbook\.spec\.ts$/, dependencies: ["lesson"], use: authenticated },
     { name: "admin", testMatch: /[\\/]admin\.spec\.ts$/, dependencies: ["textbook"], use: authenticated },
+    { name: "walkthrough", testMatch: /[\\/]walkthrough-ux\.spec\.ts$/, dependencies: ["admin"], use: authenticated },
+    { name: "bundle", testMatch: /[\\/]bundle-offline\.spec\.ts$/, dependencies: ["walkthrough"], use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 720 } } },
   ],
   webServer: {
     command: "bash scripts/e2e-server.sh",
