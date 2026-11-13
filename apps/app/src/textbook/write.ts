@@ -14,6 +14,10 @@ import { chapters, documents, pages } from "./tables.ts";
 
 /** 40 upserts + ownership check + count + update stay under D1's 50-queries-per-invocation limit. */
 export const PAGE_BATCH = 40;
+/** 11 rows × 9 columns = 99 bound parameters per statement, below D1's 100-parameter limit. */
+export const CHAPTER_INSERT_ROWS = 11;
+/** Keep every d.batch() call well below Cloudflare D1's 50-statement batch ceiling. */
+export const MAX_BATCH_STATEMENTS = 40;
 
 /** Per teacher (deleted textbooks not counted): keeps one account from filling the free-tier database (500 MB, about 3 MB per 600-page book). */
 export const MAX_TEXTBOOKS = 30;
@@ -58,15 +62,23 @@ export async function createTextbook(
   const { sha256, ...rest } = meta;
   const id = newId("doc");
   const writes: any[] = [d.insert(documents).values({ id, orgId: user.orgId, ownerId: user.id, ...rest, fileSha256: sha256 ?? null, hasBookmarks: tree.length > 0 })];
-  // 10 rows × 9 columns stays under D1's 100 bound parameters per statement.
-  for (let i = 0; i < tree.length; i += 10) {
-    const rows = tree.slice(i, i + 10).map((ch) => ({ documentId: id, id: ch.id, parentId: ch.parentId, ord: ch.ord, level: ch.level, title: ch.title.slice(0, 300), pageStart: ch.pageStart, pageEnd: ch.pageEnd, words: ch.words }));
+  // 11 rows × 9 columns = 99 bound parameters per statement (under D1's 100-parameter limit).
+  for (let i = 0; i < tree.length; i += CHAPTER_INSERT_ROWS) {
+    const rows = tree.slice(i, i + CHAPTER_INSERT_ROWS).map((ch) => ({ documentId: id, id: ch.id, parentId: ch.parentId, ord: ch.ord, level: ch.level, title: ch.title.slice(0, 300), pageStart: ch.pageStart, pageEnd: ch.pageEnd, words: ch.words }));
     writes.push(d.insert(chapters).values(rows));
   }
+  let docInserted = false;
   try {
-    // One batch is one transaction: a failed chapter insert leaves no half-written textbook behind.
-    await d.batch(writes as [any, ...any[]]);
+    // Chunk batches to <= MAX_BATCH_STATEMENTS so an 800-chapter TOC never exceeds D1's 50-statement batch limit.
+    for (let i = 0; i < writes.length; i += MAX_BATCH_STATEMENTS) {
+      await d.batch(writes.slice(i, i + MAX_BATCH_STATEMENTS) as [any, ...any[]]);
+      docInserted = true;
+    }
   } catch (err) {
+    if (docInserted) {
+      // Deleting the document cascades to chapters, leaving no half-written textbook if a later chunk fails.
+      await d.delete(documents).where(eq(documents.id, id)).catch(() => undefined);
+    }
     // Two tabs uploading the same file: documents_owner_sha_uq lets one insert through.
     const winner = sha256 ? await activeWithHash(env, user.id, sha256) : null;
     if (winner) throw alreadyUploaded(winner.id);
