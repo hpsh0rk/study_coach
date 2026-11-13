@@ -2,7 +2,7 @@
  * The textbook module's writes, used only by routes/documents.ts. Page text is append-only: an upload
  * upserts pages, and a paste only fills pages that have no text.
  */
-import { and, asc, between, count, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, between, count, eq, gte, isNull, lte, sql } from "drizzle-orm";
 import { distributeText, needsText, PASTE_PARSER, PDFJS_PARSER, pageFacts, type PageFacts } from "@kj/textbook";
 import { newId, type ChapterNode, type PageText } from "@kj/schema";
 import { db } from "../db/index.ts";
@@ -96,8 +96,19 @@ export async function putPages(env: Env, doc: TextbookRow, batch: PageText[]): P
       return d.insert(pages).values({ documentId: doc.id, no: p.no, ...row }).onConflictDoUpdate({ target: [pages.documentId, pages.no], set: row });
     }) as [any, ...any[]],
   );
+  const nos = batch.map((p) => p.no);
+  const minNo = Math.min(...nos);
+  const maxNo = Math.max(...nos);
   const received = (await d.select({ n: count() }).from(pages).where(eq(pages.documentId, doc.id)))[0]!.n;
-  await d.update(documents).set({ pagesReceived: received }).where(eq(documents.id, doc.id));
+  await d.batch([
+    d.update(documents).set({ pagesReceived: received }).where(eq(documents.id, doc.id)),
+    d
+      .update(chapters)
+      .set({
+        words: sql<number>`COALESCE((SELECT SUM(${pages.words}) FROM ${pages} WHERE ${pages.documentId} = ${chapters.documentId} AND ${pages.no} BETWEEN ${chapters.pageStart} AND ${chapters.pageEnd}), 0)`,
+      })
+      .where(and(eq(chapters.documentId, doc.id), gte(chapters.pageEnd, minNo), lte(chapters.pageStart, maxNo))),
+  ]);
   return { received, pageCount: doc.pageCount, complete: received === doc.pageCount };
 }
 

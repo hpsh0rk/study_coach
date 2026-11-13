@@ -1,7 +1,7 @@
 import { getDocument, GlobalWorkerOptions, OPS, type PDFDocumentProxy, type PDFPageProxy } from "pdfjs-dist";
 import type { TextItem } from "pdfjs-dist/types/src/display/api";
-import { countWords, suspiciousSpans, type PageProbe, type ParsedPdf, type TocEntry } from "@kj/schema";
-import { badCharRatio, classifyPage, mathScore } from "./index.ts";
+import { countWords, suspiciousSpans, type PageProbe, type ParsedPdf, type PdfInspection, type TocEntry } from "@kj/schema";
+import { badCharRatio, classifyPage, filterTocForPages, mathScore, MAX_TREE_DEPTH, shiftToc } from "./index.ts";
 
 export { GlobalWorkerOptions };
 
@@ -38,7 +38,7 @@ async function readOutline(pdf: PDFDocumentProxy, items: RawOutline[], depth: nu
   const out: TocEntry[] = [];
   for (const item of items) {
     const page = await destPage(pdf, item.dest);
-    const children = depth < 3 && item.items?.length ? await readOutline(pdf, item.items, depth + 1) : [];
+    const children = depth < MAX_TREE_DEPTH && item.items?.length ? await readOutline(pdf, item.items, depth + 1) : [];
     const title = item.title.replace(/\s+/g, " ").trim();
     if (page && title) out.push({ title, page, children });
     else out.push(...children);
@@ -261,21 +261,84 @@ export interface ParseOptions {
   onProgress?: (done: number, total: number) => void;
   /** Base URL (or, under Node, directory) of the pdf.js CMaps and standard fonts. */
   assets?: string;
+  /** Optional 1-based page numbers to extract while preserving true page numbers `no` and matching TOC subtree. */
+  pageNumbers?: number[];
+  /** Optional 1-based starting page number for pre-sliced PDFs (e.g. 693 maps physical 1..34 to 693..726). */
+  pageOffset?: number;
+}
+
+export type InspectOptions = Pick<ParseOptions, "assets" | "pageOffset">;
+
+function normalizeCallArgs<T extends object>(fallbackOrOpts?: string | T, maybeOpts?: T): { fallbackTitle: string; opts: T } {
+  if (typeof fallbackOrOpts === "object" && fallbackOrOpts !== null) {
+    return { fallbackTitle: "Untitled", opts: fallbackOrOpts };
+  }
+  return { fallbackTitle: fallbackOrOpts ?? "Untitled", opts: (maybeOpts ?? {}) as T };
+}
+
+/** Fast header/TOC/label preflight (< 150 ms on 1,000+ page textbooks): never extracts page text. */
+export async function inspectPdf(data: ArrayBuffer, fallbackOrOpts?: string | InspectOptions, maybeOpts?: InspectOptions): Promise<PdfInspection> {
+  const { fallbackTitle, opts } = normalizeCallArgs(fallbackOrOpts, maybeOpts);
+  const shift = Math.max(0, Math.trunc((opts.pageOffset ?? 1) - 1));
+  const task = getDocument({ data: new Uint8Array(data), ...pdfjsAssetOptions(opts.assets) });
+  const pdf = await task.promise;
+  try {
+    const [meta, outlineRaw, rawLabels] = await Promise.all([
+      pdf.getMetadata().catch(() => null),
+      pdf.getOutline().catch(() => null),
+      pdf.getPageLabels().catch(() => null),
+    ]);
+    const infoTitle = (meta?.info as { Title?: string } | undefined)?.Title?.trim();
+    const rawToc = await readOutline(pdf, (outlineRaw ?? []) as unknown as RawOutline[], 1);
+    const toc = shiftToc(rawToc, shift);
+    const labelsList = (rawLabels ?? []) as string[];
+    const pageLabels: Record<string, string> = {};
+    for (let i = 0; i < labelsList.length; i++) {
+      const no = i + 1 + shift;
+      const label = labelsList[i]?.trim().slice(0, 20);
+      if (label && label !== String(no)) pageLabels[String(no)] = label;
+    }
+    return {
+      title: (infoTitle || fallbackTitle).slice(0, 300),
+      pageCount: pdf.numPages + shift,
+      toc,
+      pageLabels,
+    };
+  } finally {
+    await task.destroy();
+  }
 }
 
 /** Parses a PDF in the browser: bookmarks + per-page text layer (minus text no reader can see) and each page's kind, from the same pass. */
-export async function parsePdf(data: ArrayBuffer, fallbackTitle: string, opts: ParseOptions = {}): Promise<ParsedPdf> {
+export async function parsePdf(data: ArrayBuffer, fallbackOrOpts?: string | ParseOptions, maybeOpts?: ParseOptions): Promise<ParsedPdf> {
+  const { fallbackTitle, opts } = normalizeCallArgs(fallbackOrOpts, maybeOpts);
+  const shift = Math.max(0, Math.trunc((opts.pageOffset ?? 1) - 1));
   const task = getDocument({ data: new Uint8Array(data), ...pdfjsAssetOptions(opts.assets) });
   const pdf = await task.promise;
   try {
     const meta = await pdf.getMetadata().catch(() => null);
     const infoTitle = (meta?.info as { Title?: string } | undefined)?.Title?.trim();
     const outline = ((await pdf.getOutline()) ?? []) as unknown as RawOutline[];
-    const toc = await readOutline(pdf, outline, 1);
+    const fullToc = shiftToc(await readOutline(pdf, outline, 1), shift);
     const labels = ((await pdf.getPageLabels().catch(() => null)) ?? []) as string[];
+    const pageCount = pdf.numPages + shift;
+
+    const targetPhysPages = opts.pageNumbers
+      ? [
+          ...new Set(
+            opts.pageNumbers
+              .map((n) => Math.trunc(n))
+              .map((n) => (shift > 0 && n > pdf.numPages ? n - shift : n))
+              .filter((phys) => phys >= 1 && phys <= pdf.numPages),
+          ),
+        ].sort((a, b) => a - b)
+      : Array.from({ length: pdf.numPages }, (_, i) => i + 1);
+
     const pages: ParsedPdf["pages"] = [];
-    for (let no = 1; no <= pdf.numPages; no++) {
-      const page = await pdf.getPage(no);
+    for (let idx = 0; idx < targetPhysPages.length; idx++) {
+      const physNo = targetPhysPages[idx]!;
+      const no = physNo + shift;
+      const page = await pdf.getPage(physNo);
       const [content, ops] = await Promise.all([page.getTextContent(), page.getOperatorList().catch(() => null)]);
       const items: TextItem[] = [];
       let text = "";
@@ -290,12 +353,14 @@ export async function parsePdf(data: ArrayBuffer, fallbackTitle: string, opts: P
       }
       text = text.replace(/[ \t]+/g, " ").replace(/\s*\n\s*/g, "\n").trim().slice(0, 40_000);
       const kind = classifyPage(probePage(page.view, items, text, ops));
-      const label = labels[no - 1]?.trim().slice(0, 20);
+      const label = labels[physNo - 1]?.trim().slice(0, 20);
       pages.push({ no, text, kind, ...(label && label !== String(no) ? { label } : {}) });
       page.cleanup();
-      opts.onProgress?.(no, pdf.numPages);
+      opts.onProgress?.(idx + 1, targetPhysPages.length);
     }
-    return { title: (infoTitle || fallbackTitle).slice(0, 300), pageCount: pdf.numPages, toc, pages };
+
+    const toc = opts.pageNumbers ? filterTocForPages(fullToc, pageCount, new Set(pages.map((p) => p.no))) : fullToc;
+    return { title: (infoTitle || fallbackTitle).slice(0, 300), pageCount, toc, pages };
   } finally {
     await task.destroy();
   }

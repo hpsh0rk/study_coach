@@ -34,6 +34,8 @@ export const lessons = sqliteTable(
     title: text("title").notNull(),
     /** LessonScope JSON: chapterIds + normalized page ranges. */
     scope: text("scope").notNull(),
+    /** Optional JSON LessonSource[] (multiple PDFs + syllabus/note items); primary PDF stays synced to document_id + scope. */
+    sourcesJson: text("sources_json"),
     /** LessonParams JSON. */
     params: text("params").notNull(),
     theme: text("theme").notNull().default("classic"),

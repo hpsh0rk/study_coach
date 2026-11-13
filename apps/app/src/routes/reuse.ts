@@ -40,9 +40,9 @@ export const reuseRoutes = new Hono<AppBindings>()
     const d = db(c.env);
     const [confirmed, latest] = await Promise.all([latestConfirmed(c.env, src.id), latestVersion(c.env, src.id)]);
     const id = newId("les");
-    const { unit: _unit, ...scope } = lessonScope(src);
+    const { unit: _unit, sources: _sources, ...scope } = lessonScope(src);
     const title = body.title ?? `${src.title}（新学期）`.slice(0, 200);
-    await d.insert(lessons).values({ id, orgId: u.orgId, ownerId: u.id, documentId: src.documentId, title, scope: JSON.stringify(scope), params: src.params, theme: src.theme });
+    await d.insert(lessons).values({ id, orgId: u.orgId, ownerId: u.id, documentId: src.documentId, title, scope: JSON.stringify(scope), ...(src.sourcesJson ? { sourcesJson: src.sourcesJson } : {}), params: src.params, theme: src.theme });
     let version = 0;
     if (confirmed) {
       const copy = copyVersion(confirmed, id, ++version);

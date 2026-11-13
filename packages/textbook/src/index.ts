@@ -1,6 +1,6 @@
 import { countWords, suspiciousSpans, type ChapterNode, type PageKind, type PageProbe, type PageRange, type PageText, type SuspiciousSpan, type TocEntry } from "@kj/schema";
 
-export const MAX_TREE_DEPTH = 3;
+export const MAX_TREE_DEPTH = 4;
 /** Pages with fewer words carry no usable text (scanned images, figure-only pages, blank pages). */
 export const MIN_PAGE_WORDS = 5;
 
@@ -163,6 +163,7 @@ export function cleanParsedMarkdown(md: string): string {
 interface FlatEntry {
   title: string;
   page: number;
+  pageEnd?: number;
   level: number;
   parentIndex: number | null;
 }
@@ -170,7 +171,7 @@ interface FlatEntry {
 function flatten(entries: TocEntry[], level: number, parentIndex: number | null, out: FlatEntry[]): void {
   for (const e of entries) {
     const index = out.length;
-    out.push({ title: e.title.replace(/\s+/g, " ").trim(), page: e.page, level, parentIndex });
+    out.push({ title: e.title.replace(/\s+/g, " ").trim(), page: e.page, ...(e.pageEnd !== undefined ? { pageEnd: e.pageEnd } : {}), level, parentIndex });
     if (level < MAX_TREE_DEPTH) flatten(e.children, level + 1, index, out);
   }
 }
@@ -194,6 +195,7 @@ export function buildChapterTree(toc: TocEntry[], pageCount: number, pages: Page
         break;
       }
     }
+    if (e.pageEnd !== undefined) end = Math.min(end, e.pageEnd);
     end = Math.min(Math.max(start, end), pageCount);
     let w = 0;
     for (let p = start; p <= end; p++) w += words.get(p) ?? 0;
@@ -208,6 +210,53 @@ export function buildChapterTree(toc: TocEntry[], pageCount: number, pages: Page
       words: w,
     };
   });
+}
+
+export function shiftToc(toc: TocEntry[], shift: number): TocEntry[] {
+  if (!shift) return toc;
+  return toc.map((e) => ({
+    ...e,
+    page: Math.max(1, e.page + shift),
+    ...(e.pageEnd !== undefined ? { pageEnd: Math.max(1, e.pageEnd + shift) } : {}),
+    children: shiftToc(e.children, shift),
+  }));
+}
+
+/**
+ * Filters a PDF bookmark tree down to nodes overlapping `wantedPages`, preserving each node's
+ * original `pageEnd` so chapter boundaries stay exact even when trailing chapters are omitted.
+ */
+export function filterTocForPages(toc: TocEntry[], pageCount: number, wantedPages: ReadonlySet<number>): TocEntry[] {
+  if (!toc.length || !wantedPages.size) return [];
+  const tree = buildChapterTree(toc, pageCount);
+  let cursor = 0;
+  const walk = (entries: TocEntry[], level: number): TocEntry[] => {
+    const out: TocEntry[] = [];
+    for (const entry of entries) {
+      const node = tree[cursor++];
+      const children = level < MAX_TREE_DEPTH ? walk(entry.children, level + 1) : [];
+      if (!node) continue;
+      let overlaps = children.length > 0;
+      if (!overlaps) {
+        for (const no of wantedPages) {
+          if (no >= node.pageStart && no <= node.pageEnd) {
+            overlaps = true;
+            break;
+          }
+        }
+      }
+      if (overlaps) {
+        out.push({
+          title: node.title,
+          page: node.pageStart,
+          pageEnd: node.pageEnd,
+          children,
+        });
+      }
+    }
+    return out;
+  };
+  return walk(toc, 1);
 }
 
 /** Sorted, clamped, merged ranges (adjacent or overlapping ranges are joined). */
@@ -288,15 +337,30 @@ export function sourceCut(pages: { no: number; chars: number }[], maxChars: numb
 }
 
 /**
+ * Cuts already-selected pages (including sparse or virtual multi-PDF page numbers) whole in order
+ * without expanding `min..max` ranges.
+ */
+export function sourceForPages(pages: PageText[], maxChars: number, formatLine: (p: PageText) => string = sourceLine): SourceText {
+  const lines = new Map<number, string>();
+  const sizes: { no: number; chars: number }[] = [];
+  for (const p of [...pages].sort((a, b) => a.no - b.no)) {
+    if (lines.has(p.no)) continue;
+    const line = formatLine(p);
+    lines.set(p.no, line);
+    sizes.push({ no: p.no, chars: Math.max(0, line.length - `[p.${p.no}] `.length) });
+  }
+  const cut = sourceCut(sizes, maxChars);
+  return { text: cut.included.map((no) => lines.get(no)!.slice(0, maxChars)).join("\n"), ...cut };
+}
+
+/**
  * Source text for the model. Pages are kept whole, in order, until the budget runs out; the
  * remaining pages are reported as omitted instead of trimming every page (examples and
  * summaries sit at the end of a page).
  */
 export function sourceForRanges(pages: PageText[], ranges: PageRange[], maxChars: number): SourceText {
   const wanted = new Set(pagesInRanges(ranges));
-  const lines = new Map(pages.filter((p) => wanted.has(p.no)).map((p) => [p.no, sourceLine(p)]));
-  const cut = sourceCut([...lines].map(([no, line]) => ({ no, chars: line.length - `[p.${no}] `.length })), maxChars);
-  return { text: cut.included.map((no) => lines.get(no)!.slice(0, maxChars)).join("\n"), ...cut };
+  return sourceForPages(pages.filter((p) => wanted.has(p.no)), maxChars);
 }
 
 /** Normalizes pasted or extracted page text the way the browser parser does (single spaces, single newlines). */

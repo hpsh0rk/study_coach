@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { Player, presenterSync, type PlayerSlide, type Position, type PresenterSync } from "@kj/player";
 import type { TeachingLanguage, ThemeId } from "@kj/schema";
-import { api } from "../api.ts";
+import { api, lessonSourcesOf } from "../api.ts";
 import { lessonApi } from "../lessonApi.ts";
 import { documentApi, type TextbookPage } from "../textbook/api.ts";
-import { SourcePage } from "../textbook/SourcePage.tsx";
+import { SourcePage, type SourceDocOption } from "../textbook/SourcePage.tsx";
 
 /**
  * The slide player. With `syncId` it joins the lesson's presenter channel: the audience window
@@ -85,13 +85,25 @@ export function PlayPage() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
   const [exit] = useState(() => () => navigate(`/lessons/${id}/slides`));
-  const [data, setData] = useState<{ slides: PlayerSlide[]; theme: ThemeId; documentId: string; pageLabels: Record<number, string>; language: TeachingLanguage } | null>(null);
+  const [data, setData] = useState<{ slides: PlayerSlide[]; theme: ThemeId; documentId: string; pdfSources: SourceDocOption[]; pageLabels: Record<number, string>; language: TeachingLanguage } | null>(null);
   const [error, setError] = useState("");
   const [source, setSource] = useState<TextbookPage | null>(null);
   useEffect(() => {
     lessonApi
       .get(id)
-      .then((v) => setData({ slides: v.slides.map(({ notes: _n, ...s }) => ({ ...s, notes: "" })), theme: v.lesson.theme, documentId: v.lesson.documentId, pageLabels: v.pageLabels, language: (v.confirmed?.params ?? v.lesson.params).language }))
+      .then((v) => {
+        const pdfSources = lessonSourcesOf(v)
+          .filter((s): s is Extract<ReturnType<typeof lessonSourcesOf>[number], { kind: "pdf" }> => s.kind === "pdf")
+          .map((s) => ({ documentId: s.documentId, title: s.title, role: s.role }));
+        setData({
+          slides: v.slides.map(({ notes: _n, ...s }) => ({ ...s, notes: "" })),
+          theme: v.lesson.theme,
+          documentId: v.lesson.documentId,
+          pdfSources,
+          pageLabels: v.pageLabels,
+          language: (v.confirmed?.params ?? v.lesson.params).language,
+        });
+      })
       .catch((e) => setError((e as Error).message));
   }, [id]);
   const docId = useRef<string | null>(null);
@@ -122,7 +134,7 @@ export function PlayPage() {
         </button>
       </div>
       <PlayerHost slides={data.slides} theme={data.theme} onSource={stableSource} pageLabels={data.pageLabels} syncId={id} language={data.language} onEscape={source ? undefined : exit} />
-      {source && <SourcePage page={source} onClose={() => setSource(null)} />}
+      {source && <SourcePage page={source} sources={data.pdfSources} onClose={() => setSource(null)} />}
     </div>
   );
 }

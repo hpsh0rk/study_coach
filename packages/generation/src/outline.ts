@@ -1,7 +1,18 @@
 import { z } from "zod";
 import { jsonSchemaOf, type AiLayer } from "@kj/ai";
-import { formatPages, sourceForRanges } from "@kj/textbook";
-import { type GlossaryEntry, Outline, PageType, SlideSpec, VisualKind, type LessonParams, type PageText } from "@kj/schema";
+import { formatPages, sourceForPages } from "@kj/textbook";
+import {
+  decodeSourcePage,
+  Outline,
+  PageType,
+  SlideSpec,
+  SOURCE_STRIDE,
+  VisualKind,
+  type GlossaryEntry,
+  type LessonParams,
+  type LessonSource,
+  type PageText,
+} from "@kj/schema";
 import { checkOutline, OUTLINE_SOURCE_CHARS, outlineTiming, PAGE_TYPES, planBudget, type Violation } from "@kj/pedagogy";
 import { layoutForPageType, LAYOUTS, PAGE_TYPE_VISUALS } from "@kj/templates";
 import type { EmbedEntry } from "@kj/widgets";
@@ -61,16 +72,48 @@ function pageTypeTable(o: PipelineOptions, sim: EmbedEntry | undefined): string 
     .join("\n");
 }
 
-function sourceOf(pages: PageText[]) {
-  if (!pages.length) return { text: "", included: [], omitted: [] };
-  const nos = pages.map((p) => p.no);
-  return sourceForRanges(pages, [{ start: Math.min(...nos), end: Math.max(...nos) }], OUTLINE_SOURCE_CHARS);
+export type MultiSourceDraftInput = DraftInput & {
+  sources?: LessonSource[];
+};
+
+function syllabusItemsOf(sources: LessonSource[] | undefined): string[] {
+  if (!sources?.length) return [];
+  const items: string[] = [];
+  for (const s of sources) {
+    if (s.kind !== "syllabus") continue;
+    if (s.items?.length) items.push(...s.items);
+    else if (s.text.trim()) {
+      items.push(
+        ...s.text
+          .split(/\r?\n/)
+          .map((line) => line.replace(/^\s*(?:[-*•☐☑✓]|\d+[.)])\s*/, "").trim())
+          .filter(Boolean),
+      );
+    }
+  }
+  return [...new Set(items)].slice(0, 60);
 }
 
-export function buildMessages(input: DraftInput, problems?: Violation[]) {
+function sourceOf(pages: PageText[], multiPdf = false) {
+  if (!pages.length) return { text: "", included: [], omitted: [] };
+  const isMulti = multiPdf || pages.some((p) => p.no > SOURCE_STRIDE);
+  if (!isMulti) return sourceForPages(pages, OUTLINE_SOURCE_CHARS);
+  return sourceForPages(pages, OUTLINE_SOURCE_CHARS, (p) => {
+    const { pdfIndex, pageNo } = decodeSourcePage(p.no);
+    const prefix = pdfIndex === 0 ? `[S1 p.${pageNo}]` : `[S${pdfIndex + 1} p.${pageNo} | sourcePage=${p.no}]`;
+    return `${prefix} ${p.text.replace(/\s+/g, " ").trim()}`;
+  });
+}
+
+export function buildMessages(input: MultiSourceDraftInput, problems?: Violation[]) {
   const o = optionsOf(input.options);
   const b = planBudget(input.params);
   const sim = simFor(input);
+  const pdfSources = (input.sources ?? []).filter((s): s is Extract<LessonSource, { kind: "pdf" }> => s.kind === "pdf");
+  const noteSources = (input.sources ?? []).filter((s): s is Extract<LessonSource, { kind: "note" }> => s.kind === "note" && !!s.text.trim());
+  const syllabusItems = syllabusItemsOf(input.sources);
+  const hasExamSource = pdfSources.some((s) => s.role === "past_paper" || s.role === "workbook");
+  const isMultiPdf = pdfSources.length > 1 || input.pages.some((p) => p.no > SOURCE_STRIDE);
   const langRule =
     input.params.language === "zh"
       ? "Write all titles, objectives, key points, notCovered and glossary terms in pure Simplified Chinese (never English term labels unless teaching an explicit English symbol)."
@@ -84,6 +127,12 @@ export function buildMessages(input: DraftInput, problems?: Violation[]) {
     "Rules:",
     `- The sum of slide minutes must be within ${b.minMinutes}–${b.maxMinutes} minutes (target ${b.minutes}). Time is the only budget; the number of slides follows from it.`,
     "- If the selection holds more than fits the time, teach the core well and list what you leave out in notCovered (short phrases). Do not rush through everything.",
+    syllabusItems.length
+      ? "- A mandatory Syllabus checklist is provided: cover every checklist item across objectives and slides; only list an item in notCovered if lesson time genuinely makes it impossible."
+      : "",
+    hasExamSource
+      ? "- Attached past_paper / workbook PDF sources contain authentic exam or practice questions: build practice, check, worked or faded slides from them and cite their sourcePage numbers."
+      : "",
     o.phases
       ? "- Skeleton: cover → retrieval (3–5 recap questions on prior knowledge the lesson builds on, not on today's new content) → 2–3 learning loops (each loop MUST contain both explanation pages AND at least one student check/activity page) → summary → exit ticket."
       : "- Order the slides from cover to exit ticket.",
@@ -97,7 +146,9 @@ export function buildMessages(input: DraftInput, problems?: Violation[]) {
       ? "- One teaching point per slide. Title = a full-sentence assertion (≤ 12 words). 2–3 key points per slide, each ≤ 9 words."
       : "- One teaching point per slide. Title = a full-sentence assertion.",
     o.visualPlanning === "outline" ? "- Concept, process and data pages need a meaningful visual (formula, function plot, chart, flow or a small table). Choose \"none\" only when the point needs a picture none of these can draw; the slide then shows a \"图示待补\" placeholder for the teacher." : "",
-    "- sourcePages: the textbook pages ([p.N] markers) that support the slide. Stay faithful to the source; do not invent facts.",
+    isMultiPdf
+      ? "- sourcePages: cite the exact integer sourcePage of each supporting page (for S1 use the page number N; for S2+ use the `sourcePage=...` integer shown on that line). Stay faithful to the sources; do not invent facts."
+      : "- sourcePages: the textbook pages ([p.N] markers) that support the slide. Stay faithful to the source; do not invent facts.",
     o.phases ? "- loop: learning loop number (1, 2, 3); use 0 for cover, retrieval, summary and exit." : "",
     input.params.language === "en+zh"
       ? "- glossary: the key English terms of the lesson with ONE Simplified Chinese translation each; every slide will use these."
@@ -114,7 +165,18 @@ export function buildMessages(input: DraftInput, problems?: Violation[]) {
   const user = [
     `Lesson title: ${input.lessonTitle}`,
     input.sections.length ? `Selected sections:\n${input.sections.map((s) => `- ${s.title} (pp. ${s.pageStart}–${s.pageEnd})`).join("\n")}` : "",
-    `<source>\n${neutralizeSource(sourceOf(input.pages).text)}\n</source>`,
+    pdfSources.length > 1
+      ? `Attached PDF sources:\n${pdfSources
+          .map((s, idx) =>
+            idx === 0
+              ? `- S1 (${s.role}): ${neutralizeSource(s.title)} — cite page N directly`
+              : `- S${idx + 1} (${s.role}): ${neutralizeSource(s.title)} — cite virtual sourcePage (${idx * SOURCE_STRIDE} + page)`,
+          )
+          .join("\n")}`
+      : "",
+    syllabusItems.length ? `Syllabus checklist (MUST cover all items):\n${syllabusItems.map((it, idx) => `${idx + 1}. ${neutralizeSource(it)}`).join("\n")}` : "",
+    noteSources.length ? `Teacher reference notes:\n${noteSources.map((n) => `- ${neutralizeSource(n.title)}: ${neutralizeSource(n.text)}`).join("\n")}` : "",
+    `<source>\n${neutralizeSource(sourceOf(input.pages, isMultiPdf).text)}\n</source>`,
     problems?.length ? `Your previous outline broke these rules; fix them:\n${problems.map((p) => `- ${p.message}`).join("\n")}` : "",
   ]
     .filter(Boolean)
@@ -136,6 +198,16 @@ interface NormalizeContext {
   options?: Partial<PipelineOptions>;
 }
 
+function resolveVirtualCitations(sourcePages: number[], validPages: number[]): number[] {
+  if (!validPages.some((v) => v > SOURCE_STRIDE)) return sourcePages;
+  const validSet = new Set(validPages);
+  return sourcePages.map((p) => {
+    if (validSet.has(p) || p > SOURCE_STRIDE) return p;
+    const candidates = validPages.filter((v) => v > SOURCE_STRIDE && decodeSourcePage(v).pageNo === p);
+    return candidates.length === 1 ? candidates[0]! : p;
+  });
+}
+
 /**
  * Assigns ids, derives layouts, clamps minutes/visuals to legal values, flags (never silently drops)
  * bad source pages and inserts check pages so no lecture run exceeds 10 minutes.
@@ -149,6 +221,7 @@ export function normalizeOutline(draft: DraftOutline, ctx: NormalizeContext): Ou
     const visual = o.visualPlanning === "writer" ? "none" : visuals.includes(s.visual) ? s.visual : visuals[0]!;
     return SlideSpec.parse({
       ...s,
+      sourcePages: resolveVirtualCitations(s.sourcePages ?? [], ctx.validPages),
       pageType,
       id: `sp${i + 1}`,
       layout: layoutForPageType(pageType),
@@ -178,10 +251,11 @@ export function rebalanceMinutes(outline: Outline, params: LessonParams): Outlin
   return Outline.parse({ ...outline, slides: enforceCheckCadence(slides) });
 }
 
-export async function draftOutline(ai: AiLayer, input: DraftInput): Promise<DraftResult> {
+export async function draftOutline(ai: AiLayer, input: MultiSourceDraftInput): Promise<DraftResult> {
   const o = optionsOf(input.options);
   const ctx: NormalizeContext = { validPages: input.pages.map((p) => p.no), simAvailable: !!simFor(input), pages: input.pages, options: o };
-  const { omitted } = sourceOf(input.pages);
+  const isMultiPdf = (input.sources ?? []).filter((s) => s.kind === "pdf").length > 1 || input.pages.some((p) => p.no > SOURCE_STRIDE);
+  const { omitted } = sourceOf(input.pages, isMultiPdf);
   const labels = new Map(input.pages.flatMap((p) => (p.label ? [[p.no, p.label] as const] : [])));
   const call = async (problems?: Violation[]) => {
     const res = await ai.callStructured({

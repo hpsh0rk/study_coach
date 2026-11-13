@@ -4,6 +4,8 @@ export interface TocEntry {
   title: string;
   /** 1-based page number the bookmark points to. */
   page: number;
+  /** Optional 1-based inclusive end page preserved when a TOC is filtered to a partial range. */
+  pageEnd?: number;
   children: TocEntry[];
 }
 
@@ -11,6 +13,7 @@ export const TocEntry: z.ZodType<TocEntry> = z.lazy(() =>
   z.object({
     title: z.string().trim().min(1).max(300),
     page: z.number().int().min(1),
+    pageEnd: z.number().int().min(1).optional(),
     children: z.array(TocEntry).max(200),
   }),
 );
@@ -54,13 +57,39 @@ export const PageText = z.object({
 });
 export type PageText = z.infer<typeof PageText>;
 
-/** Normalised output of PDF parsing (browser pdf.js today; any future parser must produce the same shape). */
-export const ParsedPdf = z.object({
+/** Fast browser preflight metadata read before extracting page text. */
+export const PdfInspection = z.object({
   title: z.string().max(300),
   pageCount: z.number().int().min(1).max(3000),
   toc: z.array(TocEntry).max(500),
-  pages: z.array(PageText),
+  pageLabels: z.record(z.string(), z.string()).default({}),
 });
+export type PdfInspection = z.infer<typeof PdfInspection>;
+
+/** Normalised output of PDF parsing (browser pdf.js today; any future parser must produce the same shape). */
+export const ParsedPdf = z
+  .object({
+    title: z.string().max(300),
+    pageCount: z.number().int().min(1).max(3000),
+    toc: z.array(TocEntry).max(500),
+    pages: z.array(PageText),
+  })
+  .superRefine((val, ctx) => {
+    if (val.pages.length > val.pageCount) {
+      ctx.addIssue({ code: "custom", path: ["pages"], message: "pages length cannot exceed pageCount" });
+    }
+    const seen = new Set<number>();
+    for (let i = 0; i < val.pages.length; i++) {
+      const no = val.pages[i]!.no;
+      if (no > val.pageCount) {
+        ctx.addIssue({ code: "custom", path: ["pages", i, "no"], message: `page ${no} exceeds pageCount ${val.pageCount}` });
+      }
+      if (seen.has(no)) {
+        ctx.addIssue({ code: "custom", path: ["pages", i, "no"], message: `duplicate page number ${no}` });
+      }
+      seen.add(no);
+    }
+  });
 export type ParsedPdf = z.infer<typeof ParsedPdf>;
 
 export const ChapterNode = z.object({

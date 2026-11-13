@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { ProviderError, type AiLayer } from "@kj/ai";
 import { cleanVisionText, pageFacts, visionParserId } from "@kj/textbook";
-import { newId } from "@kj/schema";
+import { newId, randomToken, type SyllabusLessonSource } from "@kj/schema";
 import { db } from "../../db/index.ts";
 import type { Env, SessionUser } from "../../env.ts";
 import { HttpError } from "../../http.ts";
@@ -93,6 +93,76 @@ export async function readPageImage(
     return { page, reused: false };
   } catch (err) {
     await d.update(parseUsage).set({ state: "failed", error: (err as Error).message.slice(0, 300) }).where(eq(parseUsage.id, id));
+    throw failure(err);
+  }
+}
+
+export const SYLLABUS_READ_PROMPT_VERSION = "syllabus.read@1";
+const SYLLABUS_READ_PROMPT = [
+  "这是一张课程考纲（Syllabus / 学习目标清单）的截图。请按顺序列出图片上的每一条具体考纲要求或必讲知识点：",
+  "- 每条单独一行，以 `- ` 开头；保留原有的编号（如 4.1 / Core 1 / Supplement 5）、物理化学符号与公式（行内公式用 $…$）。",
+  "- 忠实转写图片上的文字、数字与要求动词（如 State / Describe / Explain / 掌握 / 理解），不要编造图片中没有的条目，不要写多余开场白。",
+  "Transcribe every syllabus objective or learning checklist item from this screenshot, one bullet (`- ...`) per line, keeping exact numbering, command words, and $...$ math. Output the bullet list only.",
+].join("\n");
+
+export function extractSyllabusItems(text: string): string[] {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*(?:[-*•☐☑✓✔]|\d+[.)]|\([a-zA-Z0-9]+\))\s*/, "").trim())
+    .filter((line) => line.length >= 2 && !/^#{1,4}\s*$/.test(line));
+  return [...new Set(lines.map((l) => l.slice(0, 300)))].slice(0, 60);
+}
+
+/**
+ * Transcribes a pasted or uploaded syllabus screenshot into a structured `SyllabusLessonSource`
+ * using the organisation's configured vision provider. Never hardcodes gateway URLs or keys.
+ */
+export async function transcribeSyllabusImage(
+  env: Env,
+  user: SessionUser,
+  ai: AiLayer,
+  visionModel: string | null,
+  req: { image: string; title?: string; lessonId?: string },
+): Promise<{ source: SyllabusLessonSource; model: string }> {
+  const settings = await parserSettingsOf(env, user.orgId);
+  if (!visionModel) {
+    throw new HttpError(
+      403,
+      "VISION_OFF",
+      "看图模型未配置：请联系管理员在后台“AI 模型”里填写看图模型（如智谱 glm-4.6v-flash），或在下方手动粘贴考纲文字 · No vision model is configured",
+    );
+  }
+  if (req.image.length > MAX_IMAGE_CHARS || !IMAGE.test(req.image)) {
+    throw new HttpError(400, "VALIDATION", "请上传或粘贴 PNG、JPEG 或 WebP 格式的考纲图片 · Expected an image data: URL (JPEG, PNG or WebP)");
+  }
+  const refusal = parseAllowance(await parsedPagesToday(env, user.orgId, user.id), { pages: 1, paid: !isFreeVisionModel(visionModel) }, settings.paidEnabled);
+  if (refusal) {
+    throw new HttpError(refusal.status, refusal.code, refusalMessage(refusal, "考纲截图识别"), refusal.code === "PARSE_QUOTA" ? { remaining: refusal.remaining } : undefined);
+  }
+
+  try {
+    const res = await ai.callVision({
+      capability: "page.read",
+      promptVersion: SYLLABUS_READ_PROMPT_VERSION,
+      instructions: SYLLABUS_READ_PROMPT,
+      image: req.image,
+      timeoutMs: 90_000,
+      ctx: { orgId: user.orgId, userId: user.id, ...(req.lessonId ? { lessonId: req.lessonId } : {}) },
+    });
+    const text = cleanVisionText(res.text);
+    if (!text) throw new HttpError(502, "VISION_FAILED", "看图模型没有从图片中读出考纲文字，请换清晰截图或手动粘贴 · The vision model returned no text");
+    const items = extractSyllabusItems(text);
+    return {
+      source: {
+        id: `src_${randomToken(6)}`,
+        kind: "syllabus",
+        title: (req.title?.trim() || "考纲截图 Syllabus").slice(0, 300),
+        text: text.slice(0, 20_000),
+        ...(items.length ? { items } : {}),
+      },
+      model: visionModel,
+    };
+  } catch (err) {
     throw failure(err);
   }
 }
