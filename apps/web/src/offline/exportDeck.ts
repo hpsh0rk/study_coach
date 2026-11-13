@@ -85,7 +85,18 @@ async function inlineFontFaces(chars: Set<number>, math: boolean): Promise<{ css
   return { css: faces.join("\n"), files: faces.length, bytes };
 }
 
-const hasMath = (slides: Slide[]) => slides.some((s) => /\$[^$]+\$|"kind":"formula"/.test(JSON.stringify(s.content)));
+const hasMath = (slides: Pick<Slide, "content" | "notes">[], audience: OfflineAudience) =>
+  slides.some((s) => /\$[^$]+\$|"kind":"formula"/.test(JSON.stringify(s.content)) || (audience === "teacher" && /\$[^$]+\$/.test(s.notes)));
+
+/** True when any slide renders an ECharts visual (`chart` or `function`). */
+export function hasCharts(slides: Pick<Slide, "content">[]): boolean {
+  return slides.some(({ content: c }) => {
+    if (c.layout === "statement") return c.visual.kind === "chart" || c.visual.kind === "function";
+    if (c.layout === "chart") return c.chart.kind === "chart" || c.chart.kind === "function";
+    if (c.layout === "experiment") return c.sim.kind === "function";
+    return false;
+  });
+}
 
 function simIds(slides: Slide[]): string[] {
   const ids = new Set<string>();
@@ -133,7 +144,12 @@ export function serializeOfflineDeck(data: OfflineDeck): string {
  */
 async function buildOfflineHtml(lessonId: string, audience: OfflineAudience, answers: AnswerMode): Promise<OfflineFile> {
   const deck = (await lessonApi.deck(lessonId, audience, answers)) as unknown as OfflineSourceDeck;
-  const [js, css] = await Promise.all([text("/offline/runtime.js"), text("/offline/runtime.css")]);
+  const charts = hasCharts(deck.slides);
+  const [js, css, chartsJs] = await Promise.all([
+    text("/offline/runtime.js"),
+    text("/offline/runtime.css"),
+    charts ? text("/offline/runtime-charts.js") : Promise.resolve(""),
+  ]);
   const sims: Record<string, string> = {};
   for (const id of simIds(deck.slides)) {
     const entry = resolveEmbed(id);
@@ -143,7 +159,7 @@ async function buildOfflineHtml(lessonId: string, audience: OfflineAudience, ans
   const json = serializeOfflineDeck(data);
   const chars = new Set<number>();
   for (const ch of json + ALWAYS) chars.add(ch.codePointAt(0)!);
-  const fonts = await inlineFontFaces(chars, hasMath(deck.slides));
+  const fonts = await inlineFontFaces(chars, hasMath(deck.slides, audience));
   const html = [
     "<!doctype html>",
     '<html lang="zh-CN"><head><meta charset="utf-8">',
@@ -155,9 +171,12 @@ async function buildOfflineHtml(lessonId: string, audience: OfflineAudience, ans
     "</head><body>",
     '<div id="kj-root"></div>',
     `<script type="application/json" id="kj-deck">${json}</script>`,
+    chartsJs ? `<script>${chartsJs.replace(/<\/script/gi, "<\\/script")}</script>` : "",
     `<script>${js.replace(/<\/script/gi, "<\\/script")}</script>`,
     "</body></html>",
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
   // Dots go too: "… · 4.1 Force" would otherwise end in a fake ".1 Force" extension.
   const base = deck.lesson.title.replace(/[\\/:*?"<>|.]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 60) || "lesson";
   return { html, filename: `${base}${audience === "student" ? (deck.lesson.answers === "hidden" ? "（学生版·预习）" : "（学生版·复习）") : ""}.html`, fontFiles: fonts.files };

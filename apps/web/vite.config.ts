@@ -7,7 +7,7 @@ import { defineConfig, type Plugin } from "vite";
 const VENDOR_CHUNKS: Record<string, RegExp> = {
   echarts: /node_modules\/(\.pnpm\/[^/]+\/node_modules\/)?(echarts|zrender)\//,
   pdfjs: /node_modules\/(\.pnpm\/[^/]+\/node_modules\/)?pdfjs-dist\//,
-  katex: /node_modules\/(\.pnpm\/[^/]+\/node_modules\/)?katex\//,
+  katex: /node_modules\/(\.pnpm\/[^/]+\/node_modules\/)?katex\/.*\.(?:m?js|cjs)(?:\?|$)/,
 };
 
 const PDFJS_DIR = dirname(createRequire(import.meta.url).resolve("pdfjs-dist/package.json"));

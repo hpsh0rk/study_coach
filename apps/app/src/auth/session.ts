@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, eq, gt, isNull, lt } from "drizzle-orm";
 import type { Context, MiddlewareHandler } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { randomToken, sha256Hex } from "@kj/schema";
@@ -12,10 +12,13 @@ const SESSION_TTL_MS = 14 * 24 * 3600 * 1000;
 
 
 export async function createSession(c: Context<AppBindings>, userId: string): Promise<void> {
+  const now = Date.now();
   const token = randomToken(32);
-  await db(c.env)
-    .insert(sessions)
-    .values({ id: await sha256Hex(token), userId, expiresAt: Date.now() + SESSION_TTL_MS, userAgent: c.req.header("user-agent")?.slice(0, 200) ?? null });
+  const d = db(c.env);
+  await d.batch([
+    d.delete(sessions).where(lt(sessions.expiresAt, now)),
+    d.insert(sessions).values({ id: await sha256Hex(token), userId, expiresAt: now + SESSION_TTL_MS, userAgent: c.req.header("user-agent")?.slice(0, 200) ?? null }),
+  ]);
   setCookie(c, SESSION_COOKIE, token, {
     httpOnly: true,
     secure: new URL(c.req.url).protocol === "https:",

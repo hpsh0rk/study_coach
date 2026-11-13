@@ -1,15 +1,19 @@
 import { lazy, Suspense, type ReactNode } from "react";
 import { BrowserRouter, Link, NavLink, Route, Routes, useNavigate, useParams } from "react-router";
 import { AuthProvider, RequireAuth, useAuth } from "./auth.tsx";
-import { AdminPage } from "./pages/AdminPage.tsx";
-import { TextbooksPage } from "./pages/TextbooksPage.tsx";
 import { ChangePasswordPage, LoginPage } from "./pages/AuthPages.tsx";
-import { LessonPage } from "./pages/LessonPage.tsx";
-import { LessonsPage } from "./pages/LessonsPage.tsx";
-import { PlayPage, SharePage } from "./pages/PlayPages.tsx";
-import { PresenterPage } from "./pages/PresenterPage.tsx";
-import { ChaptersStep } from "./pages/wizard/ChaptersStep.tsx";
-import { UploadStep } from "./pages/wizard/UploadStep.tsx";
+
+const AdminPage = lazy(() => import("./pages/AdminPage.tsx").then((m) => ({ default: m.AdminPage })));
+const TextbooksPage = lazy(() => import("./pages/TextbooksPage.tsx").then((m) => ({ default: m.TextbooksPage })));
+const LessonPage = lazy(() => import("./pages/LessonPage.tsx").then((m) => ({ default: m.LessonPage })));
+const LessonsPage = lazy(() => import("./pages/LessonsPage.tsx").then((m) => ({ default: m.LessonsPage })));
+const PlayPage = lazy(() => import("./pages/PlayPages.tsx").then((m) => ({ default: m.PlayPage })));
+const SharePage = lazy(() => import("./pages/PlayPages.tsx").then((m) => ({ default: m.SharePage })));
+const PresenterPage = lazy(() => import("./pages/PresenterPage.tsx").then((m) => ({ default: m.PresenterPage })));
+const ChaptersStep = lazy(() => import("./pages/wizard/ChaptersStep.tsx").then((m) => ({ default: m.ChaptersStep })));
+const UploadStep = lazy(() => import("./pages/wizard/UploadStep.tsx").then((m) => ({ default: m.UploadStep })));
+
+const PageFallback = ({ dark = false }: { dark?: boolean }) => <div className={dark ? "page-loading dark" : "page-loading"}>Loading… 加载中</div>;
 
 function Shell({ children }: { children: ReactNode }) {
   const { me, ai, logout } = useAuth();
@@ -84,16 +88,18 @@ const devRoutes = __KJ_DEV_PAGES__
       const RenderPage = lazy(() => import("./pages/dev/RenderPage.tsx").then((m) => ({ default: m.RenderPage })));
       const PlayerPage = lazy(() => import("./pages/dev/PlayerPage.tsx").then((m) => ({ default: m.PlayerPage })));
       return [
-        <Route key="gallery" path="/dev/gallery" element={<Suspense><GalleryPage /></Suspense>} />,
-        <Route key="render" path="/dev/render" element={<Suspense><RenderPage /></Suspense>} />,
-        <Route key="player" path="/dev/player" element={<Suspense><PlayerPage /></Suspense>} />,
+        <Route key="gallery" path="/dev/gallery" element={<Suspense fallback={<PageFallback />}><GalleryPage /></Suspense>} />,
+        <Route key="render" path="/dev/render" element={<Suspense fallback={<PageFallback />}><RenderPage /></Suspense>} />,
+        <Route key="player" path="/dev/player" element={<Suspense fallback={<PageFallback dark />}><PlayerPage /></Suspense>} />,
       ];
     })()
   : [];
 
 const authed = (node: ReactNode, admin = false) => (
   <RequireAuth admin={admin}>
-    <Shell>{node}</Shell>
+    <Shell>
+      <Suspense fallback={<PageFallback />}>{node}</Suspense>
+    </Shell>
   </RequireAuth>
 );
 
@@ -104,10 +110,10 @@ export function App() {
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/change-password" element={<ChangePasswordPage />} />
-          <Route path="/s/:token" element={<SharePage />} />
+          <Route path="/s/:token" element={<Suspense fallback={<PageFallback dark />}><SharePage /></Suspense>} />
           {devRoutes}
-          <Route path="/play/:id" element={<RequireAuth><PlayPage /></RequireAuth>} />
-          <Route path="/presenter/:id" element={<RequireAuth><PresenterPage /></RequireAuth>} />
+          <Route path="/play/:id" element={<RequireAuth><Suspense fallback={<PageFallback dark />}><PlayPage /></Suspense></RequireAuth>} />
+          <Route path="/presenter/:id" element={<RequireAuth><Suspense fallback={<PageFallback dark />}><PresenterPage /></Suspense></RequireAuth>} />
           <Route path="/admin" element={authed(<AdminPage />, true)} />
           <Route path="/textbooks" element={authed(<TextbooksPage />)} />
           <Route path="/new" element={authed(<UploadStep />)} />

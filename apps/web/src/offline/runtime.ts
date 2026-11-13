@@ -4,7 +4,7 @@ import "@kj/player/player.css";
 import "./runtime.css";
 import { answerKey, keyAction, Player, type PlayerSlide, type Position } from "@kj/player";
 import type { TeachingLanguage, ThemeId } from "@kj/schema";
-import { inlineEmbeds } from "@kj/widgets/render";
+import { inlineEmbeds, renderRichText } from "@kj/widgets/render";
 
 /** Deck data embedded in an offline file by `buildOfflineHtml`. */
 export interface OfflineDeck {
@@ -35,11 +35,17 @@ function renderPresenter(): void {
   const next = deck.slides[pos.index + 1];
   doc.getElementById("kj-p-pos")!.textContent = `第 ${pos.index + 1} / ${deck.slides.length} 页`;
   doc.getElementById("kj-p-next")!.textContent = next ? `下一页 Next: ${"title" in next.content ? String(next.content.title) : next.pageType}` : "最后一页 Last slide";
-  doc.getElementById("kj-p-notes")!.textContent = slide.notes || "—";
+  renderRichText(doc.getElementById("kj-p-notes")!, slide.notes || "—");
   const answers = answerKey(slide.content);
   const box = doc.getElementById("kj-p-answers")!;
   box.hidden = !answers.length;
-  box.replaceChildren(...answers.map((a) => Object.assign(doc.createElement("li"), { textContent: a })));
+  box.replaceChildren(
+    ...answers.map((a) => {
+      const li = doc.createElement("li");
+      renderRichText(li, a);
+      return li;
+    }),
+  );
 }
 
 /** Notes and answers live in their own window, so pressing a key on the projector never shows them to the class. */
@@ -49,14 +55,20 @@ function openPresenter(): void {
   if (!presenter) return;
   const doc = presenter.document;
   doc.title = `演讲者 Presenter · ${deck.title}`;
+  // Copy embedded font-face and KaTeX stylesheet rules so inline math in notes/answers renders offline without network.
+  doc.head.replaceChildren(...Array.from(document.head.querySelectorAll("style")).map((s) => s.cloneNode(true)));
   doc.body.innerHTML =
-    '<style>body{font:18px/1.5 system-ui,"Noto Sans SC",sans-serif;margin:24px;background:#0f172a;color:#e2e8f0}h1{font-size:16px;color:#94a3b8;margin:0 0 4px}#kj-p-notes{white-space:pre-wrap;font-size:22px}#kj-p-answers{background:#422006;color:#fde68a;padding:12px 12px 12px 32px;border-radius:8px}</style>' +
+    '<style>html,body{height:auto;font:18px/1.5 system-ui,"Noto Sans SC",sans-serif;margin:24px;background:#0f172a;color:#e2e8f0}h1{font-size:16px;color:#94a3b8;margin:0 0 4px}#kj-p-notes{white-space:pre-wrap;font-size:22px}#kj-p-answers{background:#422006;color:#fde68a;padding:12px 12px 12px 32px;border-radius:8px}</style>' +
     '<h1 id="kj-p-pos"></h1><p id="kj-p-next" style="color:#94a3b8"></p><h1>讲稿 Notes</h1><div id="kj-p-notes"></div><h1 style="margin-top:16px">答案 Answer key</h1><ul id="kj-p-answers"></ul>' +
-    '<p style="color:#64748b;font-size:14px">这个窗口留在笔记本屏幕上；→ / PageDown 翻页 · Keep this window on the laptop screen.</p>';
+    '<p style="color:#64748b;font-size:14px">这个窗口留在笔记本屏幕上；→ / PageDown 翻页 · Home / End 首尾页 · B 黑屏 · Keep this window on the laptop screen.</p>';
   doc.addEventListener("keydown", (e) => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
     const action = keyAction(e.key);
     if (action === "next") player.next();
     else if (action === "prev") player.prev();
+    else if (action === "first") player.go({ index: 0, step: 0 });
+    else if (action === "last") player.go({ index: deck.slides.length - 1, step: 0 });
+    else if (action === "blank") player.setBlank(!player.blanked);
     else return;
     e.preventDefault();
   });

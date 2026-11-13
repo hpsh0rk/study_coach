@@ -1,10 +1,10 @@
-import { and, count, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import { checkSourceText, slideKey, sourceUnverified, suspiciousContent } from "@kj/generation";
 import { checkOutline, OUTLINE_SOURCE_CHARS, outlineTiming, verifyNumbers } from "@kj/pedagogy";
 import { LessonParams, LessonScope, newId, Outline, SlideContent, type PageType, type Slide, type Unverified } from "@kj/schema";
 import { seededRandom, withoutAnswers } from "@kj/templates";
 import { db } from "./db/index.ts";
-import { lessons, outlineVersions, shareLinks, slides } from "./db/schema.ts";
+import { lessons, outlineVersions, shareLinks, slideLocks, slides } from "./db/schema.ts";
 import { secret, type Env, type SessionUser } from "./env.ts";
 import { HttpError } from "./http.ts";
 import { labelsFor, pageTexts, scopeStats, selectionPages } from "./textbook/index.ts";
@@ -146,6 +146,7 @@ export async function carryOverSlides(env: Env, version: VersionRow): Promise<vo
   const specs = outlineOf(version).slides;
   const hashes = await Promise.all(specs.map((s) => slideKey(s, params)));
   const d = db(env);
+  await d.delete(slideLocks).where(lt(slideLocks.until, Date.now()));
   const existing = new Set((await d.select({ specId: slides.specId }).from(slides).where(eq(slides.outlineVersionId, version.id))).map((r) => r.specId));
   const candidates = await d
     .select()
@@ -272,6 +273,18 @@ export function versionView(v: VersionRow) {
 
 /** A draft holds this long at most: a request that dies mid-draft (closed tab, Worker limit) frees the lesson on its own. */
 export const DRAFT_LOCK_MS = 150_000;
+
+/** Acquires a per-slide generation lock and opportunistically sweeps expired locks across all lessons. */
+export async function acquireSlideLock(env: Env, outlineVersionId: string, specId: string, now = Date.now()): Promise<boolean> {
+  const d = db(env);
+  await d.delete(slideLocks).where(lt(slideLocks.until, now));
+  const locked = await d
+    .insert(slideLocks)
+    .values({ outlineVersionId, specId, until: now + DRAFT_LOCK_MS })
+    .onConflictDoUpdate({ target: [slideLocks.outlineVersionId, slideLocks.specId], set: { until: now + DRAFT_LOCK_MS }, setWhere: lt(slideLocks.until, now) })
+    .returning({ until: slideLocks.until });
+  return locked.length > 0;
+}
 
 export async function activeShare(env: Env, lessonId: string) {
   return (await db(env).select().from(shareLinks).where(and(eq(shareLinks.lessonId, lessonId), isNull(shareLinks.revokedAt))).limit(1))[0] ?? null;

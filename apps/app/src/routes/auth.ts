@@ -1,4 +1,4 @@
-import { and, count, eq, gt, gte, inArray, sql } from "drizzle-orm";
+import { and, count, eq, gt, gte, inArray, lte, or, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { auditLog, loginAttempts, users } from "../db/schema.ts";
@@ -22,12 +22,12 @@ async function tooManyAttempts(env: Env, keys: string[]): Promise<boolean> {
   return (rows[0]?.n ?? 0) > 0;
 }
 
-/** One upsert per key, so concurrent failures all count. */
-async function recordFailure(env: Env, keys: string[]): Promise<void> {
-  const now = Date.now();
-  const expired = sql`${loginAttempts.windowStart} <= ${now - WINDOW_MS}`;
+/** One upsert per key plus expired-row sweep, so concurrent failures all count while stale keys never accumulate. */
+export async function recordLoginFailure(env: Env, keys: string[], now = Date.now()): Promise<void> {
+  const cutoff = now - WINDOW_MS;
+  const expired = sql`${loginAttempts.windowStart} <= ${cutoff}`;
   const d = db(env);
-  const [first, ...rest] = keys.map((key) =>
+  const upserts = keys.map((key) =>
     d
       .insert(loginAttempts)
       .values({ key, windowStart: now, failures: 1 })
@@ -39,7 +39,11 @@ async function recordFailure(env: Env, keys: string[]): Promise<void> {
         },
       }),
   );
-  await d.batch([first!, ...rest]);
+  await d.batch([d.delete(loginAttempts).where(lte(loginAttempts.windowStart, cutoff)), ...upserts] as [any, ...any[]]);
+}
+
+export async function clearLoginAttempts(env: Env, userKey: string, now = Date.now()): Promise<void> {
+  await db(env).delete(loginAttempts).where(or(eq(loginAttempts.key, userKey), lte(loginAttempts.windowStart, now - WINDOW_MS)));
 }
 
 export const authRoutes = new Hono<AppBindings>()
@@ -52,13 +56,13 @@ export const authRoutes = new Hono<AppBindings>()
     const user = (await db(c.env).select().from(users).where(eq(users.username, username)).limit(1))[0];
     const ok = (await verifyPassword(body.password, user?.passwordHash ?? DUMMY_HASH)) && !!user && !user.disabledAt;
     if (!ok || !user) {
-      await recordFailure(c.env, keys);
+      await recordLoginFailure(c.env, keys);
       throw new HttpError(401, "INVALID_CREDENTIALS", "Wrong username or password · 用户名或密码错误");
     }
     if (needsRehash(user.passwordHash)) {
       await db(c.env).update(users).set({ passwordHash: await hashPassword(body.password) }).where(eq(users.id, user.id));
     }
-    await db(c.env).delete(loginAttempts).where(eq(loginAttempts.key, keys[1]!));
+    await clearLoginAttempts(c.env, keys[1]!);
     await createSession(c, user.id);
     await db(c.env).insert(auditLog).values({ orgId: user.orgId, actorId: user.id, action: "auth.login" });
     return c.json({ user: { id: user.id, username: user.username, displayName: user.displayName, role: user.role, mustChangePassword: user.mustChangePassword } });
