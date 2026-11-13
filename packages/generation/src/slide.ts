@@ -5,12 +5,12 @@ import { LAYOUT_IDS, SlideContent, type GlossaryEntry, type LayoutId, type Lesso
 import { BUDGETS, LAYOUTS, SLOT_SCHEMAS } from "@kj/templates";
 import { slotIssues, widgetIssues } from "@kj/templates/issues";
 import { findEmbed } from "@kj/widgets";
-import { applyGlossary, clipToBudgets, problemsOf, sanitizeWidgets, truncateLists } from "./checks.ts";
+import { applyGlossary, clipToBudgets, healChartFocus, problemsOf, sanitizeWidgets, trimExcessHighlights, truncateLists } from "./checks.ts";
 import { optionsOf, type PipelineOptions } from "./options.ts";
 import { neutralizeSource, SOURCE_RULE, suspiciousContent } from "./safety.ts";
 import { stubSlide } from "./slide-stub.ts";
 
-export const SLIDE_PROMPT_VERSION = "slide.write@9";
+export const SLIDE_PROMPT_VERSION = "slide.write@10";
 /** Source characters the writer sees for one slide. */
 export const SLIDE_SOURCE_CHARS = 12_000;
 
@@ -196,7 +196,7 @@ const WIDGET_RULES = [
   "Widgets are declarative JSON, never code:",
   '- formula: {"kind":"formula","tex":"v = f\\\\lambda","caption":"..."} (KaTeX).',
   '- function: {"kind":"function","expr":"A*sin(2*pi*x/L)","x":[0,4],"y":[-3,3],"xLabel":"distance / m","yLabel":"displacement / cm","params":[{"name":"A","label":"Amplitude / cm","min":0,"max":3,"step":0.1,"value":2}]} — expr uses only x, param names, numbers, + - * / ^, parentheses, pi, e and sin cos tan sqrt abs exp ln log min max.',
-  '- chart: {"kind":"chart","type":"bar|line|scatter","xLabel":"...","yLabel":"... / unit","categories":[...],"series":[{"name":"...","data":[...]}],"focus":0} — ≤ 4 series, ≤ 7 categories, real values from the source only.',
+  '- chart: {"kind":"chart","type":"bar|line|scatter","xLabel":"...","yLabel":"... / unit","categories":[...],"series":[{"name":"...","data":[...]}],"focus":0} — ≤ 4 series, ≤ 7 categories, real values from the source only; optional "focus" is a 0-based series index (< series.length), omit it when there is only 1 series.',
   '- flow: {"kind":"flow","steps":["...", "..."]} — 2–5 sequential process or causal steps (A → B → C), at most 4 words each; never use standalone conjunctions like "或" or "or" as a step box.',
   '- table: {"kind":"table","columns":["Quantity","Unit"],"rows":[["wavelength","λ / m"]],"caption":"..."} — every row has one cell per column; cells are 1–2 words or a number with unit, taken from the source.',
   '- placeholder: {"kind":"placeholder","hint":"Photo of a ripple tank"} — "图示待补": only when the point needs a picture no widget above can draw.',
@@ -227,6 +227,7 @@ function glossaryText(glossary: GlossaryEntry[]): string {
 
 const PROBLEM_PAGE_TYPES = new Set(["worked", "faded", "practice", "check", "exit", "retrieval"]);
 const PROBLEM_SLIDE_LAYOUTS = new Set(["steps", "quiz", "questions"]);
+const RED_EMPHASIS_FOCUS_RE = /红(?:色|字)|标红|加粗|\bred[\s-]*(?:bold|font|text|highlight)\b|\bbold\s+red\b/i;
 
 export function buildMessages(spec: SlideSpec, input: WriteInput, outline: Outline, problems?: string[]) {
   const o = optionsOf(input.options);
@@ -237,7 +238,7 @@ export function buildMessages(spec: SlideSpec, input: WriteInput, outline: Outli
     input.params.language === "zh"
       ? 'Screen text and speaker `notes` in pure Simplified Chinese. On statement slides, `terms` must use Simplified Chinese term names in `term` (with `zh: ""`), never English words unless teaching an explicit English symbol.'
       : input.params.language === "en+zh"
-        ? "Bilingual classroom mode (English + Simplified Chinese): write concise English primary text paired with Simplified Chinese glosses for key domain terms across slide types (not only statement `terms` chips — include concise Chinese key-term glosses where helpful within the word budget, and fill `terms[].zh` on statement slides)."
+        ? "Bilingual classroom mode (English + Simplified Chinese): keep bullets, stems and options in concise English; place Simplified Chinese only in statement `terms[].zh` chips or brief key-noun parentheses such as `magnetic field lines (磁感线)` (at most 1–2 nouns per item) — never append whole-clause Chinese translations at the end of English sentences."
         : 'Screen text and speaker `notes` in pure English (leave `terms[].zh` empty).';
   const def = PAGE_TYPES[spec.pageType];
   const isProblem = PROBLEM_PAGE_TYPES.has(spec.pageType) || PROBLEM_SLIDE_LAYOUTS.has(spec.layout);
@@ -253,11 +254,15 @@ export function buildMessages(spec: SlideSpec, input: WriteInput, outline: Outli
       ? "Every number, definition and formula must come from the source pages."
       : "Stay faithful to the slide plan; do not invent numbers.";
   const trimmedInstruction = input.instruction?.trim().slice(0, 200);
+  const wantsRedEmphasis = RED_EMPHASIS_FOCUS_RE.test(input.params.focus ?? "") || RED_EMPHASIS_FOCUS_RE.test(trimmedInstruction ?? "");
   const system = [
     `You write the on-screen content of ONE slide of a lesson (student level: ${input.params.level}). ${languageRule}`,
     `Layout "${spec.layout}" (${LAYOUTS[spec.layout].label.en}); page type ${spec.pageType} (${def.label.en}), about ${spec.minutes} minutes.`,
     o.budgetsInPrompt ? budgetText(spec.layout) : "",
-    "Rules: one teaching point; assertion-style title; short phrases, not paragraphs; no teacher talk or clichés on screen (no 'In this lesson', 'Let's', 'dive into', 'crucial'); use $...$ for inline math. Do not repeat what the neighbouring slides cover.",
+    "Rules: one teaching point; assertion-style title; short phrases, not paragraphs; no teacher talk or clichés on screen (no 'In this lesson', 'Let's', 'dive into', 'crucial'); use $...$ for inline math; use ==key term or rule== sparingly for red-bold key-phrase emphasis on core takeaways (at most 1–2 short phrases, ≤ 25% of slide words; never highlight whole sentences or slide titles). Do not repeat what the neighbouring slides cover.",
+    wantsRedEmphasis
+      ? "Teacher emphasis preference: highlight the core physical law, definition or key takeaway on explanatory/summary slides with ==...== (renders as bold red text), keeping highlights selective (≤ 25% of slide words)."
+      : "",
     `${sourceRule} Always write non-empty speaker \`notes\` (60–150 words) covering explanation, a question to ask, expected answer or misconception, and timing.`,
     glossaryText(outline.glossary),
     visualRule,
@@ -332,7 +337,7 @@ export async function writeSlide(ai: AiLayer, outline: Outline, specId: string, 
       ctx: input.ctx,
     });
 
-  const finish = (c: SlideContent) => pinSim(applyGlossary(c, outline.glossary, input.params.language), spec, pages);
+  const finish = (c: SlideContent) => trimExcessHighlights(healChartFocus(pinSim(applyGlossary(c, outline.glossary, input.params.language), spec, pages)));
   const checkText = checkSourceText(spec.sourcePages, input.pages);
   const invented = (c: SlideContent, notes: string) =>
     verifyNumbers(c, checkText, { pageType: spec.pageType, notes, sources: spec.sourcePages })

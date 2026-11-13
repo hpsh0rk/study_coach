@@ -1,4 +1,4 @@
-import type { PageType, SlideContent, Unverified, WidgetSpec } from "@kj/schema";
+import { stripRichMarkers, type PageType, type SlideContent, type Unverified, type WidgetSpec } from "@kj/schema";
 
 /**
  * "待核实" check: every number and formula on a slide should appear in its cited source pages, and
@@ -56,7 +56,7 @@ function sigFigRange(text: string): { min: number; max: number } {
 
 /** Numbers in prose or plain math, with thousands separators ("20 000", "3,000") and "a × 10^b". */
 export function numbersIn(raw: string): FoundNumber[] {
-  const s = texToPlain(raw)
+  const s = texToPlain(stripRichMarkers(raw))
     .replace(/\bp\.\s*\d+/gi, " ")
     .replace(/(?<![\d.]\s*(?:×|x|\*)\s*)\b10\s*\^\s*\(?([-−]?\d+)\)?/g, "1 × 10^$1");
   const out: FoundNumber[] = [];
@@ -73,7 +73,7 @@ export function numbersIn(raw: string): FoundNumber[] {
 }
 
 function fractionNumbersIn(raw: string): FoundNumber[] {
-  const s = texToPlain(raw).replace(/\bp\.\s*\d+/gi, " ");
+  const s = texToPlain(stripRichMarkers(raw)).replace(/\bp\.\s*\d+/gi, " ");
   const out: FoundNumber[] = [];
   for (const m of s.matchAll(FRAC_RE)) {
     const [, sign, numStr, denStr] = m;
@@ -144,7 +144,7 @@ function normalizedUnit(raw: string): { dimension: string; factor: number } | un
 
 function quantitiesIn(raw: string): FoundQuantity[] {
   const out: FoundQuantity[] = [];
-  for (const match of texToPlain(raw).matchAll(QUANTITY_RE)) {
+  for (const match of texToPlain(stripRichMarkers(raw)).matchAll(QUANTITY_RE)) {
     const number = fractionNumbersIn(match[1]!)[0] ?? numbersIn(match[1]!)[0];
     const unit = normalizedUnit(match[2]!);
     if (!number || !unit) continue;
@@ -268,7 +268,7 @@ function calcIssues(texts: string[]): { issues: Unverified[]; results: number[] 
     else issues.push({ kind: "calc", text: text.slice(0, 120), detail: `计算结果应约为 ${round(value)} · computes to ${round(value)}` });
   };
   for (const raw of texts) {
-    for (const piece of raw.split("$")) {
+    for (const piece of stripRichMarkers(raw).split("$")) {
       const plain = texToPlain(piece);
       if (!plain.includes("=")) continue;
       const parts = plain.split(/=|≈/).map((p) => p.trim());
@@ -347,7 +347,7 @@ function juxtaposedEquationSymbols(s: string, out: Set<string>): void {
 
 /** Symbols of a formula: single letters (TeX juxtaposition = product), Greek as Unicode, subscripts dropped. */
 export function symbolsOf(formula: string, tex: boolean): Set<string> {
-  let s = tex ? texToPlain(formula) : formula;
+  let s = tex ? texToPlain(formula) : stripRichMarkers(formula);
   s = s.replace(GREEK_WORDS, (w) => GREEK[w] ?? GREEK[w.toLowerCase()] ?? w).replace(LATIN_FUNCS, " ").replace(/_\s*\(?[\p{L}\d]+\)?/gu, "");
   const out = new Set<string>();
   if (tex) for (const ch of s.replace(/\b(?:sin|cos|tan|log|ln|sqrt|exp)\b/g, "")) if (/[A-Za-zα-ωΑ-Ω]/.test(ch)) out.add(ch);
@@ -527,7 +527,7 @@ function additiveFingerprint(lhsRaw: string, rhsRaw: string): string | undefined
 
 /** Canonical law fingerprint: F=ma ↔ a=F/m (not a=Fm), and v=u+at ↔ u=v-at (not v=u-at). */
 function formulaFingerprint(raw: string): string | undefined {
-  const plain = texToPlain(raw);
+  const plain = texToPlain(stripRichMarkers(raw));
   const at = plain.indexOf("=");
   if (at < 0) return undefined;
   const right = plain
@@ -558,11 +558,12 @@ interface SourceFormula {
 }
 
 function sourceFormulas(source: string): SourceFormula[] {
-  const mathSpans = [...source.matchAll(/\$\$([\s\S]*?)\$\$|\$([^$\n]+)\$/g)]
+  const cleanSource = stripRichMarkers(source);
+  const mathSpans = [...cleanSource.matchAll(/\$\$([\s\S]*?)\$\$|\$([^$\n]+)\$/g)]
     .map((m) => (m[1] ?? m[2] ?? "").trim())
     .filter((s) => /=/.test(s))
     .map((text) => ({ symbols: symbolsOf(text, true), fingerprint: formulaFingerprint(text) }));
-  const proseLines = source
+  const proseLines = cleanSource
     .split(/(?<=[.!?;])\s+|(?<=[。；！？])\s*|[,，]\s*(?=[^,，\n]*=)|[\p{Script=Han}：（）]+|\n/u)
     .filter((s) => /=/.test(s))
     .map((text) => ({ symbols: symbolsOf(text, false), fingerprint: formulaFingerprint(text) }));
@@ -573,7 +574,7 @@ function sourceFormulas(source: string): SourceFormula[] {
 function formulasOf(texts: { text: string; tex: boolean }[]): { text: string; tex: boolean }[] {
   const out: { text: string; tex: boolean }[] = [];
   for (const t of texts) {
-    const pieces = t.tex ? [t.text] : t.text.split("$").filter((_, i) => i % 2 === 1);
+    const pieces = t.tex ? [t.text] : stripRichMarkers(t.text).split("$").filter((_, i) => i % 2 === 1);
     for (const p of pieces) {
       const parts = p.split("=");
       if (parts.length < 2) continue;

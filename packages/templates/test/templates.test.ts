@@ -28,6 +28,8 @@ describe("layouts", () => {
     expect(SLOT_SCHEMAS.statement.safeParse({ ...c, bullets: [...c.bullets, "One more point"] }).success).toBe(false);
     const long = Array.from({ length: BUDGETS.statement.title.max + 1 }, () => "word").join(" ");
     expect(SLOT_SCHEMAS.statement.safeParse({ ...c, title: long }).success).toBe(false);
+    expect(BUDGETS.statement.terms.item.max).toBe(4);
+    expect(SLOT_SCHEMAS.statement.safeParse({ ...c, terms: [{ term: "牛顿第二定律", zh: "" }] }).success).toBe(true);
   });
 
   it("gallery cells (incl. table and 图示待补 variants) satisfy the strict slot schemas", () => {

@@ -1,5 +1,5 @@
 import type { Slide, TeachingLanguage, ThemeId } from "@kj/schema";
-import { overflowingSlots, PALETTES, planSlide, type ImageItem, type SlidePlan } from "./plan.ts";
+import { overflowingSlots, PALETTES, planSlide, resolveFontScale, type ImageItem, type PptxFontScale, type SlidePlan } from "./plan.ts";
 import { writePptx } from "./write.ts";
 
 export * from "./plan.ts";
@@ -29,6 +29,8 @@ export interface PptxDeck {
   title: string;
   theme: ThemeId;
   language?: TeachingLanguage;
+  fontScale?: PptxFontScale;
+  focus?: string;
   pageLabels?: Record<number, string>;
   slides: Pick<Slide, "content" | "notes" | "sources" | "unverified" | "pageType">[];
 }
@@ -44,7 +46,10 @@ export interface PptxExport {
 }
 
 export function planDeck(deck: PptxDeck): SlidePlan[] {
-  const plans = deck.slides.map((s) => planSlide(s, { theme: deck.theme, pageLabels: deck.pageLabels ?? {}, language: deck.language }));
+  const fontScale = resolveFontScale({ fontScale: deck.fontScale, focus: deck.focus });
+  const plans = deck.slides.map((s) =>
+    planSlide(s, { theme: deck.theme, pageLabels: deck.pageLabels ?? {}, language: deck.language, fontScale }),
+  );
   if (plans[0]) plans[0].notes = [plans[0].notes, fontNoteFor(deck.language)].filter(Boolean).join("\n\n");
   return plans;
 }
@@ -52,9 +57,10 @@ export function planDeck(deck: PptxDeck): SlidePlan[] {
 export const pptxFilename = (title: string) => `${title.replace(/[\\/:*?"<>|]+/g, " ").trim().slice(0, 60) || "lesson"}.pptx`;
 
 /** Deck → editable .pptx: one 16:9 slide per deck slide, native text / tables / charts, notes in speaker notes. */
-export async function exportPptx(deck: PptxDeck, opts: { chartImage?: (item: ImageItem) => Promise<string | null> } = {}): Promise<PptxExport> {
-  const plans = planDeck(deck);
-  const data = await writePptx(plans, { title: deck.title, fontFace: PPTX_FONT, palette: PALETTES[deck.theme] ?? PALETTES.classic, ...opts });
+export async function exportPptx(deck: PptxDeck, opts: { chartImage?: (item: ImageItem) => Promise<string | null>; fontScale?: PptxFontScale } = {}): Promise<PptxExport> {
+  const plans = planDeck(opts.fontScale ? { ...deck, fontScale: opts.fontScale } : deck);
+  const { fontScale: _fs, ...writeOpts } = opts;
+  const data = await writePptx(plans, { title: deck.title, fontFace: PPTX_FONT, palette: PALETTES[deck.theme] ?? PALETTES.classic, ...writeOpts });
   return {
     data,
     filename: pptxFilename(deck.title),

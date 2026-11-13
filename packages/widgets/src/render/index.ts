@@ -3,7 +3,7 @@ import { BarChart, LineChart, ScatterChart } from "echarts/charts";
 import { GridComponent, LegendComponent } from "echarts/components";
 import * as echarts from "echarts/core";
 import { SVGRenderer } from "echarts/renderers";
-import type { FlowSpec, FormulaSpec, FunctionSpec, PlaceholderSpec, SimSpec, TableSpec, WidgetSpec } from "@kj/schema";
+import { tokenizeRichText, type FlowSpec, type FormulaSpec, type FunctionSpec, type PlaceholderSpec, type RichInline, type SimSpec, type TableSpec, type WidgetSpec } from "@kj/schema";
 import { chartOption, functionOption, initialValues, resolveEmbed, type Palette } from "../index.ts";
 
 echarts.use([BarChart, LineChart, ScatterChart, GridComponent, LegendComponent, SVGRenderer]);
@@ -31,22 +31,33 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?: s
   return node;
 }
 
-/** Plain text with inline $...$ math rendered by KaTeX. Never interprets HTML. */
+function appendInline(parent: HTMLElement, item: RichInline, doc: Document): void {
+  if (item.kind === "math") {
+    const span = doc.createElement("span");
+    span.className = "kj-math";
+    try {
+      katex.render(item.tex, span, { displayMode: item.display, throwOnError: false, output: "html", strict: "ignore", trust: false });
+    } catch {
+      span.textContent = item.tex;
+    }
+    parent.append(span);
+  } else if (item.text) {
+    parent.append(doc.createTextNode(item.text));
+  }
+}
+
+/** Plain text with inline `$...$` KaTeX math and `**bold**` / `==red-bold==` emphasis. Never interprets HTML. */
 export function renderRichText(target: HTMLElement, text: string): HTMLElement {
+  const doc = target.ownerDocument ?? document;
   target.replaceChildren();
-  const parts = text.split(/(\$[^$]{1,200}\$)/g);
-  for (const part of parts) {
-    if (part.length > 2 && part.startsWith("$") && part.endsWith("$")) {
-      const span = document.createElement("span");
-      span.className = "kj-math";
-      try {
-        katex.render(part.slice(1, -1), span, { throwOnError: false, output: "html", strict: "ignore", trust: false });
-      } catch {
-        span.textContent = part.slice(1, -1);
-      }
-      target.append(span);
-    } else if (part) {
-      target.append(document.createTextNode(part));
+  for (const token of tokenizeRichText(text)) {
+    if (token.kind === "text" || token.kind === "math") {
+      appendInline(target, token, doc);
+    } else {
+      const strong = doc.createElement("strong");
+      if (token.kind === "highlight") strong.className = "kj-em-red";
+      for (const child of token.children) appendInline(strong, child, doc);
+      target.append(strong);
     }
   }
   return target;

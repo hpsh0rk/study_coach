@@ -10,6 +10,7 @@
   --kj-panel-line: #c9d7ef;
   --kj-good: #1e7d46;
   --kj-bad: #b5361f;
+  --kj-em-red: #c81e1e;
   --kj-muted: #b9c2d0;
   --kj-grid: #dfe5ee;
   --kj-series-1: #1f5fbf;
@@ -28,6 +29,7 @@
   --kj-panel-line: #3f6457;
   --kj-good: #8ee09f;
   --kj-bad: #ff9b85;
+  --kj-em-red: #ff7b72;
   --kj-muted: #5d7a70;
   --kj-grid: #345549;
   --kj-series-1: #ffd166;
@@ -63,6 +65,17 @@
 .kj-slide button {
   font: inherit;
   color: inherit;
+}
+
+.kj-em-red {
+  color: var(--kj-em-red, #c81e1e);
+  font-weight: 700;
+}
+.presenter .kj-em-red,
+.kj-notes .kj-em-red,
+#kj-p-notes .kj-em-red,
+#kj-p-answers .kj-em-red {
+  color: #ff7b72;
 }
 
 .kj-badge {
@@ -135,6 +148,9 @@
 .kj-list > li {
   margin: 0 0 0.4em;
 }
+.kj-list > li:last-child {
+  margin-bottom: 0;
+}
 .kj-list > li::marker {
   color: var(--kj-accent);
 }
@@ -154,17 +170,19 @@
 .kj-slot-terms {
   display: flex;
   flex-wrap: wrap;
-  gap: 16px;
+  gap: 10px 14px;
   font-size: 48px;
+  line-height: 1.15;
 }
 .kj-term {
   display: inline-flex;
   gap: 12px;
   align-items: baseline;
-  padding: 8px 20px;
+  padding: 4px 16px;
   border-radius: 14px;
   border: 3px solid var(--kj-panel-line);
   background: var(--kj-panel);
+  line-height: 1.15;
 }
 .kj-term-zh {
   color: var(--kj-soft);

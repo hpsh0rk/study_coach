@@ -1,3 +1,5 @@
+import { stripRichMarkers } from "@kj/schema";
+
 /** Sentences long enough to teach from; CJK and Latin punctuation both split. */
 export function sentencesOf(text: string): string[] {
   return text
@@ -11,7 +13,7 @@ const DANGLING_EN_WORD = /\b(?:a|an|the|of|to|in|on|at|by|for|with|from|into|abo
 
 /** First `max` words without trailing punctuation or dangling function words (CJK: max × 1.7 characters). */
 export function clip(text: string, max: number): string {
-  const s = text.replace(/[.!?。！？;；,，:：]+$/, "").trim();
+  const s = stripRichMarkers(text).replace(/[.!?。！？;；,，:：]+$/, "").trim();
   if (/[\u3400-\u9fff]/.test(s)) {
     const cut = s.slice(0, Math.floor(max * 1.7)).replace(/[的与和或及在于向从跟对,，；：、]+$/, "");
     return cut || s.slice(0, Math.max(1, Math.floor(max * 1.7)));

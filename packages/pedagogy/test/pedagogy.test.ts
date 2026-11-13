@@ -64,6 +64,26 @@ describe("checkSlide", () => {
     const v = checkSlide({ layout: "statement", title: "In this lesson, let's dive into waves", bullets: ["Waves move energy"], visual: { kind: "formula", tex: "v=f\\lambda", caption: "" }, terms: [] });
     expect(v.length).toBeGreaterThan(0);
   });
+
+  it("allows selective ==...== key-phrase emphasis (≤ 25%) and warns on whole-slide red walls (> 25%)", () => {
+    const selective = checkSlide({
+      layout: "statement",
+      title: "Magnetic fields surround permanent magnets",
+      bullets: ["==Field lines== run from north to south", "Closer lines show a stronger magnetic field", "Iron filings reveal the pattern clearly"],
+      visual: { kind: "formula", tex: "B = \\mu_0 n I", caption: "" },
+      terms: [],
+    });
+    expect(selective.map((x) => x.code)).not.toContain("emphasis-density");
+
+    const redWall = checkSlide({
+      layout: "statement",
+      title: "==Magnetic fields surround permanent magnets==",
+      bullets: ["==Field lines run from north to south==", "==Closer lines show a stronger magnetic field=="],
+      visual: { kind: "formula", tex: "B = \\mu_0 n I", caption: "" },
+      terms: [],
+    });
+    expect(redWall).toEqual(expect.arrayContaining([expect.objectContaining({ code: "emphasis-density", level: "warning" })]));
+  });
 });
 
 describe("scopeAdvice", () => {

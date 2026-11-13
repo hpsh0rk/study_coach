@@ -337,4 +337,150 @@ describe("the .pptx file", () => {
     expect(n1).toContain("notes for title-sample");
     expect(n1).toContain("PingFang SC");
   });
+
+  it("splits ==...== and **...** into native OOXML red-bold/bold runs (#C81E1E classic / #FF7B72 chalk) and strips markers in titles and speaker notes", async () => {
+    const richSlide = {
+      content: {
+        layout: "statement" as const,
+        title: "Permanent magnets: ==key law==",
+        bullets: [
+          "Steel is a ==hard magnetic material== with **high coercivity**",
+          "Equation $B == \\mu_0 n I$ and ==Force $F = ma$==",
+        ],
+        visual: { kind: "table" as const, columns: ["Material", "==Type=="], rows: [["Steel", "**Hard**"], ["Iron", "Soft"]] },
+        terms: [{ term: "**coercivity**", zh: "==矫顽力==" }],
+      },
+      notes: "Emphasize ==hard magnetic material== and **north-to-south** direction.",
+      sources: [698],
+      unverified: [],
+      pageType: "concept" as const,
+    };
+
+    const classicExport = await exportPptx({ title: "Rich classic", theme: "classic", slides: [richSlide] });
+    const chalkExport = await exportPptx({ title: "Rich chalk", theme: "chalk", slides: [richSlide] });
+
+    const classicBullets = classicExport.plans[0]!.items.find((i): i is TextItem => i.kind === "text" && i.slot === "bullets")!;
+    expect(classicBullets.paras[0]!.runs).toEqual([
+      { text: "Steel is a " },
+      { text: "hard magnetic material", bold: true, color: "C81E1E" },
+      { text: " with " },
+      { text: "high coercivity", bold: true },
+    ]);
+    expect(classicBullets.paras[1]!.runs).toEqual([
+      { text: "Equation B == μ₀ n I and " },
+      { text: "Force F = ma", bold: true, color: "C81E1E" },
+    ]);
+
+    const chalkBullets = chalkExport.plans[0]!.items.find((i): i is TextItem => i.kind === "text" && i.slot === "bullets")!;
+    expect(chalkBullets.paras[0]!.runs[1]).toEqual({ text: "hard magnetic material", bold: true, color: "FF7B72" });
+
+    // Single-style slide title and speaker notes strip == and ** cleanly
+    const titleItem = classicExport.plans[0]!.items.find((i): i is TextItem => i.kind === "text" && i.slot === "title")!;
+    expect(titleItem.paras[0]!.runs).toEqual([{ text: "Permanent magnets: key law" }]);
+    expect(classicExport.plans[0]!.notes).toContain("Emphasize hard magnetic material and north-to-south direction.");
+    expect(classicExport.plans[0]!.notes).not.toContain("==");
+    expect(classicExport.plans[0]!.notes).not.toContain("**");
+
+    // Verify OOXML <a:r> runs carry b="1" and srgbClr C81E1E / FF7B72 while preserving math == and stripping emphasis markers
+    const classicZip = await JSZip.loadAsync(classicExport.data);
+    const classicXml = await classicZip.file("ppt/slides/slide1.xml")!.async("string");
+    expect(classicXml).toContain('val="C81E1E"');
+    expect(classicXml).toContain('b="1"');
+    expect(classicXml).toContain("<a:t>Equation B == μ₀ n I and </a:t>");
+    expect(classicXml).toContain("<a:t>Force F = ma</a:t>");
+    expect(classicXml).not.toContain("==Force");
+    expect(classicXml).not.toContain("==hard");
+    expect(classicXml).not.toContain("**");
+
+    const chalkZip = await JSZip.loadAsync(chalkExport.data);
+    const chalkXml = await chalkZip.file("ppt/slides/slide1.xml")!.async("string");
+    expect(chalkXml).toContain('val="FF7B72"');
+  });
+
+  it("supports ~30pt classroom fontScale ('large') explicitly or auto-inferred from focus while keeping dense gallery slides overflow-free", async () => {
+    const conciseDeck = {
+      title: "IGCSE Magnetism",
+      theme: "classic" as const,
+      slides: [
+        {
+          content: {
+            layout: "statement" as const,
+            title: "Magnetic fields",
+            bullets: ["==Field lines== run N to S", "Closer lines mean stronger field"],
+            visual: { kind: "table" as const, columns: ["Material", "Behaviour"], rows: [["Steel", "Permanent"], ["Soft iron", "Temporary"]] },
+            terms: [],
+          },
+          notes: "Note",
+          sources: [700],
+          pageType: "concept" as const,
+        },
+        {
+          content: {
+            layout: "steps" as const,
+            title: "Find wave speed",
+            problem: "A wave has f = 5 Hz and λ = 2 m.",
+            steps: [
+              { text: "Write $v = f\\lambda$", why: "Formula" },
+              { text: "Substitute $5 \\times 2$", why: "Values" },
+              { text: "$v = 10$ m/s", why: "SI unit" },
+            ],
+          },
+          notes: "Note",
+          sources: [701],
+          pageType: "worked" as const,
+        },
+        {
+          content: {
+            layout: "order" as const,
+            title: "Order magnetisation steps",
+            mode: "order" as const,
+            items: [
+              { text: "Place steel bar in coil", match: "" },
+              { text: "Switch on DC current", match: "" },
+              { text: "Remove magnetised steel", match: "" },
+            ],
+          },
+          notes: "Note",
+          sources: [702],
+          pageType: "sequence" as const,
+        },
+      ],
+    };
+
+    const stdRes = await exportPptx(conciseDeck);
+    const largeRes = await exportPptx({ ...conciseDeck, fontScale: "large" });
+    const focusAutoRes = await exportPptx({ ...conciseDeck, focus: "整体大概在30号字体左右，重点知识用红色字体加粗" });
+
+    const stdBullets = stdRes.plans[0]!.items.find((i): i is TextItem => i.kind === "text" && i.slot === "bullets")!;
+    const largeBullets = largeRes.plans[0]!.items.find((i): i is TextItem => i.kind === "text" && i.slot === "bullets")!;
+    const autoBullets = focusAutoRes.plans[0]!.items.find((i): i is TextItem => i.kind === "text" && i.slot === "bullets")!;
+    expect(stdBullets.fontPx).toBe(56); // 28pt
+    expect(largeBullets.fontPx).toBe(60); // 30pt
+    expect(autoBullets.fontPx).toBe(60); // auto-selected 30pt from focus!
+
+    const largeTable = largeRes.plans[0]!.items.find((i) => i.kind === "table")!;
+    expect(largeTable.kind === "table" && largeTable.fontPx).toBeGreaterThanOrEqual(52); // 26–28pt
+
+    const largeStep = largeRes.plans[1]!.items.find((i): i is TextItem => i.kind === "text" && i.slot === "steps.0")!;
+    expect(largeStep.fontPx).toBeGreaterThanOrEqual(52);
+    expect(largeStep.minFontPx).toBeGreaterThanOrEqual(52);
+
+    const largeCard = largeRes.plans[2]!.items.find((i): i is TextItem => i.kind === "text" && i.slot.startsWith("items."))!;
+    expect(largeCard.fontPx).toBe(60);
+    expect(largeCard.minFontPx).toBeGreaterThanOrEqual(52);
+
+    // OOXML verifies sz="3000" (30pt) in slide1.xml
+    const largeZip = await JSZip.loadAsync(largeRes.data);
+    const s1Xml = await largeZip.file("ppt/slides/slide1.xml")!.async("string");
+    expect(s1Xml).toContain('sz="3000"');
+
+    // Dense gallery slides still auto-fit with zero overflow in large mode
+    const denseGallery = await exportPptx({
+      title: "Dense gallery large",
+      theme: "classic",
+      slides: galleryCells().map((c) => ({ content: c.content, notes: c.id, sources: [1], pageType: "concept" as const })),
+      fontScale: "large",
+    });
+    expect(denseGallery.overflow).toEqual([]);
+  });
 });
