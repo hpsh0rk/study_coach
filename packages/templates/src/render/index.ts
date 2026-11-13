@@ -3,6 +3,8 @@ import { renderRichText, renderWidget, type WidgetHandle } from "@kj/widgets/ren
 import { CANVAS, FONT } from "../budgets.ts";
 import { stepsOf } from "../index.ts";
 
+export { renderRichText };
+
 export const THEMES: { id: ThemeId; label: string }[] = [
   { id: "classic", label: "经典蓝 Classic" },
   { id: "chalk", label: "黑板绿 Chalk" },
@@ -25,6 +27,8 @@ export interface RenderOptions {
   language?: TeachingLanguage;
   /** The content went through withoutAnswers(): reveal steps show a placeholder, nothing is marked correct. */
   hideAnswers?: boolean;
+  /** Live classroom player: when 0 tally votes are entered on a poll quiz, allow touchboard option taps. */
+  allowPollClick?: boolean;
 }
 
 /** A built-in label in the lesson's teaching language. */
@@ -92,21 +96,25 @@ function afterClass(b: Builder, parent: HTMLElement): HTMLElement {
 }
 
 /** Vote bars inside each option, revealed at step `k`; counts come from the teacher (RenderOptions.tally). `compact` shows counts only. */
-function tally(b: Builder, hosts: HTMLElement[], k: number, compact = false): void {
+function tally(b: Builder, hosts: HTMLElement[], k: number, compact = false, unlockWhenEmpty = false): void {
   const parts = hosts.map((host) => {
     host.classList.add("kj-tallied");
     const box = step(node("span", "kj-tally", host), k);
     const bar = node("span", "kj-tally-bar", box);
     const n = node("span", "kj-tally-n", box);
-    return { bar, n };
+    return { host, box, bar, n };
   });
   const set = (counts: number[]) => {
     const total = counts.reduce((s, x) => s + Math.max(0, x || 0), 0);
     parts.forEach((p, i) => {
       const v = Math.max(0, counts[i] || 0);
       const pct = total ? Math.round((v / total) * 100) : 0;
+      p.box.dataset.empty = String(total === 0);
       p.bar.style.width = `${pct}%`;
       p.n.textContent = !total ? "–" : compact ? String(v) : `${v} · ${pct}%`;
+      if (unlockWhenEmpty && p.host instanceof HTMLButtonElement) {
+        p.host.disabled = !b.opts.interactive || total > 0;
+      }
     });
   };
   set(b.opts.tally ?? []);
@@ -304,8 +312,8 @@ const RENDERERS: { [L in SlideContent["layout"]]: (b: Builder, c: ContentOf<L>) 
       if (!b.opts.hideAnswers) btn.dataset.correct = String(i === c.answer);
       node("b", "kj-option-letter", btn).textContent = LETTERS[i] ?? String(i + 1);
       text("span", "kj-option-text", o.text, btn);
-      // A hinge question is teacher-led: one tap must not give the answer away before the vote.
-      btn.disabled = !b.opts.interactive || !!c.poll;
+      // A hinge question locks options once votes are collected; when 0 votes are entered in the live player, touchboards can tap directly.
+      btn.disabled = !b.opts.interactive || (!!c.poll && !b.opts.allowPollClick);
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
         grid.querySelectorAll(".kj-option").forEach((x) => x.classList.remove("picked"));
@@ -320,7 +328,7 @@ const RENDERERS: { [L in SlideContent["layout"]]: (b: Builder, c: ContentOf<L>) 
       });
       return btn;
     });
-    if (c.poll) tally(b, buttons, 1);
+    if (c.poll) tally(b, buttons, 1, false, !!b.opts.allowPollClick);
     grid.prepend(feedback);
     const ex = step(slot("explain", body, "kj-fit"), c.poll ? 2 : 1);
     ex.classList.add("kj-answer");
@@ -449,10 +457,13 @@ export function fitSources(root: HTMLElement, avoid: DOMRect | null): void {
   const chips = [...src.querySelectorAll<HTMLElement>(".kj-source")];
   chips.forEach((c) => (c.hidden = false));
   if (!avoid || !chips.length) return;
+  const rotated = avoid.height > avoid.width * 1.5;
   const clashes = (el: HTMLElement) => {
     const r = el.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return false;
+    if (rotated) return r.bottom > avoid.top - 8 && r.right > avoid.left && r.left < avoid.right;
     // Chips run left to right from the footer's left edge, so anything reaching the bar's left edge is under it or past it.
-    return r.width > 0 && r.right > avoid.left - 8 && r.bottom > avoid.top && r.top < avoid.bottom;
+    return r.right > avoid.left - 8 && r.bottom > avoid.top && r.top < avoid.bottom;
   };
   if (!clashes(chips[chips.length - 1]!)) return;
   const more = node("span", "kj-source kj-source-more", src);
@@ -484,7 +495,18 @@ function overflows(n: HTMLElement): boolean {
   });
 }
 
-/** Bounded font step-down (56px → 48px body, 72px → 60px title) for slots that overflow. */
+const FORMULA_BASE_PX = 104;
+
+/** Proportional scale factor for display equations so wide KaTeX blocks fit horizontally without dropping below `minPx` (48px). */
+export function formulaScaleFor(neededWidth: number, availWidth: number, basePx = FORMULA_BASE_PX, minPx: number = FONT.bodyMin): number {
+  const minScale = minPx / basePx;
+  if (!(availWidth > 0) || neededWidth <= availWidth + 1) return 1;
+  const raw = Math.min(1, availWidth / neededWidth);
+  if (raw <= minScale) return minScale;
+  return Math.max(minScale, Math.floor(raw * 1000) / 1000);
+}
+
+/** Bounded font step-down (56px → 48px body, 72px → 60px title, 104px → 48px display formula) for slots that overflow. */
 export function fitSlide(root: HTMLElement): void {
   root.querySelectorAll<HTMLElement>(".kj-fit").forEach((s) => {
     s.style.setProperty("--kj-scale", "1");
@@ -493,6 +515,16 @@ export function fitSlide(root: HTMLElement): void {
     while (overflows(s) && scale > min + 1e-6) {
       scale = Math.max(min, scale - 0.025);
       s.style.setProperty("--kj-scale", (Math.ceil(scale * 1000) / 1000).toFixed(3));
+    }
+  });
+  const minFormula = FONT.bodyMin / FORMULA_BASE_PX;
+  root.querySelectorAll<HTMLElement>(".kj-formula-tex").forEach((tex) => {
+    tex.style.setProperty("--kj-formula-scale", "1");
+    let scale = formulaScaleFor(tex.scrollWidth, tex.clientWidth);
+    tex.style.setProperty("--kj-formula-scale", String(scale));
+    while (tex.clientWidth > 0 && tex.scrollWidth > tex.clientWidth + 1 && scale > minFormula + 1e-6) {
+      scale = Math.max(minFormula, scale - 0.015);
+      tex.style.setProperty("--kj-formula-scale", String(scale));
     }
   });
 }

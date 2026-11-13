@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { labelOf } from "@kj/textbook";
 import { checkOutline, densityOf, outlineTiming, PAGE_TYPES, planBudget, TIME_TOLERANCE } from "@kj/pedagogy";
-import { PAGE_TYPE_IDS, type Outline, type PageType, type SlideSpec, type VisualKind } from "@kj/schema";
+import { PAGE_TYPE_IDS, type Outline, type PageType, type SlideSpec, type TeachingLanguage, type VisualKind } from "@kj/schema";
 import { layoutForPageType, LAYOUTS, PAGE_TYPE_VISUALS } from "@kj/templates";
 import { ApiError } from "../../api.ts";
+import { RichText } from "../../components/RichText.tsx";
 import { UnverifiedBadge } from "../../components/Unverified.tsx";
 import { lessonApi, type LessonView, type VersionView } from "../../lessonApi.ts";
 import { DraftingProgress } from "./drafting.tsx";
@@ -15,9 +16,9 @@ import { UNSAVED_MESSAGE, useUnsavedGuard } from "./unsaved.ts";
 const VISUAL_LABEL: Record<VisualKind, string> = { none: "无 None", chart: "图表 Chart", function: "函数图 Plot", flow: "流程 Flow", formula: "公式 Formula", sim: "模拟实验 Sim", table: "表格 Table" };
 /** On layouts that always show a visual, "none" renders the 图示待补 placeholder. */
 const visualLabel = (v: VisualKind, spec: SlideSpec) => (v === "none" && LAYOUTS[spec.layout].visual === "required" ? "图示待补 Visual to add" : VISUAL_LABEL[v]);
-const cleanedOutline = (outline: Outline): Outline => ({
+const cleanedOutline = (outline: Outline, language: TeachingLanguage = "en+zh"): Outline => ({
   ...outline,
-  slides: outline.slides.map((s) => ({ ...s, title: s.title.trim() || "Untitled", keyPoints: s.keyPoints.map((k) => k.trim()).filter(Boolean) })),
+  slides: outline.slides.map((s) => ({ ...s, title: s.title.trim() || (language === "en" ? "Untitled" : "未命名页面"), keyPoints: s.keyPoints.map((k) => k.trim()).filter(Boolean) })),
 });
 
 function TimeBudget({ outline, minutes }: { outline: Outline; minutes: number }) {
@@ -198,6 +199,7 @@ export function OutlineStep({ view, reached, onChanged }: { view: LessonView; re
   const [recoverableDraft, setRecoverableDraft] = useState<Outline | null>(null);
   const [needAck, setNeedAck] = useState<string | null>(null);
   const [draftingSince, setDraftingSince] = useState<number | null>(view.drafting?.startedAt ?? null);
+  const draftAbortRef = useRef<AbortController | null>(null);
   const params = version?.params ?? view.lesson.params;
   const readOnly = !!version?.confirmedAt;
   const labels = useMemo(() => new Map(Object.entries(view.pageLabels).map(([k, v]) => [Number(k), v])), [view.pageLabels]);
@@ -238,12 +240,13 @@ export function OutlineStep({ view, reached, onChanged }: { view: LessonView; re
     try {
       return await fn();
     } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") return undefined;
       if (e instanceof ApiError && e.code === "OVER_BUDGET_ACK_REQUIRED") setNeedAck(e.message);
       else if (e instanceof ApiError && e.code === "DRAFT_IN_PROGRESS") setDraftingSince((s) => s ?? Date.now());
       else {
         const changed = e instanceof ApiError && e.code === "OUTLINE_CHANGED";
         const immutable = e instanceof ApiError && e.code === "OUTLINE_VERSION_IMMUTABLE";
-        if (changed && version && outline) saveOutlineDraft(window.localStorage, view.lesson.id, version.id, cleanedOutline(outline));
+        if (changed && version && outline) saveOutlineDraft(window.localStorage, view.lesson.id, version.id, cleanedOutline(outline, params.language));
         setConflict(changed || immutable);
         setError(changed ? `${e.message} 你的修改已保存在这台设备上。` : e instanceof ApiError ? e.message : (e as Error).message);
       }
@@ -255,7 +258,7 @@ export function OutlineStep({ view, reached, onChanged }: { view: LessonView; re
 
   async function save(): Promise<VersionView | null> {
     if (!version || !outline) return null;
-    const cleaned = cleanedOutline(outline);
+    const cleaned = cleanedOutline(outline, params.language);
     const r = await lessonApi.save(view.lesson.id, version.id, cleaned, version.rev);
     clearOutlineDraft(window.localStorage, view.lesson.id, version.id);
     setRecoverableDraft(null);
@@ -291,7 +294,16 @@ export function OutlineStep({ view, reached, onChanged }: { view: LessonView; re
         <Stepper current="outline" reached={reached} lessonId={view.lesson.id} />
         <StepIntro step="outline" />
         {draftingSince !== null ? (
-          <DraftingProgress lessonId={view.lesson.id} startedAt={draftingSince} onDone={drafted} />
+          <DraftingProgress
+            lessonId={view.lesson.id}
+            startedAt={draftingSince}
+            onDone={drafted}
+            onStop={() => {
+              draftAbortRef.current?.abort();
+              setDraftingSince(null);
+              setBusy("");
+            }}
+          />
         ) : (
           <div className="card center">
             <p>还没有大纲 · No outline yet</p>
@@ -300,11 +312,28 @@ export function OutlineStep({ view, reached, onChanged }: { view: LessonView; re
               disabled={!!busy}
               onClick={() =>
                 run("draft", async () => {
+                  const ac = new AbortController();
+                  draftAbortRef.current = ac;
                   setDraftingSince(Date.now());
                   try {
-                    await lessonApi.draft(view.lesson.id);
+                    const res = await fetch(`/api/lessons/${view.lesson.id}/outline`, {
+                      method: "POST",
+                      credentials: "same-origin",
+                      headers: { "x-kj-csrf": "1" },
+                      signal: ac.signal,
+                    });
+                    if (!res.ok) {
+                      const text = await res.text();
+                      const data = text ? JSON.parse(text) : {};
+                      const err = (data as { error?: { code?: string; message?: string; detail?: unknown } }).error;
+                      throw new ApiError(res.status, err?.code ?? "HTTP", err?.message ?? `HTTP ${res.status}`, err?.detail);
+                    }
                     await drafted();
                   } catch (e) {
+                    if (ac.signal.aborted || (e instanceof Error && e.name === "AbortError")) {
+                      setDraftingSince(null);
+                      return;
+                    }
                     if (!(e instanceof ApiError && e.code === "DRAFT_IN_PROGRESS")) setDraftingSince(null);
                     throw e;
                   }
@@ -377,7 +406,7 @@ export function OutlineStep({ view, reached, onChanged }: { view: LessonView; re
           <div className="objectives">
             {outline.objectives.map((o, i) => (
               <span key={i} className="objective">
-                🎯 {o}
+                🎯 <RichText text={o} />
               </span>
             ))}
           </div>
@@ -423,7 +452,8 @@ export function OutlineStep({ view, reached, onChanged }: { view: LessonView; re
             onDelete={() => update(slides.filter((_, j) => j !== i))}
             onAdd={() => {
               const arr = [...slides];
-              arr.splice(i + 1, 0, { id: `new${Date.now().toString(36)}`, pageType: "practice", layout: "questions", title: "Practice questions", purpose: "", keyPoints: [], visual: "none", minutes: PAGE_TYPES.practice.minutes, sourcePages: s.sourcePages, loop: s.loop });
+              const defaultTitle = params.language === "en" ? "Practice questions" : params.language === "zh" ? "随堂练习" : "随堂练习 · Practice questions";
+              arr.splice(i + 1, 0, { id: `new${Date.now().toString(36)}`, pageType: "practice", layout: "questions", title: defaultTitle, purpose: "", keyPoints: [], visual: "none", minutes: PAGE_TYPES.practice.minutes, sourcePages: s.sourcePages, loop: s.loop });
               update(arr);
             }}
           />

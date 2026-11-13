@@ -1,6 +1,6 @@
 import type { Slide, TeachingLanguage, ThemeId } from "@kj/schema";
 import { CANVAS, stepsOf } from "@kj/templates";
-import { applyStep, fitSlide, fitSources, renderSlide, type RenderedSlide } from "@kj/templates/render";
+import { applyStep, fitSlide, fitSources, renderRichText, renderSlide, type RenderedSlide } from "@kj/templates/render";
 import { INK_COLORS, InkLayer, type Stroke } from "./ink.ts";
 import { clampPosition, fitStage, keyAction, nextPosition, prevPosition, type Position } from "./navigation.ts";
 
@@ -35,6 +35,13 @@ export interface PlayerOptions {
 
 const TALLY_KEYS = ["PageDown", "PageUp", "Enter", "ArrowRight", "ArrowLeft", "ArrowDown", "ArrowUp"];
 const TALLY_IDLE_MS = 1000;
+const SWIPE_MIN_PX = 48;
+const SWIPE_CLICK_SUPPRESS_MS = 350;
+const INK_LABELS: Record<string, string> = {
+  "#e11d48": "红色画笔 · Red pen",
+  "#2563eb": "蓝色画笔 · Blue pen",
+  "#16a34a": "绿色画笔 · Green pen",
+};
 
 function fontsReady(): Promise<unknown> {
   return (document as Document & { fonts?: FontFaceSet }).fonts?.ready ?? Promise.resolve();
@@ -69,6 +76,7 @@ export function renderThumb(container: HTMLElement, slide: Pick<Slide, "content"
   wrap.append(r.el);
   applyStep(r.el, r.steps);
   const obs = scaleInto(container, wrap);
+  fitSlide(r.el);
   void fontsReady().then(() => fitSlide(r.el));
   return () => {
     obs.disconnect();
@@ -91,6 +99,8 @@ export class Player {
   private ink: InkLayer;
   private inkButton: HTMLButtonElement;
   private inkTools: HTMLElement;
+  private rotateButton: HTMLButtonElement;
+  private rotated = false;
   private tallyInputs: HTMLElement;
   private bar: HTMLElement;
   private tallies = new Map<number, number[]>();
@@ -142,7 +152,7 @@ export class Player {
       const b = el("button", "kj-ctl kj-swatch", this.inkTools);
       b.type = "button";
       b.style.background = color;
-      b.title = `Pen colour ${color}`;
+      b.title = INK_LABELS[color] ?? `画笔颜色 · Pen color ${color}`;
       b.setAttribute("aria-label", b.title);
       b.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -174,6 +184,10 @@ export class Player {
       eraser.setAttribute("aria-pressed", String(tool === "eraser"));
     };
     if (opts.showNotes) btn("Notes 讲稿", "Speaker notes · 讲稿 (S)", () => this.toggleNotes());
+    this.rotateButton = btn("⟳ 横屏", "横屏全屏阅读 · Rotate landscape", () => this.setRotated(!this.rotated));
+    this.rotateButton.classList.add("kj-rotate-ctl");
+    this.rotateButton.dataset.testid = "player-rotate";
+    this.rotateButton.setAttribute("aria-pressed", "false");
     btn("⛶", "Fullscreen · 全屏 (F)", () => this.toggleFullscreen());
 
     const onKey = (e: KeyboardEvent) => {
@@ -195,6 +209,7 @@ export class Player {
       else if (action === "notes" && opts.showNotes) this.toggleNotes();
       else if (action === "ink") this.setInk(this.ink.active ? null : "pen");
       else if (action === "escape" && this.ink.active) this.setInk(null);
+      else if (action === "escape" && this.rotated) this.setRotated(false);
       else if (action === "escape" && !doc.fullscreenElement) opts.onEscape?.();
     };
     // On the document, so presentation clickers (PageUp/PageDown) work wherever focus is.
@@ -204,7 +219,54 @@ export class Player {
       onKey(e);
     };
     doc.addEventListener("keydown", onDocKey);
+    let swipedAt = 0;
+    let swipe: { x: number; y: number; multi: boolean } | null = null;
+    this.frame.addEventListener(
+      "touchstart",
+      (e) => {
+        if (this.ink.active) return;
+        const target = e.target instanceof HTMLElement ? e.target : null;
+        if (target?.closest("input, textarea, select, iframe, .kj-sliders, .kj-cards")) {
+          swipe = null;
+          return;
+        }
+        if (e.touches.length !== 1) {
+          swipe = { x: 0, y: 0, multi: true };
+          return;
+        }
+        const t = e.touches[0]!;
+        swipe = { x: t.clientX, y: t.clientY, multi: false };
+      },
+      { passive: true },
+    );
+    this.frame.addEventListener(
+      "touchmove",
+      (e) => {
+        if (swipe && e.touches.length > 1) swipe.multi = true;
+      },
+      { passive: true },
+    );
+    this.frame.addEventListener(
+      "touchend",
+      (e) => {
+        const start = swipe;
+        swipe = null;
+        if (!start || start.multi || this.ink.active || e.changedTouches.length !== 1) return;
+        const t = e.changedTouches[0]!;
+        const dx = t.clientX - start.x;
+        const dy = t.clientY - start.y;
+        const axisDelta = this.rotated ? dy : dx;
+        const crossDelta = this.rotated ? dx : dy;
+        if (Math.abs(axisDelta) < SWIPE_MIN_PX || Math.abs(axisDelta) <= Math.abs(crossDelta) * 1.4) return;
+        swipedAt = Date.now();
+        if (!this.blank.hidden) this.setBlank(false);
+        else if (axisDelta < 0) this.next();
+        else this.prev();
+      },
+      { passive: true },
+    );
     this.frame.addEventListener("click", (e) => {
+      if (Date.now() - swipedAt < SWIPE_CLICK_SUPPRESS_MS) return;
       if ((e.target as HTMLElement).closest("button, input, a, select, iframe, .kj-widget")) return;
       if (!this.blank.hidden) this.setBlank(false);
       else this.next();
@@ -219,11 +281,27 @@ export class Player {
     return this.pos;
   }
 
+  private isEmptyPoll(index: number): boolean {
+    if (this.opts.hideAnswers) return false;
+    const slide = this.opts.slides[index];
+    if (!slide || slide.content.layout !== "quiz" || !slide.content.poll) return false;
+    const counts = this.tallies.get(index);
+    return !counts || counts.every((c) => !(c > 0));
+  }
+
   next(): void {
+    if (this.pos.step === 0 && this.isEmptyPoll(this.pos.index)) {
+      this.go({ index: this.pos.index, step: 2 });
+      return;
+    }
     this.go(nextPosition(this.steps, this.pos));
   }
 
   prev(): void {
+    if (this.pos.step === 2 && this.isEmptyPoll(this.pos.index)) {
+      this.go({ index: this.pos.index, step: 0 });
+      return;
+    }
     this.go(prevPosition(this.steps, this.pos));
   }
 
@@ -284,6 +362,35 @@ export class Player {
     else void this.root.requestFullscreen?.().catch(() => undefined);
   }
 
+  setRotated(on: boolean): void {
+    if (this.rotated === on) return;
+    this.rotated = on;
+    this.root.classList.toggle("kj-rotated", on);
+    this.rotateButton.setAttribute("aria-pressed", String(on));
+    this.rotateButton.textContent = on ? "⟳ 竖屏" : "⟳ 横屏";
+    const { scale, offsetX, offsetY } = fitStage(this.frame.clientWidth || CANVAS.width, this.frame.clientHeight || CANVAS.height, CANVAS.width, CANVAS.height);
+    this.stage.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
+    this.fitFooter();
+    const ori = (globalThis.screen as (Screen & { orientation?: ScreenOrientation & { lock?: (o: string) => Promise<void>; unlock?: () => void } }) | undefined)?.orientation;
+    if (on) {
+      void Promise.resolve(this.root.requestFullscreen?.())
+        .then(() => ori?.lock?.("landscape"))
+        .then(() => {
+          if (this.rotated && globalThis.innerWidth > globalThis.innerHeight) {
+            this.root.classList.remove("kj-rotated");
+          }
+        })
+        .catch(() => undefined);
+    } else {
+      try {
+        ori?.unlock?.();
+      } catch {
+        // Orientation lock unsupported on iOS Safari / desktop browsers.
+      }
+      if (document.fullscreenElement === this.root) void document.exitFullscreen?.().catch(() => undefined);
+    }
+  }
+
   private show(): void {
     this.current?.dispose();
     const slide = this.opts.slides[this.pos.index];
@@ -299,6 +406,7 @@ export class Player {
       pageLabels: this.opts.pageLabels,
       language: this.opts.language,
       hideAnswers: this.opts.hideAnswers,
+      allowPollClick: !this.opts.hideAnswers,
       tally: this.tallies.get(this.pos.index),
     });
     this.buildTallyInputs();
@@ -311,7 +419,7 @@ export class Player {
       fitSlide(root);
       this.fitFooter();
     });
-    this.notes.textContent = slide.notes || "—";
+    renderRichText(this.notes, slide.notes || "—");
     this.reveal();
   }
 

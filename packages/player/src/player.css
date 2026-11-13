@@ -36,10 +36,14 @@
   bottom: 14px;
   transform: translateX(-50%);
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   align-items: center;
   gap: 6px;
+  max-width: min(calc(100vw - 16px), calc(100% - 16px));
+  box-sizing: border-box;
   padding: 6px 10px;
-  border-radius: 999px;
+  border-radius: 22px;
   background: rgba(15, 23, 42, 0.8);
   color: #e2e8f0;
   font: 14px/1 system-ui, sans-serif;
@@ -51,6 +55,36 @@
 .kj-player:hover .kj-controls,
 .kj-controls:focus-within {
   opacity: 1;
+}
+@media (hover: none), (max-width: 600px) {
+  .kj-controls {
+    opacity: 0.92;
+  }
+}
+.kj-rotate-ctl {
+  display: none;
+}
+@media (max-width: 600px) and (orientation: portrait) {
+  .kj-rotate-ctl {
+    display: inline-flex;
+    align-items: center;
+  }
+}
+.kj-player.kj-rotated {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  width: 100vh;
+  height: 100vw;
+  width: 100dvh;
+  height: 100dvw;
+  transform: translate(-50%, -50%) rotate(90deg);
+  transform-origin: center center;
+  z-index: 100;
+}
+.kj-player.kj-rotated .kj-rotate-ctl {
+  display: inline-flex;
+  align-items: center;
 }
 .kj-ctl {
   min-width: 34px;
@@ -114,6 +148,8 @@
 .kj-ink-tools,
 .kj-tally-inputs {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   align-items: center;
   gap: 4px;
 }

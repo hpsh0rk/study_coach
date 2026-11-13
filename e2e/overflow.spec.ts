@@ -16,7 +16,9 @@ async function fixturePlayerMeasurement(page: Page) {
 async function goToFixtureSlide(page: Page, fixtureIndex: number) {
   await page.keyboard.press("Home");
   const fixture = CLASSROOM_FIXTURES[0]!;
-  const moves = fixture.slides.slice(0, fixtureIndex).reduce((total, slide) => total + stepsOf(slide.content) + 1, 0);
+  const moves = fixture.slides
+    .slice(0, fixtureIndex)
+    .reduce((total, slide) => total + (slide.content.layout === "quiz" && slide.content.poll ? 1 : stepsOf(slide.content)) + 1, 0);
   for (let move = 0; move < moves; move++) await page.keyboard.press("PageDown");
   await expect(page.locator(".kj-player")).toHaveAttribute("data-index", String(fixtureIndex));
   await expect(page.locator(".kj-player")).toHaveAttribute("data-step", "0");
@@ -92,10 +94,14 @@ test("classroom fixture players fit every real reveal state across the viewport 
         await page.waitForFunction(() => document.body.dataset.playerReady === "1");
         await page.keyboard.press("Home");
         for (let slideIndex = 0; slideIndex < fixture.slides.length; slideIndex++) {
-          const reveals = stepsOf(fixture.slides[slideIndex]!.content);
+          const content = fixture.slides[slideIndex]!.content;
+          const reveals = stepsOf(content);
           for (let reveal = 0; reveal <= reveals; reveal++) {
             await expect(page.locator(".kj-player")).toHaveAttribute("data-index", String(slideIndex));
             await expect(page.locator(".kj-player")).toHaveAttribute("data-step", String(reveal));
+            if (reveal === 0 && content.layout === "quiz" && content.poll) {
+              await page.locator(".kj-tally-inputs input").first().fill("5");
+            }
             const measured = await fixturePlayerMeasurement(page);
             const at = `${fixture.id}/${theme}/${profile.id}/slide-${slideIndex}/reveal-${reveal}`;
             expect.soft(measured.overflow, `${at} overflowing slots`).toEqual([]);
@@ -134,6 +140,13 @@ test("classroom poll and simulation survive resize and fullscreen", async ({ pag
 
   const pollIndex = fixture.slides.findIndex((slide) => slide.specId === "en-check");
   await goToFixtureSlide(page, pollIndex);
+  // With 0 votes entered, PageDown skips the empty '–' tally bar step and reveals the answer directly.
+  await page.keyboard.press("PageDown");
+  await expect(page.locator(".kj-player")).toHaveAttribute("data-step", "2");
+  await expect(page.locator(".kj-answer")).toBeVisible();
+  await page.keyboard.press("PageUp");
+  await expect(page.locator(".kj-player")).toHaveAttribute("data-step", "0");
+
   const votes = page.locator(".kj-tally-inputs input");
   await expect(votes).toHaveCount(3);
   await votes.nth(0).fill("3");
