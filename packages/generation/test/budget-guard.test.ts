@@ -57,4 +57,43 @@ describe("clipToBudgets", () => {
     expect(out.layout === "experiment" && out.explain.startsWith("In a longitudinal sound wave")).toBe(true);
     expect(out.layout === "experiment" && out.predict.options[2]).toBe("It stays the same");
   });
+
+  it("treats balanced $...$ math as atomic (never leaves an unmatched $) and trims CJK at clause boundaries without dangling particles", () => {
+    const mathSlide = {
+      layout: "statement" as const,
+      title: "牛顿第二定律与加速度关系",
+      bullets: [
+        "加速度与合力成正比，与质量成反比，表达式为 $\\vec{F}_{\\text{合}} = m \\vec{a}$ 且方向始终保持一致",
+        "Write the wave speed equation clearly in standard SI symbols: $v = f \\times \\lambda$",
+      ],
+      visual: { kind: "formula" as const, tex: "F = ma", caption: "" },
+      terms: [],
+    };
+    const clippedMath = clipToBudgets(mathSlide);
+    expect(SLOT_SCHEMAS.statement.safeParse(clippedMath).success).toBe(true);
+    if (clippedMath.layout !== "statement") throw new Error("layout");
+    for (const b of clippedMath.bullets) {
+      const dollars = (b.match(/\$/g) ?? []).length;
+      expect(dollars % 2, `unmatched $ in "${b}"`).toBe(0);
+    }
+
+    const cjkOrder = {
+      layout: "order" as const,
+      title: "牛顿第一定律核心概念配对",
+      mode: "match" as const,
+      items: [
+        { text: "惯性", match: "物体保持原有运动状态的性质" },
+        { text: "平衡状态", match: "不受外力时保持静止或匀速直线运动" },
+        { text: "加速度", match: "a = 4 m/s²，方向与合力方向相同" },
+      ],
+    };
+    const clippedCjk = clipToBudgets(cjkOrder);
+    expect(SLOT_SCHEMAS.order.safeParse(clippedCjk).success).toBe(true);
+    if (clippedCjk.layout !== "order") throw new Error("layout");
+    expect(clippedCjk.items[2]!.match).toBe("a = 4 m/s²");
+    for (const item of clippedCjk.items) {
+      expect(item.match).not.toMatch(/[的与和或及]$/);
+      expect(item.match).not.toMatch(/匀速直线运$|牛顿第二定$/);
+    }
+  });
 });

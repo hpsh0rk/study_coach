@@ -271,7 +271,7 @@ describe("writer safety nets", () => {
     };
     expect(fadedSchema.properties.content.properties.fadeFrom).toMatchObject({ minimum: 1, maximum: 3 });
 
-    // Worked slide with fadeFrom: null, why: null, notes: null, and string/aliased step items succeeds cleanly without stub fallback.
+    // Worked slide with fadeFrom: null, why: null, notes: null, and string/aliased step items normalizes envelope and triggers empty-notes repair.
     const workedReply = {
       content: {
         layout: "steps",
@@ -282,9 +282,11 @@ describe("writer safety nets", () => {
       },
       notes: null,
     };
-    const wa = fakeAi([workedReply]);
+    const wa = fakeAi([workedReply, { ...workedReply, notes: "Walk through each substitution step and check units." }]);
     const wRes = await writeSlide(wa.ai, { ...outline, slides: [workedSpec] }, "sp-w", input());
-    expect(wa.requests).toHaveLength(1);
+    expect(wa.requests).toHaveLength(2);
+    expect(wa.requests[1]!.at(-1)!.content).toContain("notes");
+    expect(wRes.notes).toContain("Walk through each substitution step");
     expect(wRes.content).toEqual({
       layout: "steps",
       title: "Calculate wave speed",
@@ -296,6 +298,19 @@ describe("writer safety nets", () => {
       ],
     });
     expect(wRes.warnings.some((w) => w.includes("deterministic fallback"))).toBe(false);
+
+    // Worked slide with fadeFrom: 2 in truncateLists strips fadeFrom on worked pageType.
+    const truncatedWorked = truncateLists(
+      {
+        layout: "steps",
+        title: "Calculate wave speed",
+        problem: "Find $v$ when $f = 4$ Hz and $\\lambda = 0.5$ m.",
+        steps: [{ text: "Write $v = f\\lambda$", why: "" }, { text: "Substitute", why: "" }, { text: "$v = 2$ m/s", why: "" }],
+        fadeFrom: 2,
+      },
+      "worked",
+    );
+    expect(truncatedWorked.layout === "steps" && truncatedWorked.fadeFrom).toBeUndefined();
 
     // Worked slide with fadeFrom: 0 also clears invalid fadeFrom instead of triggering deterministic fallback.
     const zeroFade = {
@@ -342,5 +357,68 @@ describe("slideKey", () => {
     expect(await slideKey(spec, { ...DEFAULT_PARAMS, level: "advanced" })).not.toBe(base);
     expect(await slideKey({ ...spec, title: `${spec.title}!` }, DEFAULT_PARAMS)).not.toBe(base);
     expect(buildMessages(spec, { ...input(), params: { ...DEFAULT_PARAMS, focus: "X", minutes: 90 } }, outline)).toEqual(buildMessages(spec, input(), outline));
+  });
+});
+
+describe("prompts, language modes, steered regeneration, flow rules & stub quality", () => {
+  it("resolves faded/practice number contradiction, enforces zh/en/en+zh rules, rejects standalone '或' flow steps, and appends teacher instruction", async () => {
+    const worked: SlideSpec = { ...spec, id: "sp-w", pageType: "worked", layout: "steps", title: "Worked wave speed", keyPoints: ["f = 50 Hz, λ = 3 m"], visual: "formula" };
+    const faded: SlideSpec = { ...spec, id: "sp-f", pageType: "faded", layout: "steps", title: "Faded wave speed", keyPoints: ["f = 20 Hz, λ = 5 m"], visual: "formula" };
+    const quizSpec: SlideSpec = { ...spec, id: "sp-q", pageType: "check", layout: "quiz", title: "Check inertia", visual: "none" };
+    const twoOutline: Outline = { ...outline, slides: [worked, faded, quizSpec] };
+
+    const [fadedSys, fadedUser] = buildMessages(faded, { ...input(), workedProblem: "A wave has f = 50 Hz and λ = 3 m. Find v.", instruction: "  Use ultrasound numbers in water (1500 m/s)  " }, twoOutline);
+    expect(fadedSys!.content).not.toContain("Every number, definition and formula must come from the source pages.");
+    expect(fadedSys!.content).toMatch(/different numbers|never clone/i);
+    expect(fadedUser!.content).toContain("Use ultrasound numbers in water (1500 m/s)");
+
+    const [quizSys] = buildMessages(quizSpec, input(), twoOutline);
+    expect(quizSys!.content).toMatch(/consistent|contradict/i);
+
+    // Language modes: zh forbids English terms chips and normalizes {term: "inertia", zh: "惯性"} -> {term: "惯性", zh: ""}
+    const zhSys = buildMessages(spec, { ...input(), params: { ...DEFAULT_PARAMS, language: "zh" } }, { ...outline, glossary: [{ term: "惯性", zh: "" }] })[0]!.content;
+    expect(zhSys).toContain("Simplified Chinese");
+    expect(zhSys).toMatch(/never English|Chinese/i);
+    const zhReply = {
+      content: {
+        layout: "statement" as const,
+        title: "惯性只与质量有关",
+        bullets: ["质量越大惯性越大"],
+        visual: { kind: "formula" as const, tex: "F = ma", caption: "" },
+        terms: [{ term: "inertia", zh: "惯性" }],
+      },
+      notes: "先提问卡车与小车的例子，预计 3 分钟。",
+    };
+    const zhRes = await writeSlide(fakeAi([zhReply]).ai, outline, "sp2", { ...input(), params: { ...DEFAULT_PARAMS, language: "zh" } });
+    expect(zhRes.content.layout === "statement" && zhRes.content.terms).toEqual([{ term: "惯性", zh: "" }]);
+
+    // en+zh explicitly asks for bilingual pairing across slide types
+    const biSys = buildMessages(quizSpec, { ...input(), params: { ...DEFAULT_PARAMS, language: "en+zh" } }, twoOutline)[0]!.content;
+    expect(biSys).toMatch(/bilingual|Chinese/i);
+
+    // Standalone conjunction "或" in flow steps is flagged by problemsOf
+    const badFlow = {
+      layout: "statement" as const,
+      title: "牛顿第一定律",
+      bullets: ["不受外力时保持原有状态"],
+      visual: { kind: "flow" as const, steps: ["不受外力", "保持静止", "或", "匀速直线运动"] },
+      terms: [],
+    };
+    expect(problemsOf(badFlow, "concept", "讲解牛顿第一定律的条件与结论。").errors.some((e) => e.includes("flow"))).toBe(true);
+    expect(problemsOf(badFlow, "concept", "   ").errors.some((e) => e.startsWith("notes:"))).toBe(true);
+  });
+
+  it("stubSlide avoids dangling trailing articles/prepositions and does not clone the exact clipped bullets into flow boxes", () => {
+    const wavePage = [{ no: 2, text: "The particles of the medium oscillate about a fixed rest position. The amplitude of a wave is the maximum displacement from rest. The wavelength is the distance between two adjacent crests." }];
+    const flowSpec: SlideSpec = { ...spec, visual: "flow", keyPoints: [] };
+    const stub = stubSlide({ spec: flowSpec, outline, lessonTitle: "Waves", pages: wavePage }).content;
+    if (stub.layout !== "statement" || stub.visual.kind !== "flow") throw new Error("expected statement + flow");
+    for (const b of stub.bullets) {
+      expect(b).not.toMatch(/\b(?:a|an|the|of|to|in|about|between|and|or)$/i);
+    }
+    for (const s of stub.visual.steps) {
+      expect(s).not.toMatch(/\b(?:a|an|the|of|to|in|about|between|and|or)$/i);
+    }
+    expect(stub.visual.steps[0]).not.toBe(stub.bullets[0]!.split(/\s+/).slice(0, 4).join(" "));
   });
 });

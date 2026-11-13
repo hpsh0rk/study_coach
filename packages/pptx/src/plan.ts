@@ -1,4 +1,4 @@
-import type { ChartSpec, ExperimentSim, FunctionSpec, PageType, Slide, SlideContent, TableSpec, ThemeId, Unverified, VisualSpec } from "@kj/schema";
+import type { ChartSpec, ExperimentSim, FormulaSpec, FunctionSpec, PageType, Slide, SlideContent, TableSpec, TeachingLanguage, ThemeId, Unverified, VisualSpec } from "@kj/schema";
 import { CANVAS, FONT } from "@kj/templates";
 import { resolveEmbed, sampleFunction } from "@kj/widgets";
 import { lineCount, plain, texToText } from "./text.ts";
@@ -93,12 +93,12 @@ export interface ChartItem {
   dataLabels: boolean;
 }
 
-/** Data a native chart cannot express; the exporter asks the app for a picture, else keeps `fallback`. */
+/** Data a native PPTX object cannot express faithfully; the exporter asks the app for a picture, else keeps `fallback`. */
 export interface ImageItem {
   kind: "image";
   slot: string;
   rect: Rect;
-  spec: ChartSpec | FunctionSpec;
+  spec: ChartSpec | FunctionSpec | FormulaSpec;
   fallback: TextItem;
 }
 
@@ -133,7 +133,11 @@ export const PALETTES: Record<ThemeId, Palette> = {
 export interface PlanContext {
   theme: ThemeId;
   pageLabels?: Record<number, string>;
+  language?: TeachingLanguage;
 }
+
+const byLang = (lang: TeachingLanguage | undefined, zh: string, en: string, bi: string) =>
+  lang === "zh" ? zh : lang === "en" ? en : bi;
 
 const M = 96;
 const W = CANVAS.width - 2 * M;
@@ -196,12 +200,16 @@ function tableItem(spec: TableSpec, rect: Rect, slot: string): TableItem {
   return { kind: "table", slot, rect: { ...rect, h: rowPx * (spec.rows.length + 1) }, header: spec.columns.map(plain), rows: spec.rows.map((r) => r.map(plain)), fontPx: FONT.bodyMin, rowPx };
 }
 
-function chartFallback(spec: ChartSpec | FunctionSpec, rect: Rect, p: Palette, slot: string): TextItem {
+function chartFallback(spec: ChartSpec | FunctionSpec, rect: Rect, p: Palette, slot: string, lang?: TeachingLanguage): TextItem {
   const lines =
     spec.kind === "function"
-      ? [`y = ${spec.expr}`, `x: ${spec.x[0]} … ${spec.x[1]}`]
-      : spec.series.map((s) => `${s.name}: ${s.data.map((d) => (Array.isArray(d) ? `(${d[0]}, ${d[1]})` : String(d))).join(", ")}`);
-  return text(slot, rect, [para(spec.kind === "function" ? "函数图像 Graph" : "图表数据 Chart data", { bold: true }), ...lines.map((l) => para(l, { gap: 12 }))], p, {
+      ? [plain(`y = ${spec.expr}`), `x: ${spec.x[0]} … ${spec.x[1]}`]
+      : spec.series.map((s) => `${plain(s.name)}: ${s.data.map((d) => (Array.isArray(d) ? `(${d[0]}, ${d[1]})` : String(d))).join(", ")}`);
+  const head =
+    spec.kind === "function"
+      ? byLang(lang, "函数图像", "Graph", "函数图像 Graph")
+      : byLang(lang, "图表数据", "Chart data", "图表数据 Chart data");
+  return text(slot, rect, [para(head, { bold: true }), ...lines.map((l) => para(l, { gap: 12 }))], p, {
     fontPx: FONT.label,
     minFontPx: 28,
     fill: p.panel,
@@ -212,7 +220,7 @@ function chartFallback(spec: ChartSpec | FunctionSpec, rect: Rect, p: Palette, s
 }
 
 /** Function plot as a native scatter-with-lines chart at the sliders' starting values; image when the curve breaks. */
-function functionChart(spec: FunctionSpec, rect: Rect, p: Palette, slot: string): ChartItem | ImageItem {
+function functionChart(spec: FunctionSpec, rect: Rect, p: Palette, slot: string, lang?: TeachingLanguage): ChartItem | ImageItem {
   const values = Object.fromEntries(spec.params.map((q) => [q.name, q.value]));
   let pts: [number, number | null][] = [];
   try {
@@ -223,14 +231,14 @@ function functionChart(spec: FunctionSpec, rect: Rect, p: Palette, slot: string)
   const inside = pts.filter(([, y]) => y !== null && Number.isFinite(y) && (!spec.y || (y >= spec.y[0] && y <= spec.y[1])));
   const firstGood = pts.findIndex(([, y]) => y !== null);
   const broken = inside.length < 2 || pts.slice(firstGood).some(([, y], i, a) => (y === null || (spec.y && (y < spec.y[0] || y > spec.y[1]))) && a.slice(i).some(([, z]) => z !== null));
-  if (broken) return { kind: "image", slot, rect, spec, fallback: chartFallback(spec, rect, p, slot) };
+  if (broken) return { kind: "image", slot, rect, spec, fallback: chartFallback(spec, rect, p, slot, lang) };
   return {
     kind: "chart",
     slot,
     rect,
     type: "scatter",
     x: inside.map(([x]) => round(x)),
-    series: [{ name: `y = ${spec.expr}`, labels: [], values: inside.map(([, y]) => round(y!)), color: p.accent }],
+    series: [{ name: plain(`y = ${spec.expr}`), labels: [], values: inside.map(([, y]) => round(y!)), color: p.accent }],
     xLabel: plain(spec.xLabel),
     yLabel: plain(spec.yLabel),
     xRange: spec.x,
@@ -242,14 +250,14 @@ function functionChart(spec: FunctionSpec, rect: Rect, p: Palette, slot: string)
 
 const round = (n: number) => Number(n.toPrecision(5));
 
-function dataChart(spec: ChartSpec, rect: Rect, p: Palette, slot: string): ChartItem | ImageItem {
+function dataChart(spec: ChartSpec, rect: Rect, p: Palette, slot: string, lang?: TeachingLanguage): ChartItem | ImageItem {
   const color = (i: number) => (spec.focus === undefined || spec.focus === i ? (p.series[i % p.series.length] ?? p.accent) : p.muted);
   const pairs = spec.series.every((s) => s.data.every((d) => Array.isArray(d)));
   const flat = spec.series.every((s) => s.data.every((d) => !Array.isArray(d)));
   const base = { kind: "chart" as const, slot, rect, xLabel: plain(spec.xLabel), yLabel: plain(spec.yLabel), dataLabels: spec.type === "bar" && spec.series.length === 1 };
   if (flat && spec.type !== "scatter") {
-    const labels = spec.categories ?? spec.series[0]!.data.map((_, i) => String(i + 1));
-    return { ...base, type: spec.type, series: spec.series.map((s, i) => ({ name: s.name, labels, values: s.data as number[], color: color(i) })) };
+    const labels = (spec.categories ?? spec.series[0]!.data.map((_, i) => String(i + 1))).map(plain);
+    return { ...base, type: spec.type, series: spec.series.map((s, i) => ({ name: plain(s.name), labels, values: s.data as number[], color: color(i) })) };
   }
   if (pairs) {
     const xs = (spec.series[0]!.data as [number, number][]).map(([x]) => x);
@@ -259,11 +267,11 @@ function dataChart(spec: ChartSpec, rect: Rect, p: Palette, slot: string): Chart
         ...base,
         type: "scatter",
         x: xs,
-        series: spec.series.map((s, i) => ({ name: s.name, labels: [], values: (s.data as [number, number][]).map(([, y]) => y), color: color(i) })),
+        series: spec.series.map((s, i) => ({ name: plain(s.name), labels: [], values: (s.data as [number, number][]).map(([, y]) => y), color: color(i) })),
         smoothLine: spec.type === "line",
       };
   }
-  return { kind: "image", slot, rect, spec, fallback: chartFallback(spec, rect, p, slot) };
+  return { kind: "image", slot, rect, spec, fallback: chartFallback(spec, rect, p, slot, lang) };
 }
 
 interface Notes {
@@ -273,16 +281,22 @@ interface Notes {
   degraded: string[];
 }
 
-function visualItems(v: VisualSpec | ExperimentSim | ChartContentChart, rect: Rect, p: Palette, notes: Notes, slot: string): Item[] {
+function visualItems(v: VisualSpec | ExperimentSim | ChartContentChart, rect: Rect, p: Palette, notes: Notes, slot: string, lang?: TeachingLanguage): Item[] {
   switch (v.kind) {
     case "chart":
-      return [dataChart(v, rect, p, slot)];
+      return [dataChart(v, rect, p, slot, lang)];
     case "function": {
-      const item = functionChart(v, rect, p, slot);
+      const item = functionChart(v, rect, p, slot, lang);
       if (v.params.length) {
         notes.degraded.push("function-sliders");
+        const paramList = v.params.map((q) => `${plain(q.label)} = ${q.value}`).join(lang === "en" ? ", " : "，");
         notes.interaction.push(
-          `图像带滑块（${v.params.map((q) => `${q.label} = ${q.value}`).join("，")}）：PPT 里是这些初始值下的静态曲线；要拖动滑块请用 HTML 课件。· Slider plot: a static curve at the starting values here; drag the sliders in the HTML deck.`,
+          byLang(
+            lang,
+            `图像带滑块（${paramList}）：PPT 里是这些初始值下的静态曲线；要拖动滑块请用 HTML 课件。`,
+            `Slider plot (${paramList}): a static curve at the starting values here; drag the sliders in the HTML deck.`,
+            `图像带滑块（${paramList}）：PPT 里是这些初始值下的静态曲线；要拖动滑块请用 HTML 课件。· Slider plot: a static curve at the starting values here; drag the sliders in the HTML deck.`,
+          ),
         );
       }
       return [item];
@@ -305,17 +319,31 @@ function visualItems(v: VisualSpec | ExperimentSim | ChartContentChart, rect: Re
     }
     case "formula": {
       const t = texToText(v.tex);
-      notes.other.push(`公式原文（LaTeX）：${v.tex}`);
-      if (!t.exact) notes.degraded.push("formula-approx");
-      return [
-        text(slot, { x: rect.x, y: rect.y + rect.h / 2 - 160, w: rect.w, h: v.caption ? 220 : 320 }, [para(t.text)], p, { fontPx: FONT.title, minFontPx: FONT.bodyMin, fill: p.panel, line: p.panelLine, inset: 24, align: "center", valign: "middle", shape: "roundRect" }),
-        ...(v.caption ? [text(`${slot}.caption`, { x: rect.x, y: rect.y + rect.h / 2 + 80, w: rect.w, h: 100 }, [para(v.caption)], p, { fontPx: FONT.label, minFontPx: 32, color: p.soft, align: "center" })] : []),
-      ];
+      notes.other.push(byLang(lang, `公式原文（LaTeX）：${v.tex}`, `Original formula (LaTeX): ${v.tex}`, `公式原文（LaTeX）：${v.tex}`));
+      const boxRect = { x: rect.x, y: rect.y + rect.h / 2 - 160, w: rect.w, h: v.caption ? 220 : 320 };
+      const formulaBox = text(slot, boxRect, [para(t.text)], p, {
+        fontPx: FONT.title,
+        minFontPx: FONT.bodyMin,
+        fill: p.panel,
+        line: p.panelLine,
+        inset: 24,
+        align: "center",
+        valign: "middle",
+        shape: "roundRect",
+      });
+      const captionItems = v.caption
+        ? [text(`${slot}.caption`, { x: rect.x, y: rect.y + rect.h / 2 + 80, w: rect.w, h: 100 }, [para(v.caption)], p, { fontPx: FONT.label, minFontPx: 32, color: p.soft, align: "center" })]
+        : [];
+      if (!t.exact) {
+        notes.degraded.push("formula-approx");
+        return [{ kind: "image", slot, rect: boxRect, spec: v, fallback: formulaBox }, ...captionItems];
+      }
+      return [formulaBox, ...captionItems];
     }
     case "placeholder":
       notes.degraded.push("placeholder");
       return [
-        text(slot, rect, [para("图示待补 Visual needed", { bold: true }), ...(v.hint ? [para(v.hint, { gap: 16, scale: 0.85, color: p.soft })] : [])], p, {
+        text(slot, rect, [para(byLang(lang, "图示待补", "Visual needed", "图示待补 Visual needed"), { bold: true }), ...(v.hint ? [para(v.hint, { gap: 16, scale: 0.85, color: p.soft })] : [])], p, {
           fontPx: FONT.bodyMin,
           minFontPx: 32,
           line: p.panelLine,
@@ -328,20 +356,38 @@ function visualItems(v: VisualSpec | ExperimentSim | ChartContentChart, rect: Re
       ];
     case "sim": {
       const entry = resolveEmbed(v.embedId);
-      const name = entry ? `${entry.title.zh} ${entry.title.en}` : v.embedId;
+      const name = entry ? byLang(lang, entry.title.zh, entry.title.en, `${entry.title.zh} ${entry.title.en}`) : v.embedId;
       notes.degraded.push("sim");
-      notes.interaction.push(`模拟实验「${name}」只能在 HTML 课件或离线 HTML 文件里操作；PPT 里是说明框，可以切到 HTML 演示后再回来。· The simulation runs only in the HTML deck.`);
+      notes.interaction.push(
+        byLang(
+          lang,
+          `模拟实验「${name}」只能在 HTML 课件或离线 HTML 文件里操作；PPT 里是说明框，可以切到 HTML 演示后再回来。`,
+          `The simulation "${name}" runs only in the HTML deck or offline HTML file; switch to the HTML deck to run it.`,
+          `模拟实验「${name}」只能在 HTML 课件或离线 HTML 文件里操作；PPT 里是说明框，可以切到 HTML 演示后再回来。· The simulation runs only in the HTML deck.`,
+        ),
+      );
       return [
-        text(slot, rect, [para("▶ 模拟实验 Simulation", { bold: true, color: p.accent }), para(name, { gap: 24 }), ...(v.caption ? [para(v.caption, { gap: 16, scale: 0.85, color: p.soft })] : []), para("在 HTML 课件中操作 · interactive in the HTML deck", { gap: 32, scale: 0.75, color: p.soft })], p, {
-          fontPx: FONT.bodyMin,
-          minFontPx: 32,
-          fill: p.panel,
-          line: p.panelLine,
-          inset: 32,
-          align: "center",
-          valign: "middle",
-          shape: "roundRect",
-        }),
+        text(
+          slot,
+          rect,
+          [
+            para(byLang(lang, "▶ 模拟实验", "▶ Simulation", "▶ 模拟实验 Simulation"), { bold: true, color: p.accent }),
+            para(name, { gap: 24 }),
+            ...(v.caption ? [para(v.caption, { gap: 16, scale: 0.85, color: p.soft })] : []),
+            para(byLang(lang, "在 HTML 课件中操作", "Interactive in the HTML deck", "在 HTML 课件中操作 · interactive in the HTML deck"), { gap: 32, scale: 0.75, color: p.soft }),
+          ],
+          p,
+          {
+            fontPx: FONT.bodyMin,
+            minFontPx: 32,
+            fill: p.panel,
+            line: p.panelLine,
+            inset: 32,
+            align: "center",
+            valign: "middle",
+            shape: "roundRect",
+          },
+        ),
       ];
     }
   }
@@ -365,7 +411,7 @@ export function shuffledOrder(keys: string[]): number[] {
   return Array.from({ length: n }, (_, i) => (i + 1) % n);
 }
 
-function body(c: SlideContent, p: Palette, notes: Notes, pageType?: PageType): Item[] {
+function body(c: SlideContent, p: Palette, notes: Notes, pageType?: PageType, lang?: TeachingLanguage): Item[] {
   switch (c.layout) {
     case "title": {
       const items: Item[] = [
@@ -387,7 +433,7 @@ function body(c: SlideContent, p: Palette, notes: Notes, pageType?: PageType): I
         const tw = (lw - 24 * (c.terms.length - 1)) / c.terms.length;
         c.terms.forEach((t, i) =>
           items.push(
-            text(`terms.${i}`, { x: M + i * (tw + 24), y: BODY_Y + BODY_H - termsH, w: tw, h: termsH }, [{ runs: [{ text: plain(t.term), bold: true }, ...(t.zh ? [{ text: ` ${t.zh}`, color: p.soft }] : [])] }], p, {
+            text(`terms.${i}`, { x: M + i * (tw + 24), y: BODY_Y + BODY_H - termsH, w: tw, h: termsH }, [{ runs: [{ text: plain(t.term), bold: true }, ...(t.zh ? [{ text: ` ${plain(t.zh)}`, color: p.soft }] : [])] }], p, {
               fontPx: FONT.label,
               minFontPx: 32,
               fill: p.panel,
@@ -401,17 +447,23 @@ function body(c: SlideContent, p: Palette, notes: Notes, pageType?: PageType): I
           ),
         );
       }
-      if (c.visual.kind === "flow" && c.bullets.length > 1) notes.interaction.push("要点和流程图在 HTML 里逐条揭示；PPT 里一次全部显示。· Bullets and flow steps appear all at once here.");
-      return [...items, ...visualItems(c.visual, { x: rx, y: BODY_Y, w: CANVAS.width - M - rx, h: BODY_H }, p, notes, "visual")];
+      if (c.visual.kind === "flow" && c.bullets.length > 1) {
+        notes.interaction.push(
+          byLang(lang, "要点和流程图在 HTML 里逐条揭示；PPT 里一次全部显示。", "Bullets and flow steps appear all at once here.", "要点和流程图在 HTML 里逐条揭示；PPT 里一次全部显示。· Bullets and flow steps appear all at once here."),
+        );
+      }
+      return [...items, ...visualItems(c.visual, { x: rx, y: BODY_Y, w: CANVAS.width - M - rx, h: BODY_H }, p, notes, "visual", lang)];
     }
     case "chart": {
       const cw = Math.round(((W - GAP) * 1.35) / 2.35);
       const rx = M + cw + GAP;
       const srcH = c.source ? 60 : 0;
-      const items: Item[] = [title(c.title, p), ...visualItems(c.chart, { x: M, y: BODY_Y, w: cw, h: BODY_H - srcH }, p, notes, "chart")];
+      const items: Item[] = [title(c.title, p), ...visualItems(c.chart, { x: M, y: BODY_Y, w: cw, h: BODY_H - srcH }, p, notes, "chart", lang)];
       if (c.source) items.push(text("source", { x: M, y: BODY_Y + BODY_H - srcH + 10, w: cw, h: 50 }, [para(c.source)], p, { fontPx: FONT.source, minFontPx: FONT.source, color: p.soft }));
       items.push(text("takeaways", { x: rx, y: BODY_Y, w: CANVAS.width - M - rx, h: BODY_H }, c.takeaways.map((t, i) => para(t, { bullet: true, gap: i ? 28 : 0 })), p, { fill: p.panel, line: p.panelLine, inset: 32 }));
-      notes.interaction.push("结论在 HTML 里逐条揭示；PPT 里一次全部显示。· Takeaways appear all at once here.");
+      notes.interaction.push(
+        byLang(lang, "结论在 HTML 里逐条揭示；PPT 里一次全部显示。", "Takeaways appear all at once here.", "结论在 HTML 里逐条揭示；PPT 里一次全部显示。· Takeaways appear all at once here."),
+      );
       return items;
     }
     case "steps": {
@@ -432,15 +484,21 @@ function body(c: SlideContent, p: Palette, notes: Notes, pageType?: PageType): I
       });
       if (fade < n) {
         notes.degraded.push("faded-steps");
-        notes.answers.push(`空着的步骤 Blank steps：${c.steps.slice(fade).map((s, i) => `${fade + i + 1}. ${plain(s.text)}${s.why ? `（${plain(s.why)}）` : ""}`).join("；")}`);
+        const stepLines = c.steps.slice(fade).map((s, i) => `${fade + i + 1}. ${plain(s.text)}${s.why ? `（${plain(s.why)}）` : ""}`).join(lang === "en" ? "; " : "；");
+        notes.answers.push(byLang(lang, `空着的步骤：${stepLines}`, `Blank steps: ${stepLines}`, `空着的步骤 Blank steps：${stepLines}`));
       }
-      notes.interaction.push("步骤在 HTML 里逐步揭示；PPT 里一次全部显示（渐隐页的空框除外）。· Steps appear all at once here.");
+      notes.interaction.push(
+        byLang(lang, "步骤在 HTML 里逐步揭示；PPT 里一次全部显示（渐隐页的空框除外）。", "Steps appear all at once here (except blank boxes on faded slides).", "步骤在 HTML 里逐步揭示；PPT 里一次全部显示（渐隐页的空框除外）。· Steps appear all at once here."),
+      );
       return items;
     }
     case "experiment": {
       const cw = (W - GAP) / 2;
       const rx = M + cw + GAP;
-      const items: Item[] = [title(c.title, p), text("predict.question", { x: M, y: BODY_Y, w: cw, h: 200 }, [{ runs: [{ text: "预测 Predict：", color: p.soft }, { text: plain(c.predict.question) }] }], p)];
+      const items: Item[] = [
+        title(c.title, p),
+        text("predict.question", { x: M, y: BODY_Y, w: cw, h: 200 }, [{ runs: [{ text: byLang(lang, "预测：", "Predict: ", "预测 Predict："), color: p.soft }, { text: plain(c.predict.question) }] }], p),
+      ];
       const oh = 96;
       c.predict.options.forEach((o, i) => {
         const y = BODY_Y + 210 + i * (oh + 10);
@@ -448,13 +506,31 @@ function body(c: SlideContent, p: Palette, notes: Notes, pageType?: PageType): I
         items.push(text(`predict.options.${i}`, { x: M + 88, y, w: cw - 88, h: oh }, [para(o)], p, { fill: p.panel, line: p.panelLine, inset: 12, valign: "middle" }));
       });
       const oy = BODY_Y + 210 + c.predict.options.length * (oh + 10) + 6;
-      items.push(text("observe", { x: M, y: oy, w: cw, h: BODY_Y + BODY_H - oy }, [para("观察 Observe", { bold: true, scale: 0.85, color: p.soft }), ...c.observe.map((o) => para(o, { bullet: true, gap: 8 }))], p, { fontPx: FONT.bodyMin, minFontPx: FONT.bodyMin, lineFactor: 1.15 }));
-      items.push(...visualItems(c.sim, { x: rx, y: BODY_Y, w: cw, h: 520 }, p, notes, "sim"));
-      items.push(text("explain", { x: rx, y: BODY_Y + 540, w: cw, h: BODY_H - 540 }, [para("解释 Explain：讲完后揭示（见讲稿）", { color: p.soft })], p, { fontPx: FONT.label, minFontPx: 32, line: p.panelLine, dashed: true, inset: 20, valign: "middle" }));
+      items.push(text("observe", { x: M, y: oy, w: cw, h: BODY_Y + BODY_H - oy }, [para(byLang(lang, "观察", "Observe", "观察 Observe"), { bold: true, scale: 0.85, color: p.soft }), ...c.observe.map((o) => para(o, { bullet: true, gap: 8 }))], p, { fontPx: FONT.bodyMin, minFontPx: FONT.bodyMin, lineFactor: 1.15 }));
+      items.push(...visualItems(c.sim, { x: rx, y: BODY_Y, w: cw, h: 520 }, p, notes, "sim", lang));
+      items.push(
+        text(
+          "explain",
+          { x: rx, y: BODY_Y + 540, w: cw, h: BODY_H - 540 },
+          [para(byLang(lang, "解释：讲完后揭示（见讲稿）", "Explain: reveal after demo (see notes)", "解释 Explain：讲完后揭示（见讲稿）"), { color: p.soft })],
+          p,
+          { fontPx: FONT.label, minFontPx: 32, line: p.panelLine, dashed: true, inset: 20, valign: "middle" },
+        ),
+      );
       notes.degraded.push("poe");
-      notes.answers.push(`解释 Explain：${plain(c.explain)}`);
-      if (c.outcome !== undefined) notes.answers.push(`实际结果 Outcome：${LETTERS[c.outcome]}. ${plain(c.predict.options[c.outcome] ?? "")}`);
-      notes.interaction.push("预测-观察-解释（POE）：先让学生举手预测并记下每个选项的人数，再演示实验、观察，最后口头揭示解释。HTML 课件可录入预测人数并高亮实际结果。· POE: take a show of hands, run the demo, then reveal the explanation.");
+      notes.answers.push(byLang(lang, `解释：${plain(c.explain)}`, `Explain: ${plain(c.explain)}`, `解释 Explain：${plain(c.explain)}`));
+      if (c.outcome !== undefined) {
+        const outVal = `${LETTERS[c.outcome]}. ${plain(c.predict.options[c.outcome] ?? "")}`;
+        notes.answers.push(byLang(lang, `实际结果：${outVal}`, `Outcome: ${outVal}`, `实际结果 Outcome：${outVal}`));
+      }
+      notes.interaction.push(
+        byLang(
+          lang,
+          "预测-观察-解释（POE）：先让学生举手预测并记下每个选项的人数，再演示实验、观察，最后口头揭示解释。HTML 课件可录入预测人数并高亮实际结果。",
+          "POE: take a show of hands, run the demo, then reveal the explanation.",
+          "预测-观察-解释（POE）：先让学生举手预测并记下每个选项的人数，再演示实验、观察，最后口头揭示解释。HTML 课件可录入预测人数并高亮实际结果。· POE: take a show of hands, run the demo, then reveal the explanation.",
+        ),
+      );
       return items;
     }
     case "quiz": {
@@ -468,13 +544,36 @@ function body(c: SlideContent, p: Palette, notes: Notes, pageType?: PageType): I
         items.push(badge(LETTERS[i]!, { x: x + 24, y: y + oh / 2 - 38, w: 76, h: 76 }, p));
         items.push(text(`options.${i}`, { x: x + 120, y, w: cw - 140, h: oh }, [para(o.text)], p, { inset: 16, valign: "middle" }));
       });
-      notes.answers.push(`答案 Answer：${LETTERS[c.answer]}. ${plain(c.options[c.answer]?.text ?? "")}`, `解释 Explain：${plain(c.explain)}`);
-      const mis = c.options.map((o, i) => (o.misconception ? `${LETTERS[i]}：${plain(o.misconception)}` : "")).filter(Boolean);
-      if (mis.length) notes.answers.push(`误区 Misconceptions：${mis.join("；")}`);
+      const ansText = `${LETTERS[c.answer]}. ${plain(c.options[c.answer]?.text ?? "")}`;
+      notes.answers.push(
+        byLang(lang, `答案：${ansText}`, `Answer: ${ansText}`, `答案 Answer：${ansText}`),
+        byLang(lang, `解释：${plain(c.explain)}`, `Explain: ${plain(c.explain)}`, `解释 Explain：${plain(c.explain)}`),
+      );
+      const mis = c.options.map((o, i) => (o.misconception ? `${LETTERS[i]}${lang === "en" ? ": " : "："}${plain(o.misconception)}` : "")).filter(Boolean);
+      if (mis.length) {
+        const joinedMis = mis.join(lang === "en" ? "; " : "；");
+        notes.answers.push(byLang(lang, `误区：${joinedMis}`, `Misconceptions: ${joinedMis}`, `误区 Misconceptions：${joinedMis}`));
+      }
       if (c.poll) {
         notes.degraded.push("poll");
-        notes.interaction.push("先投票：让全班举手（或举 A/B/C/D 卡），数出每个选项的人数，可直接写在选项旁；讨论后再揭示答案。HTML 课件可录入人数并在投影上显示分布。· Hinge poll: count hands per option, then reveal the answer.");
-      } else notes.interaction.push("HTML 课件里点选项会即时反馈，“下一步”揭示答案；PPT 里答案只在讲稿中。· The answer is only in these notes.");
+        notes.interaction.push(
+          byLang(
+            lang,
+            "先投票：让全班举手（或举 A/B/C/D 卡），数出每个选项的人数，可直接写在选项旁；讨论后再揭示答案。HTML 课件可录入人数并在投影上显示分布。",
+            "Hinge poll: count hands per option, then reveal the answer.",
+            "先投票：让全班举手（或举 A/B/C/D 卡），数出每个选项的人数，可直接写在选项旁；讨论后再揭示答案。HTML 课件可录入人数并在投影上显示分布。· Hinge poll: count hands per option, then reveal the answer.",
+          ),
+        );
+      } else {
+        notes.interaction.push(
+          byLang(
+            lang,
+            "HTML 课件里点选项会即时反馈，“下一步”揭示答案；PPT 里答案只在讲稿中。",
+            "The answer is only in these notes.",
+            "HTML 课件里点选项会即时反馈，“下一步”揭示答案；PPT 里答案只在讲稿中。· The answer is only in these notes.",
+          ),
+        );
+      }
       return items;
     }
     case "questions": {
@@ -487,8 +586,11 @@ function body(c: SlideContent, p: Palette, notes: Notes, pageType?: PageType): I
         items.push(badge(String(i + 1), { x: M, y: y + 8, w: 68, h: 68 }, p));
         items.push(text(`items.${i}.q`, { x: M + 92, y, w: W - 92, h }, [para(q.q)], p, { inset: 4 }));
       });
-      notes.answers.push(`答案 Answers：${c.items.map((q, i) => `${i + 1}. ${plain(q.a)}`).join("；")}`);
-      notes.interaction.push("答案在 HTML 里逐题揭示；PPT 里答案只在讲稿中。· Answers are only in these notes.");
+      const ansList = c.items.map((q, i) => `${i + 1}. ${plain(q.a)}`).join(lang === "en" ? "; " : "；");
+      notes.answers.push(byLang(lang, `答案：${ansList}`, `Answers: ${ansList}`, `答案 Answers：${ansList}`));
+      notes.interaction.push(
+        byLang(lang, "答案在 HTML 里逐题揭示；PPT 里答案只在讲稿中。", "Answers are only in these notes.", "答案在 HTML 里逐题揭示；PPT 里答案只在讲稿中。· Answers are only in these notes."),
+      );
       return items;
     }
     case "order": {
@@ -507,15 +609,31 @@ function body(c: SlideContent, p: Palette, notes: Notes, pageType?: PageType): I
           const m = c.items[right[i]!]!;
           items.push(text(`items.${right[i]}.match`, { x: M + cw + 96, y, w: cw, h }, [para(m.match)], p, { fill: p.panel, line: p.accent, inset: 10, valign: "middle", shape: "roundRect", lineFactor: 1.12 }));
         });
-        notes.answers.push(`配对 Matches：${c.items.map((it) => `${plain(it.text)} ↔ ${plain(it.match)}`).join("；")}`);
-        notes.interaction.push("配对：右边的卡片已打乱。PPT 编辑模式下每张卡片都是可拖动的形状；放映时让学生口头配对，再按讲稿揭示。HTML 课件可拖动 / 点两张交换，“下一步”自动归位。· Cards are separate shapes; drag them in edit mode.");
+        const pairs = c.items.map((it) => `${plain(it.text)} ↔ ${plain(it.match)}`).join(lang === "en" ? "; " : "；");
+        notes.answers.push(byLang(lang, `配对：${pairs}`, `Matches: ${pairs}`, `配对 Matches：${pairs}`));
+        notes.interaction.push(
+          byLang(
+            lang,
+            "配对：右边的卡片已打乱。PPT 编辑模式下每张卡片都是可拖动的形状；放映时让学生口头配对，再按讲稿揭示。HTML 课件可拖动 / 点两张交换，“下一步”自动归位。",
+            "Cards are separate shapes; drag them in edit mode or reveal verbally from these notes.",
+            "配对：右边的卡片已打乱。PPT 编辑模式下每张卡片都是可拖动的形状；放映时让学生口头配对，再按讲稿揭示。HTML 课件可拖动 / 点两张交换，“下一步”自动归位。· Cards are separate shapes; drag them in edit mode.",
+          ),
+        );
       } else {
         order.forEach((src, i) => {
           const y = BODY_Y + i * (h + gap);
           items.push(text(`items.${src}`, { x: M + 160, y, w: W - 320, h }, [para(c.items[src]!.text)], p, { fill: p.panel, line: p.panelLine, inset: 10, valign: "middle", align: "center", shape: "roundRect", lineFactor: 1.12 }));
         });
-        notes.answers.push(`正确顺序 Correct order：${c.items.map((it, i) => `${i + 1}. ${plain(it.text)}`).join(" → ")}`);
-        notes.interaction.push("排序：卡片已打乱。PPT 编辑模式下每张卡片都是可拖动的形状；放映时让学生说出顺序，再按讲稿揭示。HTML 课件可拖动 / 点两张交换，“下一步”自动归位。· Cards are separate shapes; drag them in edit mode.");
+        const seq = c.items.map((it, i) => `${i + 1}. ${plain(it.text)}`).join(" → ");
+        notes.answers.push(byLang(lang, `正确顺序：${seq}`, `Correct order: ${seq}`, `正确顺序 Correct order：${seq}`));
+        notes.interaction.push(
+          byLang(
+            lang,
+            "排序：卡片已打乱。PPT 编辑模式下每张卡片都是可拖动的形状；放映时让学生说出顺序，再按讲稿揭示。HTML 课件可拖动 / 点两张交换，“下一步”自动归位。",
+            "Cards are separate shapes; drag them in edit mode or reveal verbally from these notes.",
+            "排序：卡片已打乱。PPT 编辑模式下每张卡片都是可拖动的形状；放映时让学生说出顺序，再按讲稿揭示。HTML 课件可拖动 / 点两张交换，“下一步”自动归位。· Cards are separate shapes; drag them in edit mode.",
+          ),
+        );
       }
       return items;
     }
@@ -529,30 +647,37 @@ function body(c: SlideContent, p: Palette, notes: Notes, pageType?: PageType): I
         items.push(text(`nodes.${i}`, { x, y: BODY_Y, w, h: BODY_H }, [para(node.head, { bold: true, color: p.accent, scale: 56 / 48 }), ...(node.detail ? [para(node.detail, { gap: 24 })] : [])], p, { fontPx: FONT.bodyMin, minFontPx: FONT.bodyMin, fill: p.panel, line: p.panelLine, inset: 28, shape: "roundRect", lineFactor: 1.15 }));
         if (i < n - 1) items.push({ kind: "shape", shape: "rightArrow", rect: { x: x + w + 6, y: BODY_Y + BODY_H / 2 - 18, w: gap - 12, h: 36 }, fill: p.accent });
       });
-      notes.interaction.push("结构图在 HTML 里逐块揭示；PPT 里一次全部显示。· Nodes appear all at once here.");
+      notes.interaction.push(
+        byLang(lang, "结构图在 HTML 里逐块揭示；PPT 里一次全部显示。", "Nodes appear all at once here.", "结构图在 HTML 里逐块揭示；PPT 里一次全部显示。· Nodes appear all at once here."),
+      );
       return items;
     }
   }
 }
 
-function unverifiedNote(u: Unverified[] | undefined): string[] {
-  return u?.length ? [`待核实 To verify：${u.map((x) => `${x.text}${x.detail ? `（${x.detail}）` : ""}`).join("；")}`] : [];
+function unverifiedNote(u: Unverified[] | undefined, lang?: TeachingLanguage): string[] {
+  if (!u?.length) return [];
+  const joined = u.map((x) => `${plain(x.text)}${x.detail ? `（${plain(x.detail)}）` : ""}`).join(lang === "en" ? "; " : "；");
+  return [byLang(lang, `待核实：${joined}`, `To verify: ${joined}`, `待核实 To verify：${joined}`)];
 }
 
 /** One deck slide → its PPTX objects and speaker notes. Never throws for schema-valid content. */
 export function planSlide(slide: Pick<Slide, "content" | "notes" | "sources" | "unverified"> & { pageType?: PageType }, ctx: PlanContext): SlidePlan {
   const p = PALETTES[ctx.theme] ?? PALETTES.classic;
+  const lang = ctx.language;
   const notes: Notes = { answers: [], interaction: [], other: [], degraded: [] };
-  const items = body(slide.content, p, notes, slide.pageType);
+  const items = body(slide.content, p, notes, slide.pageType, lang);
   const src = sourcesLine(slide as Slide, ctx, p);
   if (src) items.push(src);
   for (const it of items) if (it.kind === "text") it.fontPx = fitFont(it).fontPx;
   for (const it of items) if (it.kind === "image") it.fallback.fontPx = fitFont(it.fallback).fontPx;
+  const answerHead = byLang(lang, "【答案 · 只在讲稿里】", "[Answers — speaker notes only]", "【答案 · 只在讲稿里】");
+  const interactionHead = byLang(lang, "【互动 · 和 HTML 课件的区别】", "[Interactions — differences from HTML deck]", "【互动 · 和 HTML 课件的区别】");
   const sections = [
-    slide.notes.trim(),
-    notes.answers.length ? `【答案 · 只在讲稿里】\n${notes.answers.join("\n")}` : "",
-    notes.interaction.length ? `【互动 · 和 HTML 课件的区别】\n${notes.interaction.join("\n")}` : "",
-    [...notes.other, ...unverifiedNote(slide.unverified)].join("\n"),
+    plain(slide.notes.trim()),
+    notes.answers.length ? `${answerHead}\n${notes.answers.join("\n")}` : "",
+    notes.interaction.length ? `${interactionHead}\n${notes.interaction.join("\n")}` : "",
+    [...notes.other, ...unverifiedNote(slide.unverified, lang)].join("\n"),
   ].filter(Boolean);
   return { items, notes: sections.join("\n\n"), degraded: notes.degraded };
 }

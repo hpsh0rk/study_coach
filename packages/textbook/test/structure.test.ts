@@ -252,8 +252,12 @@ describe("external parser results", () => {
     }
   });
 
-  it("turns parser Markdown into page text", () => {
+  it("turns parser Markdown into page text and preserves meaningful figure alt captions", () => {
     expect(cleanParsedMarkdown("A ![fig](images/a.jpg) B\n\n\n\n<table><tr><td>t</td><td>v</td></tr><tr><td>1</td><td>2</td></tr></table>")).toBe("A  B\n\nt | v\n1 | 2");
+    expect(cleanParsedMarkdown("![](images/0.png) ![fig1.png](images/1.png) ![a3f91c8e2b4d](images/2.jpg)")).toBe("");
+    expect(cleanParsedMarkdown("正文前\n\n![图 4-2 小车速度-时间图像](images/vt.png)\n\n![Ripple tank wavefronts](images/wave.jpg)")).toBe(
+      "正文前\n\n[插图：图 4-2 小车速度-时间图像]\n\n[插图：Ripple tank wavefronts]",
+    );
     expect(
       cleanParsedMarkdown(
         "## SYNTHETIC TABLE\n\n<table><tr><td rowspan=1 colspan=1> time</td><td rowspan=1 colspan=1>velocity </td></tr><tr><td rowspan=1 colspan=1>0s</td><td rowspan=1 colspan=1>12 m/s</td></tr><tr><td></td><td></td></tr></table>Table 1",

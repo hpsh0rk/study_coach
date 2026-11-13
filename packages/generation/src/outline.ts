@@ -71,20 +71,25 @@ export function buildMessages(input: DraftInput, problems?: Violation[]) {
   const o = optionsOf(input.options);
   const b = planBudget(input.params);
   const sim = simFor(input);
-  const lang = input.params.language === "zh" ? "Simplified Chinese" : "English";
+  const langRule =
+    input.params.language === "zh"
+      ? "Write all titles, objectives, key points, notCovered and glossary terms in pure Simplified Chinese (never English term labels unless teaching an explicit English symbol)."
+      : input.params.language === "en+zh"
+        ? "Bilingual classroom mode (English + Simplified Chinese): write concise English primary titles and key points paired with Simplified Chinese key terms."
+        : "Write all titles, objectives, key points, notCovered and glossary terms in pure English.";
   const system = [
     "You are an expert secondary-school teacher planning ONE lesson as a time-budgeted slide outline.",
-    `Lesson: ${input.params.minutes} minutes, student level ${input.params.level}, lesson type ${input.params.lessonType}. Write titles and key points in ${lang}.`,
+    `Lesson: ${input.params.minutes} minutes, student level ${input.params.level}, lesson type ${input.params.lessonType}. ${langRule}`,
     input.params.focus ? `Teacher's focus for this lesson: ${input.params.focus}` : "",
     "Rules:",
     `- The sum of slide minutes must be within ${b.minMinutes}–${b.maxMinutes} minutes (target ${b.minutes}). Time is the only budget; the number of slides follows from it.`,
     "- If the selection holds more than fits the time, teach the core well and list what you leave out in notCovered (short phrases). Do not rush through everything.",
     o.phases
-      ? "- Skeleton: cover → retrieval (3–5 recap questions on prior knowledge the lesson builds on, not on today's new content) → 2–3 learning loops (each: explanation pages, then student activity) → summary → exit ticket."
+      ? "- Skeleton: cover → retrieval (3–5 recap questions on prior knowledge the lesson builds on, not on today's new content) → 2–3 learning loops (each loop MUST contain both explanation pages AND at least one student check/activity page) → summary → exit ticket."
       : "- Order the slides from cover to exit ticket.",
     "- Never more than 10 minutes of consecutive lecture pages (concept/process/data/worked/summary) without a check, practice, faded, sequence or experiment page.",
     "- A sequence page (cards students put in order or match) suits a process, cycle or set of term–definition pairs; at most one per loop.",
-    "- A worked example is followed by a faded example or practice built on the same problem with new numbers.",
+    "- A worked example is followed by a faded example or practice built on the same problem structure with genuinely different numbers.",
     sim
       ? `- At most one experiment page, using the simulation "${sim.title.en}" (predict–observe–explain).`
       : "- No interactive simulation fits this content: do not plan experiment pages.",
@@ -95,8 +100,10 @@ export function buildMessages(input: DraftInput, problems?: Violation[]) {
     "- sourcePages: the textbook pages ([p.N] markers) that support the slide. Stay faithful to the source; do not invent facts.",
     o.phases ? "- loop: learning loop number (1, 2, 3); use 0 for cover, retrieval, summary and exit." : "",
     input.params.language === "en+zh"
-      ? "- glossary: the key English terms of the lesson with ONE Chinese translation each; every slide will use exactly these."
-      : "- glossary: the key terms of the lesson (zh may be empty).",
+      ? "- glossary: the key English terms of the lesson with ONE Simplified Chinese translation each; every slide will use these."
+      : input.params.language === "zh"
+        ? "- glossary: the key Simplified Chinese terms of the lesson (`term` in Simplified Chinese, `zh` empty string)."
+        : "- glossary: the key English terms of the lesson (`zh` empty string).",
     `- ${SOURCE_RULE}`,
     "Page types:",
     pageTypeTable(o, sim),

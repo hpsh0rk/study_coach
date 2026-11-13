@@ -335,6 +335,30 @@ export const SLIDE_SPECS: PlannedSpec[] = [
       outcome: 1,
     },
   },
+  {
+    id: "bv-11-raster-formula",
+    pageType: "concept",
+    layout: "statement",
+    visual: "formula",
+    minutes: 4,
+    title: "复杂分段函数与矢量公式快照",
+    purpose: "验证非精确公式浏览器 2x KaTeX PNG 光栅化与讲稿 plain()",
+    keyPoints: ["分段函数大括号排版", "讲稿内联公式转可读文本"],
+    sourcePages: [1],
+    loop: 1,
+    notes: "NOTE-11：先回顾 $v = f\\lambda$，再对比分段函数。",
+    content: {
+      layout: "statement",
+      title: "复杂公式自动生成高清公式卡片",
+      bullets: ["合外力矢量 $\\vec{F}_{\\text{合}} = m\\vec{a}$", "加热反应 $2\\text{H}_2 + \\text{O}_2 \\xrightarrow{\\text{点燃}} 2\\text{H}_2\\text{O}$"],
+      visual: {
+        kind: "formula",
+        tex: "f(x) = \\begin{cases} x^2, & x \\ge 0 \\\\ -x, & x < 0 \\end{cases}",
+        caption: "分段函数定义（含 KaTeX 大括号）",
+      },
+      terms: [],
+    },
+  },
 ];
 
 interface Relationship {
@@ -497,12 +521,12 @@ async function verifyPptxPackage(pptxPath: string, theme: ThemeId) {
     if (!combinedNotes.includes(secret)) throw new Error(`${theme}: expected secret missing from speaker notes: ${secret}`);
   }
 
-  // 3. Browser ECharts rasterized PNG verification (slides 4 and 5)
+  // 3. Browser ECharts & KaTeX rasterized PNG verification (slides 4, 5, and 11)
   const mediaParts = Object.keys(zip.files)
     .filter((n) => n.startsWith("ppt/media/") && !zip.files[n]!.dir)
     .sort();
-  if (mediaParts.length < 2) {
-    throw new Error(`${theme}: expected at least 2 browser-rasterized ECharts PNGs in ppt/media/, found ${mediaParts.length}`);
+  if (mediaParts.length < 3) {
+    throw new Error(`${theme}: expected at least 3 browser-rasterized PNGs in ppt/media/, found ${mediaParts.length}`);
   }
   const mediaDetails = [];
   for (const mediaPart of mediaParts) {
@@ -520,12 +544,15 @@ async function verifyPptxPackage(pptxPath: string, theme: ThemeId) {
     });
   }
 
-  // Verify slides 4 and 5 specifically link to image relationships (not text fallback)
-  for (const slideIdx of [3, 4]) {
+  // Verify slides 4, 5, and 11 specifically link to image relationships (not text fallback), and slide 11 notes cleaned $v = f\lambda$ while keeping raw LaTeX
+  for (const slideIdx of [3, 4, 10]) {
     const rels = relationships(await xml(relsPathFor(slideParts[slideIdx]!)));
     if (!rels.some((r) => r.type.endsWith("/image"))) {
-      throw new Error(`${theme}: slide ${slideIdx + 1} fell back to text instead of embedding browser ECharts PNG`);
+      throw new Error(`${theme}: slide ${slideIdx + 1} fell back to text instead of embedding browser PNG`);
     }
+  }
+  if (!allNotes[10]!.includes("NOTE-11：先回顾 v = fλ") || !allNotes[10]!.includes("公式原文（LaTeX）：f(x) = \\begin{cases}")) {
+    throw new Error(`${theme}: slide 11 speaker notes missing plain() math conversion or raw LaTeX preservation`);
   }
 
   return {

@@ -80,6 +80,13 @@ export function stubTable(source: string, outline: Outline, narrow: boolean): Ta
   return undefined;
 }
 
+function flowStepLabel(sentence: string, maxWords: number): string {
+  const stripped = sentence.replace(/^(?:the|a|an)\s+/i, "").trim();
+  const predicate = /^(.{3,40}?)\s+(?:is|are|means|equals)\s+(.+)$/i.exec(stripped);
+  const candidate = predicate ? predicate[1]! : stripped;
+  return clip(candidate, maxWords).slice(0, 40);
+}
+
 function visualFor(spec: SlideSpec, source: string, bullets: string[], outline: Outline): VisualSpec {
   const formula = findFormula(source);
   switch (spec.visual) {
@@ -97,7 +104,9 @@ function visualFor(spec: SlideSpec, source: string, bullets: string[], outline: 
       break;
   }
   if (formula && spec.visual !== "flow") return { kind: "formula", tex: formula.tex };
-  const steps = pad(bullets.map((b) => clip(b, BUDGETS.flow.item.max).slice(0, 40)), 3, (i) => `Step ${i + 1}`).slice(0, BUDGETS.flow.soft);
+  const sentences = sentencesOf(source);
+  const rawSteps = (sentences.length ? sentences : bullets).map((s) => flowStepLabel(s, BUDGETS.flow.item.max)).filter(Boolean);
+  const steps = pad(rawSteps, 3, (i) => `Stage ${i + 1}`).slice(0, BUDGETS.flow.soft);
   return { kind: "flow", steps };
 }
 

@@ -153,4 +153,72 @@ describe("verifyNumbers", () => {
       expect.objectContaining({ kind: "formula", text: "s = WF" }),
     ]);
   });
+
+  it("checks extended physics/chemistry SI units (J, W, V, A, Ω, Pa, °C, K, mol, L, C) and catches dimension swaps", () => {
+    const ph = { kind: "placeholder" as const, hint: "" };
+    expect(verifyNumbers(statement(["Bulb consumes 50 J of energy"], ph), "The bulb has a rated power of 50 W.")).toEqual([
+      expect.objectContaining({ kind: "number", text: "50 J" }),
+    ]);
+    expect(verifyNumbers(statement(["Current reaches 220 A"], ph), "Mains voltage is 220 V.")).toEqual([
+      expect.objectContaining({ kind: "number", text: "220 A" }),
+    ]);
+    expect(verifyNumbers(statement(["Work done is 2000 J"], ph), "The engine does 2 kJ of work.")).toEqual([]);
+    expect(
+      verifyNumbers(
+        statement(["Resistance is $120\\,\\Omega$, pressure is 101 kPa, volume is 250 mL, charge is 15 C"], ph),
+        "Resistance is 120 Ω, atmospheric pressure is 101 000 Pa, beaker holds 0.25 L, and charge transferred is 15 C at 25 °C (298 K) for 0.5 mol.",
+      ),
+    ).toEqual([]);
+    expect(verifyNumbers(statement(["Temperature is 25 K"], ph), "Room temperature is 25 °C.")).toEqual([
+      expect.objectContaining({ kind: "number", text: "25 K" }),
+    ]);
+  });
+
+  it("preserves + / - sign structure in additive formulas so v = u - at fails against v = u + at", () => {
+    const source = "Uniform acceleration velocity equation: $v = u + at$, displacement $s = ut + \\frac{1}{2}at^2$.";
+    expect(verifyNumbers(statement(["Velocity increases linearly"], { kind: "formula", tex: "v = u + at" }), source)).toEqual([]);
+    expect(verifyNumbers(statement(["Rearranged initial velocity"], { kind: "formula", tex: "u = v - at" }), source)).toEqual([]);
+    expect(verifyNumbers(statement(["Wrong sign"], { kind: "formula", tex: "v = u - at" }), source)).toEqual([
+      expect.objectContaining({ kind: "formula", text: "v = u - at" }),
+    ]);
+    expect(verifyNumbers(statement(["Wrong displacement sign"], { kind: "formula", tex: "s = ut - \\frac{1}{2}at^2" }), source)).toEqual([
+      expect.objectContaining({ kind: "formula", text: "s = ut - \\frac{1}{2}at^2" }),
+    ]);
+  });
+
+  it("treats simple fractions/decimals (1/2 ↔ 0.5, 1/4 ↔ 0.25, 3/4 ↔ 0.75) and unit-prefix / round .0 equivalents as matching", () => {
+    const ph = { kind: "placeholder" as const, hint: "" };
+    expect(verifyNumbers(statement(["Kinetic energy is $E_k = 0.5 m v^2$"], { kind: "formula", tex: "E_k = 0.5 m v^2" }), "Kinetic energy is $E_k = \\frac{1}{2} m v^2$.")).toEqual([]);
+    expect(verifyNumbers(statement(["Quarter period is 0.25 T and three quarters is 0.75 T"], ph), "At t = 1/4 T and t = \\frac{3}{4} T the speed changes.")).toEqual([]);
+    expect(verifyNumbers(statement(["Cart speed is 20 m/s"], ph), "Measured cart speed is 20.0 m/s.")).toEqual([]);
+    expect(verifyNumbers(statement(["Distance is 0.30 km"], ph), "The track length is 300 m.")).toEqual([]);
+  });
+
+  it("skips source-page number/formula flags on synthesis slides with empty sources while checking formulas on cited problem slides", () => {
+    const cover: SlideContent = { layout: "title", title: "Waves", subtitle: "Chapter 1", objectives: ["Use $v = f\\lambda$ to find speed"] };
+    const summary: SlideContent = {
+      layout: "summary",
+      title: "Key relationships",
+      nodes: [
+        { head: "Wave speed", detail: "$v = f\\lambda$" },
+        { head: "Period", detail: "$T = 1/f$" },
+        { head: "Sound in air", detail: "About 340 m/s" },
+      ],
+    };
+    expect(verifyNumbers(cover, "", { pageType: "cover" })).toEqual([]);
+    expect(verifyNumbers(summary, "", { pageType: "summary" })).toEqual([]);
+
+    const badWorked: SlideContent = {
+      layout: "steps",
+      title: "Find wave speed",
+      problem: "Find $v$ when $f = 20$ Hz and $\\lambda = 5$ m.",
+      steps: [
+        { text: "Write $v = f / \\lambda$", why: "Wrong formula" },
+        { text: "Calculate $v = 20 / 5 = 4$ m/s", why: "Divide" },
+      ],
+    };
+    expect(verifyNumbers(badWorked, SOURCE, { pageType: "worked" })).toEqual([
+      expect.objectContaining({ kind: "formula", text: "v = f / \\lambda" }),
+    ]);
+  });
 });

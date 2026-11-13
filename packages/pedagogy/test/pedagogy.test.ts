@@ -41,9 +41,11 @@ describe("checkOutline", () => {
     expect(checkOutline(o, params).some((v) => v.code === "layout" && v.level === "error")).toBe(true);
   });
 
-  it("flags a numbered learning loop without both instruction and learner action", () => {
+  it("flags a numbered learning loop without both instruction and learner action, escalating 3+ lecture slides to an error", () => {
     const lone = spec("concept", 3, { loop: 1 });
-    expect(checkOutline(outline([lone]), params)).toEqual(expect.arrayContaining([expect.objectContaining({ code: "loop-balance", slideId: lone.id })]));
+    expect(checkOutline(outline([lone]), params)).toEqual(expect.arrayContaining([expect.objectContaining({ code: "loop-balance", level: "warning", slideId: lone.id })]));
+    const heavyLoop = outline([spec("cover", 0.5, { loop: 0 }), lone, spec("process", 3, { loop: 1 }), spec("data", 3, { loop: 1 }), spec("exit", 3, { loop: 0 })]);
+    expect(checkOutline(heavyLoop, params)).toEqual(expect.arrayContaining([expect.objectContaining({ code: "loop-balance", level: "error", slideId: lone.id })]));
     const paired = outline([lone, spec("check", 2, { loop: 1 })]);
     expect(checkOutline(paired, params).map((v) => v.code)).not.toContain("loop-balance");
   });
