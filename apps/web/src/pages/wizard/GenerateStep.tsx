@@ -20,6 +20,7 @@ import { documentApi, type TextbookPage } from "../../textbook/api.ts";
 import { SourcePage } from "../../textbook/SourcePage.tsx";
 import { downloadOfflineHtml } from "../../offline/exportDeck.ts";
 import { downloadPptx } from "../../offline/exportPptx.ts";
+import type { HandoutCopy } from "../../offline/handout/model.ts";
 import { generateMissingSlides, generateSlideWithLock, MAX_REGENERATE_INSTRUCTION, postGenerateSlide } from "./slideGeneration.ts";
 import { Stepper, StepIntro, type StepKey } from "./Stepper.tsx";
 
@@ -171,6 +172,7 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
   const [editing, setEditing] = useState(false);
   const [exporting, setExporting] = useState("");
   const [exportError, setExportError] = useState("");
+  const [handoutCopy, setHandoutCopy] = useState<HandoutCopy>("student");
   const [theme, setTheme] = useState<ThemeId>(view.lesson.theme);
   const [showRegenHint, setShowRegenHint] = useState(false);
   const [regenHint, setRegenHint] = useState("");
@@ -352,7 +354,7 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
             <summary className="btn ghost" aria-disabled={done === 0}>
               导出 Export ▾
             </summary>
-            <div className="menu-list card">
+            <div className="menu-list card" style={{ width: 340, maxWidth: "calc(100vw - 32px)" }}>
               <button
                 className="btn ghost"
                 disabled={done === 0 || !!exporting}
@@ -392,6 +394,74 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
               </button>
               <span className="muted small">
                 给 WPS / PowerPoint / Keynote 用：文字、表格、图表都可编辑；互动（实验、投票、排序）变成静态版，做法和答案写在讲稿里。字体用苹方（Mac 自带，不嵌入）· interactions become static, answers go to speaker notes
+              </span>
+              <div className="row between" style={{ borderTop: "1px solid var(--line)", paddingTop: 8, marginTop: 4 }}>
+                <span className="muted small">配套讲义 Handout:</span>
+                <div className="theme-switch" role="group" aria-label="配套讲义版本 Handout copy" data-testid="handout-copy-toggle">
+                  <button
+                    type="button"
+                    className={handoutCopy === "student" ? "active" : ""}
+                    aria-pressed={handoutCopy === "student"}
+                    data-testid="handout-copy-student"
+                    onClick={() => setHandoutCopy("student")}
+                  >
+                    学生版
+                  </button>
+                  <button
+                    type="button"
+                    className={handoutCopy === "teacher" ? "active" : ""}
+                    aria-pressed={handoutCopy === "teacher"}
+                    data-testid="handout-copy-teacher"
+                    onClick={() => setHandoutCopy("teacher")}
+                  >
+                    教师答案版
+                  </button>
+                </div>
+              </div>
+              <button
+                className="btn ghost"
+                disabled={done === 0 || !!exporting}
+                data-testid="export-handout-html"
+                onClick={async () => {
+                  setExporting("handout-html");
+                  setExportError("");
+                  try {
+                    const { downloadHandoutHtml } = await import("../../offline/handout/index.ts");
+                    await downloadHandoutHtml(view.lesson.id, handoutCopy);
+                  } catch (e) {
+                    setExportError((e as Error).message);
+                  } finally {
+                    setExporting("");
+                  }
+                }}
+              >
+                {exporting === "handout-html"
+                  ? "生成中… Building"
+                  : `配套讲义 · 打印版 HTML/PDF（${handoutCopy === "student" ? "学生版" : "教师答案版"}）`}
+              </button>
+              <button
+                className="btn ghost"
+                disabled={done === 0 || !!exporting}
+                data-testid="export-handout-docx"
+                onClick={async () => {
+                  setExporting("handout-docx");
+                  setExportError("");
+                  try {
+                    const { downloadHandoutDocx } = await import("../../offline/handout/index.ts");
+                    await downloadHandoutDocx(view.lesson.id, handoutCopy);
+                  } catch (e) {
+                    setExportError((e as Error).message);
+                  } finally {
+                    setExporting("");
+                  }
+                }}
+              >
+                {exporting === "handout-docx"
+                  ? "生成中… Building"
+                  : `配套讲义 · Word (.docx)（${handoutCopy === "student" ? "学生版" : "教师答案版"}）`}
+              </button>
+              <span className="muted small">
+                与幻灯片同源：含导学填空、例题演算框与真题练习；学生版留白，教师答案版附红字重点与参考答案 · A4 print PDF &amp; editable Word
               </span>
               <button
                 className="btn ghost"
