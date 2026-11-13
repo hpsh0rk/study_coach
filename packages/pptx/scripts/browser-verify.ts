@@ -101,7 +101,7 @@ export const SLIDE_SPECS: PlannedSpec[] = [
     content: {
       layout: "statement",
       title: "波速等于频率乘以波长",
-      bullets: ["频率 $f$ 表示每秒波数", "波长 $\\lambda$ 是波峰间距", "同介质中波速不变"],
+      bullets: ["频率 $f$ 表示==每秒波数==", "波长 $\\lambda$ 是**波峰间距**", "同介质中波速不变"],
       visual: { kind: "formula", tex: "v = f\\lambda", caption: "v：m/s，f：Hz，λ：m" },
       terms: [
         { term: "wavelength", zh: "波长" },
@@ -496,6 +496,13 @@ async function verifyPptxPackage(pptxPath: string, theme: ThemeId) {
   }
   if (projectedText.includes("答案 Answer") || projectedText.includes("实际结果 Outcome")) {
     throw new Error(`${theme}: answer heading leaked onto projected slide`);
+  }
+  if (projectedText.includes("==") || projectedText.includes("**")) {
+    throw new Error(`${theme}: raw == or ** emphasis marker leaked onto projected slide`);
+  }
+  const expectedEmphasisHex = theme === "chalk" ? "FF7B72" : "C81E1E";
+  if (!slideXmls[1]!.includes(`val="${expectedEmphasisHex}"`) || !slideXmls[1]!.includes('b="1"')) {
+    throw new Error(`${theme}: slide 2 missing native red-bold emphasis run (${expectedEmphasisHex})`);
   }
 
   // Verify faded step placeholder on slide 8 and native table on slide 6 and native chart on slide 3

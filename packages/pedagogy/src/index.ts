@@ -1,4 +1,4 @@
-import { BUDGETS, countWords, layoutForPageType, type LayoutId, type ListBudget, type LessonParams, type Outline, type PageType, type SlideContent, type SlideSpec } from "@kj/schema";
+import { BUDGETS, countHighlightedWords, countWords, layoutForPageType, stripRichMarkers, type LayoutId, type ListBudget, type LessonParams, type Outline, type PageType, type SlideContent, type SlideSpec } from "@kj/schema";
 
 export interface PageTypeDef {
   id: PageType;
@@ -338,8 +338,18 @@ function screenText(c: SlideContent): string[] {
 /** Soft-budget and wording checks on generated content (hard budgets are enforced by the slot schema). */
 export function checkSlide(c: SlideContent): Violation[] {
   const v: Violation[] = [];
-  const all = screenText(c).join(" \n ").toLowerCase();
+  const texts = screenText(c);
+  const all = texts.map(stripRichMarkers).join(" \n ").toLowerCase();
   for (const p of BANNED_PHRASES) if (all.includes(p)) v.push({ level: "error", code: "cliche", message: `屏幕上不应出现“${p}”（放进备注）· move teacher talk to notes` });
+  const totalWords = texts.reduce((n, s) => n + countWords(s), 0);
+  const highlightedWords = texts.reduce((n, s) => n + countHighlightedWords(s), 0);
+  if (totalWords > 0 && highlightedWords > Math.max(4, Math.ceil(totalWords * 0.25))) {
+    v.push({
+      level: "warning",
+      code: "emphasis-density",
+      message: `标红过多（约 ${Math.round((highlightedWords / totalWords) * 100)}%），建议只标 1–2 个核心词（≤ 25%）· highlight only key terms (≤ 25% of slide text)`,
+    });
+  }
   const list = LIST_OF[c.layout];
   const items =
     c.layout === "statement" ? c.bullets : c.layout === "chart" ? c.takeaways : c.layout === "steps" ? c.steps.map((s) => s.text) : c.layout === "questions" ? c.items.map((i) => i.q) : c.layout === "summary" ? c.nodes.map((n) => n.head) : [];

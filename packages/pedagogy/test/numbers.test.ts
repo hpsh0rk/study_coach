@@ -221,4 +221,25 @@ describe("verifyNumbers", () => {
       expect.objectContaining({ kind: "formula", text: "v = f / \\lambda" }),
     ]);
   });
+
+  it("ignores ** and == emphasis markers around numbers, units, formulas, and calculations", () => {
+    const highlighted = statement(["Sound travels at ==340 m/s== in air", "Ultrasound is above **20 kHz**", "==340 × 3 = 1020 m=="]);
+    expect(verifyNumbers(highlighted, SOURCE, { notes: "Check **d = 340 × 3 = 1020 m**\nAlso ==v = 340 m/s==" })).toEqual([]);
+
+    const badHighlighted = statement(["Sound travels at ==343 m/s== in air"]);
+    expect(verifyNumbers(badHighlighted, SOURCE)).toEqual([expect.objectContaining({ kind: "number", text: "343" })]);
+
+    const badCalcHighlighted: SlideContent = {
+      layout: "steps",
+      title: "Find wave speed",
+      problem: "Find $v$ when ==f = 5 Hz== and **λ = 0.4 m**.",
+      steps: [
+        { text: "Substitute: $v = 5 \\times 0.4$", why: "" },
+        { text: "Result: ==v = 2.5 m/s==", why: "" },
+      ],
+    };
+    expect(verifyNumbers(badCalcHighlighted, SOURCE, { pageType: "worked" })).toEqual([
+      expect.objectContaining({ kind: "calc", text: "v = 5 × 0.4 = 2.5" }),
+    ]);
+  });
 });

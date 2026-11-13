@@ -1,5 +1,5 @@
 import { checkSlide, type Violation } from "@kj/pedagogy";
-import { hasCjk, type GlossaryEntry, type PageType, type SlideContent, type TableSpec, type TeachingLanguage, type WidgetSpec } from "@kj/schema";
+import { countHighlightedWords, countWords, hasCjk, tokenizeRichText, type GlossaryEntry, type PageType, type SlideContent, type TableSpec, type TeachingLanguage, type WidgetSpec } from "@kj/schema";
 import { BUDGETS } from "@kj/templates";
 import { slotIssues } from "@kj/templates/issues";
 import { validateWidget, type WidgetIssue } from "@kj/widgets";
@@ -107,22 +107,75 @@ function maskBalancedMath(s: string): string {
   return s.replace(/\$\$[^$]+\$\$|\$[^$]+\$/g, (m) => "\uE000".repeat(m.length));
 }
 
-function cleanTrimmedTail(s: string): string {
-  let out = s.replace(/[\s,;:，；：、—–+= -]+$/, "").trim();
-  out = out.replace(DANGLING_CJK_TAIL, "").replace(/[\s,;:，；：、—–-]+$/, "").trim();
+const BALANCED_EMPHASIS_RE =
+  /\*\*==([^\s=\n](?:(?:(?!==)[^\n])*?[^\s=\n])??)==\*\*|==\*\*([^\s*\n](?:(?:(?!\*\*)[^\n])*?[^\s*\n])??)\*\*==|==([^\s=\n](?:(?:(?!==)[^\n])*?[^\s=\n])??)==|\*\*([^\s*\n](?:(?:(?!\*\*)[^\n])*?[^\s*\n])??)\*\*/g;
+
+function cleanPlainTail(s: string, original?: string): string {
+  let out = s.replace(/[\s,;:，；：、—–+=*-]+$/, "").trim();
+  out = out.replace(DANGLING_CJK_TAIL, "").replace(/[\s,;:，；：、—–+=*-]+$/, "").trim();
   for (const [broken, replacement] of BROKEN_PHYSICS_COMPOUND) {
-    if (broken.test(out)) out = out.replace(broken, replacement);
+    if (broken.test(out)) {
+      const candidate = out.replace(broken, replacement);
+      out = original !== undefined && candidate === original ? out.replace(/牛顿第[一二三]定$/, "牛顿定律") : candidate;
+    }
   }
   return out;
 }
 
 /**
- * Shortens `s` by one semantic step: URL footers first, then trailing parentheticals or clauses,
- * treating balanced `$...$` spans as atomic so a formula is never sliced open.
+ * Cleans trailing punctuation/particles while preserving valid closed `==...==` / `**...**` spans
+ * and closing (or stripping if empty) any `==` or `**` left open by a mid-span slice.
+ */
+function finalizeShortened(raw: string, original?: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+
+  let openMark = "\uE012";
+  while (trimmed.includes(openMark)) openMark += "\uE012";
+  let closeMark = "\uE013";
+  while (trimmed.includes(closeMark)) closeMark += "\uE013";
+
+  const mathSpans: string[] = [];
+  const carrier = trimmed.replace(/\$\$[\s\S]+?\$\$|\$[^$\n]+\$/g, (m) => {
+    const id = mathSpans.length;
+    mathSpans.push(m);
+    return `${openMark}${id}${closeMark}`;
+  });
+  const sentinelRe = new RegExp(`${openMark}(\\d+)${closeMark}`, "g");
+  const restoreMath = (str: string) => str.replace(sentinelRe, (_, idx: string) => mathSpans[Number(idx)] ?? "");
+
+  let lastBalancedEnd = 0;
+  for (const m of carrier.matchAll(BALANCED_EMPHASIS_RE)) {
+    const end = m.index! + m[0].length;
+    if (end > lastBalancedEnd) lastBalancedEnd = end;
+  }
+
+  const rem = carrier.slice(lastBalancedEnd);
+  const unclosed = /(\*\*|==)/.exec(rem);
+  if (unclosed) {
+    const prefix = carrier.slice(0, lastBalancedEnd + unclosed.index);
+    const marker = unclosed[1]!;
+    const afterOpen = restoreMath(rem.slice(unclosed.index + 2).replace(/\*\*|==/g, ""));
+    const cleanedInner = cleanPlainTail(afterOpen);
+    if (cleanedInner) return `${restoreMath(prefix)}${marker}${cleanedInner}${marker}`.trim();
+    return finalizeShortened(restoreMath(prefix), original);
+  }
+
+  if (!rem && lastBalancedEnd > 0) return restoreMath(carrier).trim();
+  const cleanedRem = cleanPlainTail(restoreMath(rem), lastBalancedEnd === 0 ? original : undefined);
+  if (cleanedRem) return `${restoreMath(carrier.slice(0, lastBalancedEnd))}${cleanedRem}`.trim();
+  if (lastBalancedEnd > 0) return restoreMath(carrier.slice(0, lastBalancedEnd)).trim();
+  return "";
+}
+
+/**
+ * Shortens `s` by one semantic step: URL footers first, then trailing parentheticals, redundant
+ * trailing CJK glosses on English sentences, or clauses, treating balanced `$...$` spans as atomic
+ * and keeping `==` / `**` emphasis markers balanced.
  */
 function shorter(s: string): string {
   const noLink = s.replace(URL_PATH_FRAGMENT, " ").trim();
-  if (noLink !== s.trim() && noLink) return noLink;
+  if (noLink !== s.trim() && noLink) return finalizeShortened(noLink, s.trim()) || noLink;
   const t = s.trim();
   if (!t) return t;
 
@@ -130,7 +183,7 @@ function shorter(s: string): string {
   const singleDollars = [...t.replace(/\$\$/g, "  ").matchAll(/\$/g)];
   if (singleDollars.length % 2 === 1) {
     const strayAt = singleDollars[singleDollars.length - 1]!.index!;
-    const before = cleanTrimmedTail(t.slice(0, strayAt));
+    const before = finalizeShortened(t.slice(0, strayAt), t);
     return before || t.replace(/\$/g, "");
   }
 
@@ -139,8 +192,21 @@ function shorter(s: string): string {
   // 1. Trailing parenthetical outside `$...$`
   const paren = /^(.*\S)\s*(?:（[^（）\uE000]*）|\([^()\uE000]*\))$/.exec(masked);
   if (paren) {
-    const candidate = cleanTrimmedTail(t.slice(0, paren[1]!.length));
-    if (candidate) return candidate;
+    const candidate = finalizeShortened(t.slice(0, paren[1]!.length), t);
+    if (candidate && candidate !== t) return candidate;
+  }
+
+  // 1b. Unparenthesized trailing Chinese clause appended onto a multi-word English sentence (`en+zh` anti-clipping)
+  if (hasCjk(masked)) {
+    const trailingBilingualClause = /^(.*\S)\s+([\u3400-\u9fff][^\n$()（）\uE000]*)$/.exec(masked);
+    if (
+      trailingBilingualClause &&
+      !hasCjk(trailingBilingualClause[1]!) &&
+      (trailingBilingualClause[1]!.match(/[A-Za-z]{2,}/g)?.length ?? 0) >= 3
+    ) {
+      const candidate = finalizeShortened(t.slice(0, trailingBilingualClause[1]!.length), t);
+      if (candidate && candidate !== t) return candidate;
+    }
   }
 
   // 2. Last clause boundary outside `$...$` (`，`, `；`, `：`, `,`, `;`, `—`, `–`)
@@ -152,28 +218,40 @@ function shorter(s: string): string {
     }
   }
   if (lastSep >= 2) {
-    const candidate = cleanTrimmedTail(t.slice(0, lastSep));
-    if (candidate.length >= 2) return candidate;
+    const candidate = finalizeShortened(t.slice(0, lastSep), t);
+    if (candidate.length >= 2 && candidate !== t) return candidate;
   }
 
   // 3. Trailing CJK disjunction/conjunction phrase (`…保持静止或匀速直线运动` -> `…保持静止`)
-  const conjMatch = /^(.*[\u3400-\u9fff]{2,})(?:或者|以及|并且|或|与|和|及)[\u3400-\u9fffA-Za-z0-9\s]+$/.exec(masked);
+  const conjMatch = /^(.*[\u3400-\u9fff]{2,})(?:或者|以及|并且|或|与|和|及)[\u3400-\u9fffA-Za-z0-9=*_\s]+$/.exec(masked);
   if (conjMatch) {
-    const candidate = cleanTrimmedTail(t.slice(0, conjMatch[1]!.length));
-    if (candidate.length >= 2) return candidate;
+    const candidate = finalizeShortened(t.slice(0, conjMatch[1]!.length), t);
+    if (candidate.length >= 2 && candidate !== t) return candidate;
   }
 
   // 4. Atomic balanced `$...$` at the end: drop whole span if preceded by prose, never slice inside it
   const trailingMath = /^(.*?)\s*[=:：，,；;≈∝]?\s*(\$\$[^$]+\$\$|\$[^$]+\$)$/.exec(t);
   if (trailingMath) {
-    const prefix = cleanTrimmedTail(trailingMath[1]!);
-    return prefix || t;
+    const prefix = finalizeShortened(trailingMath[1]!, t);
+    if (prefix && prefix !== t) return prefix;
   }
 
-  // 5. Fallback token / CJK trim outside math
+  // 5a. Trim inside a trailing closed `==...==` or `**...**` span without breaking its closing delimiter
+  const closedEmphTail = /^(.*?)(\*\*==|==\*\*|==|\*\*)((?:(?!\*\*|==)[^\n])+?)(==\*\*|\*\*==|==|\*\*)$/.exec(t);
+  if (closedEmphTail) {
+    const marker = closedEmphTail[2]!.includes("==") || closedEmphTail[4]!.includes("==") ? "==" : "**";
+    const inner = closedEmphTail[3]!;
+    const innerCut = /[\u3400-\u9fff]$/.test(inner) ? inner.slice(0, -1) : inner.replace(/\s*[^\s$]+$/, "");
+    const cleanedInner = cleanPlainTail(innerCut, inner);
+    if (cleanedInner) return `${closedEmphTail[1]}${marker}${cleanedInner}${marker}`;
+    const fallbackPrefix = finalizeShortened(closedEmphTail[1]!, t);
+    if (fallbackPrefix) return fallbackPrefix;
+  }
+
+  // 5b. Fallback token / CJK trim outside math
   const cut = /[\u3400-\u9fff]$/.test(t) ? t.slice(0, -1) : t.replace(/\s*[^\s$]+$/, "");
-  const cleaned = cleanTrimmedTail(cut);
-  return cleaned || cut.replace(/[\s,;:，；：、—-]+$/, "");
+  const cleaned = finalizeShortened(cut, t);
+  return cleaned || cut.replace(/[\s,;:，；：、—–+=*-]+$/, "");
 }
 
 /**
@@ -213,11 +291,97 @@ export function applyGlossary(c: SlideContent, glossary: GlossaryEntry[], langua
 
 const PLACEHOLDER_HINT = "Visual could not be drawn; add a diagram";
 
+/** Removes out-of-range `chart.focus` (`< 0` or `>= series.length`) so valid data charts are preserved. */
+export function healChartFocus(c: SlideContent): SlideContent {
+  if (c.layout === "chart" && c.chart.kind === "chart" && c.chart.focus !== undefined && (c.chart.focus < 0 || c.chart.focus >= c.chart.series.length)) {
+    const { focus: _drop, ...chart } = c.chart;
+    return { ...c, chart };
+  }
+  if (c.layout === "statement" && c.visual.kind === "chart" && c.visual.focus !== undefined && (c.visual.focus < 0 || c.visual.focus >= c.visual.series.length)) {
+    const { focus: _drop, ...visual } = c.visual;
+    return { ...c, visual };
+  }
+  return c;
+}
+
+function screenStrings(c: SlideContent): string[] {
+  switch (c.layout) {
+    case "title":
+      return [c.title, c.subtitle, ...c.objectives];
+    case "statement":
+      return [c.title, ...c.bullets];
+    case "chart":
+      return [c.title, ...c.takeaways];
+    case "steps":
+      return [c.title, c.problem, ...c.steps.map((s) => s.text)];
+    case "experiment":
+      return [c.title, c.predict.question, ...c.observe, c.explain];
+    case "quiz":
+      return [c.question, ...c.options.map((o) => o.text), c.explain];
+    case "questions":
+      return [c.title, ...c.items.flatMap((i) => [i.q, i.a])];
+    case "order":
+      return [c.title, ...c.items.flatMap((i) => [i.text, i.match])];
+    case "summary":
+      return [c.title, ...c.nodes.flatMap((n) => [n.head, n.detail])];
+  }
+}
+
+/** Keeps selective `==...==` highlights within ~25% of slide prose words, unwrapping excess red walls. */
+export function trimExcessHighlights(c: SlideContent): SlideContent {
+  const texts = screenStrings(c);
+  const totalWords = texts.reduce((n, s) => n + countWords(s), 0);
+  const highlightedWords = texts.reduce((n, s) => n + countHighlightedWords(s), 0);
+  const cap = Math.max(4, Math.ceil(totalWords * 0.25));
+  if (totalWords <= 0 || highlightedWords <= cap) return c;
+
+  let remaining = cap;
+  const rewrite = (s: string, preferPlainTitle = false): string => {
+    if (!s.includes("==")) return s;
+    return tokenizeRichText(s)
+      .map((tok) => {
+        if (tok.kind === "math") return tok.raw;
+        if (tok.kind === "text") return tok.text;
+        if (tok.kind === "bold") return `**${tok.text}**`;
+        if (preferPlainTitle) return tok.text;
+        const w = countWords(tok.text);
+        if (w <= remaining) {
+          remaining -= w;
+          return `==${tok.text}==`;
+        }
+        return tok.text;
+      })
+      .join("");
+  };
+
+  switch (c.layout) {
+    case "title":
+      return { ...c, title: rewrite(c.title, true), subtitle: rewrite(c.subtitle), objectives: c.objectives.map((o) => rewrite(o)) };
+    case "statement":
+      return { ...c, title: rewrite(c.title, true), bullets: c.bullets.map((b) => rewrite(b)) };
+    case "chart":
+      return { ...c, title: rewrite(c.title, true), takeaways: c.takeaways.map((t) => rewrite(t)) };
+    case "steps":
+      return { ...c, title: rewrite(c.title, true), problem: rewrite(c.problem), steps: c.steps.map((s) => ({ ...s, text: rewrite(s.text) })) };
+    case "experiment":
+      return { ...c, title: rewrite(c.title, true), predict: { ...c.predict, question: rewrite(c.predict.question) }, observe: c.observe.map((o) => rewrite(o)), explain: rewrite(c.explain) };
+    case "quiz":
+      return { ...c, question: rewrite(c.question, true), options: c.options.map((o) => ({ ...o, text: rewrite(o.text) })), explain: rewrite(c.explain) };
+    case "questions":
+      return { ...c, title: rewrite(c.title, true), items: c.items.map((it) => ({ q: rewrite(it.q), a: rewrite(it.a) })) };
+    case "order":
+      return { ...c, title: rewrite(c.title, true), items: c.items.map((it) => ({ text: rewrite(it.text), match: rewrite(it.match) })) };
+    case "summary":
+      return { ...c, title: rewrite(c.title, true), nodes: c.nodes.map((n) => ({ head: rewrite(n.head, true), detail: rewrite(n.detail) })) };
+  }
+}
+
 /**
- * Last-resort, deterministic: a visual that still fails validation (e.g. an expression that does not
- * compile) is replaced by the "图示待补" placeholder (experiment plots by a safe wave), so a saved slide always renders.
+ * Last-resort, deterministic: heals out-of-range `chart.focus`, and replaces any visual that still fails
+ * validation (e.g. an expression that does not compile) by the "图示待补" placeholder (experiment plots by a safe wave).
  */
-export function sanitizeWidgets(c: SlideContent): { content: SlideContent; replaced: string[] } {
+export function sanitizeWidgets(raw: SlideContent): { content: SlideContent; replaced: string[] } {
+  const c = healChartFocus(raw);
   const bad = (w: WidgetSpec | undefined) => !!w && validateWidget(w).some((i) => i.level === "error");
   const why = (w: WidgetSpec) => validateWidget(w).find((i) => i.level === "error")?.message ?? "invalid";
   const placeholder = { kind: "placeholder" as const, hint: PLACEHOLDER_HINT };

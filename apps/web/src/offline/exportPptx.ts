@@ -1,4 +1,4 @@
-import type { ImageItem, PptxDeck, PptxExport } from "@kj/pptx";
+import type { ImageItem, PptxDeck, PptxExport, PptxFontScale } from "@kj/pptx";
 import type { Slide, TeachingLanguage, ThemeId } from "@kj/schema";
 import { renderWidget } from "@kj/widgets/render";
 import { lessonApi } from "../lessonApi.ts";
@@ -174,14 +174,33 @@ function chartSnapshot(theme: ThemeId) {
   };
 }
 
+export interface DownloadPptxOptions {
+  fontScale?: PptxFontScale;
+  focus?: string;
+}
+
 /** Editable .pptx for WPS / PowerPoint / Keynote; the HTML deck stays the primary format. */
-export async function downloadPptx(lessonId: string): Promise<PptxExport> {
-  const [{ exportPptx }, deck] = await Promise.all([
+export async function downloadPptx(lessonId: string, opts: DownloadPptxOptions = {}): Promise<PptxExport> {
+  const [{ exportPptx, resolveFontScale }, deck, lessonView] = await Promise.all([
     import("@kj/pptx"),
-    lessonApi.deck(lessonId) as unknown as Promise<{ lesson: { title: string; theme: ThemeId; language?: TeachingLanguage; pageLabels: Record<number, string> }; slides: Slide[] }>,
+    lessonApi.deck(lessonId) as unknown as Promise<{
+      lesson: { title: string; theme: ThemeId; language?: TeachingLanguage; focus?: string; pageLabels: Record<number, string> };
+      slides: Slide[];
+    }>,
+    opts.fontScale !== undefined || opts.focus !== undefined ? Promise.resolve(null) : lessonApi.get(lessonId).catch(() => null),
   ]);
-  const input: PptxDeck = { title: deck.lesson.title, theme: deck.lesson.theme, language: deck.lesson.language, pageLabels: deck.lesson.pageLabels, slides: deck.slides };
-  const file = await exportPptx(input, { chartImage: chartSnapshot(deck.lesson.theme) });
+  const focus = opts.focus ?? deck.lesson.focus ?? lessonView?.confirmed?.params.focus ?? lessonView?.lesson.params.focus;
+  const fontScale = resolveFontScale({ fontScale: opts.fontScale, focus });
+  const input: PptxDeck = {
+    title: deck.lesson.title,
+    theme: deck.lesson.theme,
+    language: deck.lesson.language,
+    fontScale,
+    focus,
+    pageLabels: deck.lesson.pageLabels,
+    slides: deck.slides,
+  };
+  const file = await exportPptx(input, { chartImage: chartSnapshot(deck.lesson.theme), fontScale });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([file.data as BlobPart], { type: "application/vnd.openxmlformats-officedocument.presentationml.presentation" }));
   a.download = file.filename;

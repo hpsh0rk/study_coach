@@ -74,7 +74,7 @@ function validateChart(spec: ChartSpec, issues: WidgetIssue[]): void {
     if (plain && !cats) issues.push({ level: "error", code: "data", message: `series ${s.name}: plain values need categories` });
   }
   if (cats > 7) issues.push({ level: "warning", code: "categories", message: "more than 7 categories (V-04)" });
-  if (spec.focus !== undefined && spec.focus >= spec.series.length) issues.push({ level: "error", code: "focus", message: "focus index out of range" });
+  if (spec.focus !== undefined && (spec.focus < 0 || spec.focus >= spec.series.length)) issues.push({ level: "error", code: "focus", message: "focus index out of range" });
 }
 
 export function validateWidget(spec: WidgetSpec): WidgetIssue[] {
@@ -135,7 +135,8 @@ function barLabel(v: unknown): string {
 /** ECharts option for a ChartSpec (pure data; rendering lives in ./render). */
 export function chartOption(spec: ChartSpec, p: Palette): Record<string, unknown> {
   const numericX = spec.type === "scatter" || spec.series.every((s) => s.data.every((d) => Array.isArray(d)));
-  const color = (i: number) => (spec.focus === undefined || spec.focus === i ? (p.series[i % p.series.length] ?? p.accent) : p.muted);
+  const focus = spec.focus !== undefined && spec.focus >= 0 && spec.focus < spec.series.length ? spec.focus : undefined;
+  const color = (i: number) => (focus === undefined || focus === i ? (p.series[i % p.series.length] ?? p.accent) : p.muted);
   return {
     animation: false,
     textStyle: { fontFamily: p.fontFamily },
@@ -151,7 +152,7 @@ export function chartOption(spec: ChartSpec, p: Palette): Record<string, unknown
       lineStyle: { width: 6 },
       itemStyle: { color: color(i) },
       label:
-        spec.type === "bar" && (spec.focus === undefined ? spec.series.length === 1 : spec.focus === i)
+        spec.type === "bar" && (focus === undefined ? spec.series.length === 1 : focus === i)
           ? { show: true, position: "top", fontSize: LABEL_PX * 0.8, color: p.text, formatter: (l: { value: unknown }) => barLabel(l.value) }
           : undefined,
     })),

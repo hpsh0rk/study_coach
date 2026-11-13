@@ -1,3 +1,5 @@
+import { stripRichMarkers } from "@kj/schema";
+
 /** Width estimates (in em) for wrapping text before a renderer measures it; deliberately on the wide side. */
 const CJK = /[\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef\u3000-\u303f]/;
 
@@ -213,9 +215,9 @@ export function texToText(src: string): { text: string; exact: boolean } {
   return { text: out.replace(/\s+/g, " ").trim(), exact };
 }
 
-/** Text with inline `$...$` and `$$...$$` math made readable while preserving line breaks. */
+/** Text with inline `**`/`==` emphasis stripped and `$...$`/`$$...$$` math made readable while preserving line breaks. */
 export function plain(s: string): string {
-  return s.replace(/\$\$([\s\S]+?)\$\$|\$([^$\n]+)\$/g, (_, block?: string, inline?: string) => texToText(block ?? inline ?? "").text);
+  return stripRichMarkers(s).replace(/\$\$([\s\S]+?)\$\$|\$([^$\n]+)\$/g, (_, block?: string, inline?: string) => texToText(block ?? inline ?? "").text);
 }
 
 export const hasInlineMath = (s: string) => /\$[^$]+\$/.test(s);

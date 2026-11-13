@@ -21,6 +21,11 @@ function addText(pptx: PptxGenJS, slide: PptxGenJS.Slide, it: TextItem, font: st
   const runs: PptxGenJS.TextProps[] = [];
   it.paras.forEach((p, pi) => {
     const size = pt(it.fontPx * (p.runs[0]?.scale ?? 1));
+    const paraOpts = {
+      lineSpacing: size * (it.lineFactor ?? LINE),
+      paraSpaceBefore: pi > 0 ? pt(p.gap ?? 0) : 0,
+      ...(p.bullet ? { bullet: { indent: size * 0.9 } } : {}),
+    };
     p.runs.forEach((r, ri) => {
       const last = ri === p.runs.length - 1 && pi < it.paras.length - 1;
       runs.push({
@@ -30,7 +35,7 @@ function addText(pptx: PptxGenJS, slide: PptxGenJS.Slide, it: TextItem, font: st
           bold: r.bold ?? it.bold ?? false,
           color: r.color ?? it.color,
           lang: hasCjk(r.text) ? "zh-CN" : "en-US",
-          ...(ri === 0 ? { lineSpacing: size * (it.lineFactor ?? LINE), paraSpaceBefore: pi > 0 ? pt(p.gap ?? 0) : 0, ...(p.bullet ? { bullet: { indent: size * 0.9 } } : {}) } : {}),
+          ...paraOpts,
           ...(last ? { breakLine: true } : {}),
         },
       });

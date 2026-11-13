@@ -44,6 +44,7 @@ if (flag("--gallery")) {
     ...CLASSROOM_FIXTURES.flatMap((fixture) => fixture.slides.map((s) => ({ content: s.content, notes: `${fixture.id}:${s.specId} ${s.notes}`, sources: s.sources, pageType: s.pageType }))),
   ];
   for (const theme of ["classic", "chalk"] as ThemeId[]) decks.push({ name: `gallery-${theme}`, deck: { title: `Layout gallery (${theme})`, theme, slides: gallerySlides } });
+  decks.push({ name: "gallery-classic-large", deck: { title: "Layout gallery (classic, 30pt large)", theme: "classic", fontScale: "large", slides: gallerySlides } });
 }
 for (const f of files) {
   const d = JSON.parse(fs.readFileSync(f, "utf8"));
