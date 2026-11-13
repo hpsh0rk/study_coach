@@ -1,4 +1,4 @@
-import type { ExperimentSim, FunctionSpec, Outline, PageText, PlaceholderSpec, SlideContent, SlideSpec, TableSpec, VisualSpec } from "@kj/schema";
+import type { ExperimentSim, FigureCatalogEntry, FunctionSpec, Outline, PageText, PlaceholderSpec, SlideContent, SlideSpec, TableSpec, VisualSpec } from "@kj/schema";
 import { BUDGETS } from "@kj/templates";
 import { findEmbed } from "@kj/widgets";
 import { clip, glossaryFrom, quantitiesIn, sentencesOf } from "./text.ts";
@@ -87,9 +87,24 @@ function flowStepLabel(sentence: string, maxWords: number): string {
   return clip(candidate, maxWords).slice(0, 40);
 }
 
-function visualFor(spec: SlideSpec, source: string, bullets: string[], outline: Outline): VisualSpec {
+function stubFigureFor(spec: SlideSpec, figures: FigureCatalogEntry[] | undefined): VisualSpec | undefined {
+  if (!figures?.length) return undefined;
+  const cited = new Set(spec.sourcePages);
+  const hit = figures.find((f) => f.pageNo !== undefined && cited.has(f.pageNo)) ?? figures[0];
+  if (!hit) return undefined;
+  const caption = [hit.label, hit.caption].filter(Boolean).join(": ").slice(0, 120);
+  return {
+    kind: "figure",
+    assetId: hit.assetId,
+    ...(caption ? { caption } : {}),
+  };
+}
+
+function visualFor(spec: SlideSpec, source: string, bullets: string[], outline: Outline, figures?: FigureCatalogEntry[]): VisualSpec {
   const formula = findFormula(source);
   switch (spec.visual) {
+    case "figure":
+      return stubFigureFor(spec, figures) ?? placeholderFor(spec);
     case "table":
       return stubTable(source, outline, true) ?? placeholderFor(spec);
     case "none":
@@ -115,6 +130,7 @@ interface StubInput {
   outline: Outline;
   lessonTitle: string;
   pages: PageText[];
+  figures?: FigureCatalogEntry[];
 }
 
 /** Deterministic slide content within every hard budget (used when no model is configured). */
@@ -146,14 +162,21 @@ export function stubSlide(input: StubInput): { content: SlideContent; notes: str
       break;
     case "statement": {
       const bullets = pad(pts.slice(0, 3).map((p) => clip(p, 8)), 1, () => clip(spec.title, 8));
-      content = { layout: "statement", title, bullets, visual: visualFor(spec, source, bullets, outline), terms: termsFor(`${spec.title} ${bullets.join(" ")}`, outline, 2) };
+      content = { layout: "statement", title, bullets, visual: visualFor(spec, source, bullets, outline, input.figures), terms: termsFor(`${spec.title} ${bullets.join(" ")}`, outline, 2) };
       break;
     }
     case "chart":
       content = {
         layout: "chart",
         title,
-        chart: spec.visual === "table" ? (stubTable(source, outline, false) ?? placeholderFor(spec)) : spec.visual === "none" ? placeholderFor(spec) : waveFn(true),
+        chart:
+          spec.visual === "figure"
+            ? ((stubFigureFor(spec, input.figures) as Extract<VisualSpec, { kind: "figure" }> | undefined) ?? placeholderFor(spec))
+            : spec.visual === "table"
+              ? (stubTable(source, outline, false) ?? placeholderFor(spec))
+              : spec.visual === "none"
+                ? placeholderFor(spec)
+                : waveFn(true),
         takeaways: pad(pts.slice(0, 2).map((p) => clip(p, 8)), 1, () => "Read the trend from the graph"),
         source: spec.sourcePages.length ? `Textbook p.${spec.sourcePages[0]}` : "",
       };

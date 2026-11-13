@@ -30,6 +30,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { posix } from "node:path";
+import { deflateSync } from "node:zlib";
 import { chromium } from "@playwright/test";
 import JSZip from "jszip";
 import type { Outline, SlideContent, ThemeId } from "@kj/schema";
@@ -359,7 +360,75 @@ export const SLIDE_SPECS: PlannedSpec[] = [
       terms: [],
     },
   },
+  {
+    id: "bv-12-figure",
+    pageType: "concept",
+    layout: "statement",
+    visual: "figure",
+    minutes: 4,
+    title: "原书插图：通电螺线管周围磁感线分布",
+    purpose: "验证教材插图 D1 media_assets 拉取 + 等比 contain 嵌入 + 图注",
+    keyPoints: ["内部平行匀强磁场", "外部与条形磁铁相似"],
+    sourcePages: [1],
+    loop: 1,
+    notes: "NOTE-12：对照原书插图讲解右手螺旋定则判断 N/S 极。",
+    content: {
+      layout: "statement",
+      title: "通电螺线管外部磁场与条形磁铁相似",
+      bullets: ["管内磁感线==平行均匀==", "电流反向则两极对调"],
+      visual: {
+        kind: "figure",
+        assetId: "med_placeholder_replaced_at_runtime",
+        caption: "Fig 16.8: 通电螺线管周围磁场方向",
+      },
+      terms: [{ term: "solenoid", zh: "螺线管" }],
+    },
+  },
 ];
+
+function makeTestDiagramPng(width: number, height: number): string {
+  const crcTable = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    crcTable[n] = c >>> 0;
+  }
+  const crc32 = (buf: Buffer) => {
+    let c = 0xffffffff;
+    for (const b of buf) c = crcTable[(c ^ b) & 0xff]! ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (type: string, data: Buffer) => {
+    const t = Buffer.from(type);
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length, 0);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(Buffer.concat([t, data])), 0);
+    return Buffer.concat([len, t, data, crc]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr.set([8, 2, 0, 0, 0], 8);
+  const raw = Buffer.alloc(height * (1 + width * 3));
+  for (let y = 0; y < height; y++) {
+    const row = y * (1 + width * 3);
+    raw[row] = 0;
+    for (let x = 0; x < width; x++) {
+      const stripe = ((x * 7 + y * 5) % 97) + 120;
+      raw[row + 1 + x * 3] = stripe;
+      raw[row + 1 + x * 3 + 1] = (x + y) % 200;
+      raw[row + 1 + x * 3 + 2] = 220;
+    }
+  }
+  const png = Buffer.concat([
+    Buffer.from("89504e470d0a1a0a", "hex"),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", deflateSync(raw, { level: 1 })),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+  return `data:image/png;base64,${png.toString("base64")}`;
+}
 
 interface Relationship {
   id: string;
@@ -528,12 +597,12 @@ async function verifyPptxPackage(pptxPath: string, theme: ThemeId) {
     if (!combinedNotes.includes(secret)) throw new Error(`${theme}: expected secret missing from speaker notes: ${secret}`);
   }
 
-  // 3. Browser ECharts & KaTeX rasterized PNG verification (slides 4, 5, and 11)
+  // 3. Browser ECharts, KaTeX & Textbook Figure PNG verification (slides 4, 5, 11, and 12)
   const mediaParts = Object.keys(zip.files)
     .filter((n) => n.startsWith("ppt/media/") && !zip.files[n]!.dir)
     .sort();
-  if (mediaParts.length < 3) {
-    throw new Error(`${theme}: expected at least 3 browser-rasterized PNGs in ppt/media/, found ${mediaParts.length}`);
+  if (mediaParts.length < 4) {
+    throw new Error(`${theme}: expected at least 4 embedded PNGs in ppt/media/, found ${mediaParts.length}`);
   }
   const mediaDetails = [];
   for (const mediaPart of mediaParts) {
@@ -551,12 +620,23 @@ async function verifyPptxPackage(pptxPath: string, theme: ThemeId) {
     });
   }
 
-  // Verify slides 4, 5, and 11 specifically link to image relationships (not text fallback), and slide 11 notes cleaned $v = f\lambda$ while keeping raw LaTeX
-  for (const slideIdx of [3, 4, 10]) {
-    const rels = relationships(await xml(relsPathFor(slideParts[slideIdx]!)));
-    if (!rels.some((r) => r.type.endsWith("/image"))) {
+  // Verify slides 4, 5, 11, and 12 specifically link to image relationships (not text fallback), and slide 11 notes cleaned $v = f\lambda$ while keeping raw LaTeX
+  const slideImageSha256: Record<number, string> = {};
+  for (const slideIdx of [3, 4, 10, 11]) {
+    const sRelsPath = relsPathFor(slideParts[slideIdx]!);
+    const rels = relationships(await xml(sRelsPath));
+    const imgRel = rels.find((r) => r.type.endsWith("/image"));
+    if (!imgRel) {
       throw new Error(`${theme}: slide ${slideIdx + 1} fell back to text instead of embedding browser PNG`);
     }
+    const targetMediaPart = resolveTarget(sRelsPath, imgRel.target);
+    const detail = mediaDetails.find((m) => m.part === targetMediaPart);
+    if (detail) slideImageSha256[slideIdx] = detail.sha256;
+  }
+  // Verify slide 12 textbook figure maintains exact 2:1 contain aspect ratio (480x240)
+  const figPicMatch = /<p:pic>[\s\S]*?<a:ext cx="(\d+)" cy="(\d+)"\/>[\s\S]*?<\/p:pic>/.exec(slideXmls[11]!);
+  if (!figPicMatch || Math.abs(Number(figPicMatch[1]) / Number(figPicMatch[2]) - 2.0) > 0.05) {
+    throw new Error(`${theme}: slide 12 figure <p:pic> did not preserve 2:1 contain aspect ratio`);
   }
   if (!allNotes[10]!.includes("NOTE-11：先回顾 v = fλ") || !allNotes[10]!.includes("公式原文（LaTeX）：f(x) = \\begin{cases}")) {
     throw new Error(`${theme}: slide 11 speaker notes missing plain() math conversion or raw LaTeX preservation`);
@@ -569,6 +649,7 @@ async function verifyPptxPackage(pptxPath: string, theme: ThemeId) {
     sha256,
     slides: slideParts.length,
     media: mediaDetails,
+    slideImageSha256,
   };
 }
 
@@ -648,7 +729,21 @@ async function main() {
         ],
       });
 
-      // Create lesson, draft outline, replace with exact 10-slide spec, confirm, generate, and patch exact slide contents
+      // Upload synthetic textbook figure to D1 media_assets for slide 12:
+      const uploadedFig = await postJson<{ asset: { id: string } }>("/api/media", {
+        documentId: createdDoc.id,
+        pageNo: 1,
+        label: "Fig 16.8",
+        caption: "通电螺线管周围磁场方向",
+        image: makeTestDiagramPng(480, 240),
+      });
+      const runtimeSpecs: PlannedSpec[] = SLIDE_SPECS.map((s) =>
+        s.id === "bv-12-figure" && s.content.layout === "statement" && s.content.visual.kind === "figure"
+          ? { ...s, content: { ...s.content, visual: { ...s.content.visual, assetId: uploadedFig.asset.id } } }
+          : s,
+      );
+
+      // Create lesson, draft outline, replace with exact 12-slide spec, confirm, generate, and patch exact slide contents
       const lessonView = await postJson<{ lesson: { id: string } }>("/api/lessons", {
         documentId: createdDoc.id,
         chapterIds: ["ch1"],
@@ -666,7 +761,7 @@ async function main() {
           { term: "frequency", zh: "频率" },
         ],
         notCovered: [],
-        slides: SLIDE_SPECS.map((s) => ({
+        slides: runtimeSpecs.map((s) => ({
           id: s.id,
           pageType: s.pageType,
           layout: s.layout,
@@ -682,7 +777,7 @@ async function main() {
       const savedOutline = await postJson<{ version: { rev: number } }>(`/api/lessons/${lessonId}/outline-versions/${versionId}`, { outline, rev: drafted.version.rev }, "PUT");
       await postJson(`/api/lessons/${lessonId}/outline-versions/${versionId}/confirm`, { ackOverBudget: true, rev: savedOutline.version.rev });
 
-      for (const s of SLIDE_SPECS) {
+      for (const s of runtimeSpecs) {
         const gen = await postJson<{ slide: { id: string } }>(`/api/lessons/${lessonId}/outline-versions/${versionId}/slides/${s.id}/generate`, { regenerate: false });
         await postJson(`/api/lessons/${lessonId}/slides/${gen.slide.id}`, { content: s.content, notes: s.notes }, "PATCH");
       }
@@ -702,15 +797,18 @@ async function main() {
 
       if (pageErrors.length) throw new Error(`Browser page errors during export: ${pageErrors.join(" | ")}`);
 
-      // Verify classic and chalk raster PNGs differ (proving real CSS theme computed styles reached ECharts SVG->Canvas)
-      const classicMediaHashes = packageReports[0]!.media.map((m) => m.sha256);
-      const chalkMediaHashes = packageReports[1]!.media.map((m) => m.sha256);
-      if (classicMediaHashes.some((h, i) => h === chalkMediaHashes[i])) {
-        throw new Error("Expected classic and chalk browser-rasterized ECharts PNGs to have distinct theme colors, but hashes matched");
+      // Verify classic and chalk raster ECharts/KaTeX PNGs (slides 4, 5, 11) differ while textbook figure (slide 12) stays byte-identical across themes!
+      for (const rasterIdx of [3, 4, 10]) {
+        if (packageReports[0]!.slideImageSha256[rasterIdx] === packageReports[1]!.slideImageSha256[rasterIdx]) {
+          throw new Error(`Expected classic and chalk browser-rasterized PNG on slide ${rasterIdx + 1} to have distinct theme colors, but hashes matched`);
+        }
+      }
+      if (packageReports[0]!.slideImageSha256[11] !== packageReports[1]!.slideImageSha256[11]) {
+        throw new Error("Expected extracted textbook figure on slide 12 to remain byte-identical across themes");
       }
 
       // Run headless LibreOffice geometry check (PDFpdftotext -bbox + probe FODP text-box heights) + render PNG previews
-      const deckSlides: PptxDeck["slides"] = SLIDE_SPECS.map((s) => ({
+      const deckSlides: PptxDeck["slides"] = runtimeSpecs.map((s) => ({
         content: s.content,
         notes: s.notes,
         sources: s.sourcePages,
@@ -789,8 +887,8 @@ async function main() {
           .readdirSync(outDir)
           .filter((f) => f.startsWith(`${name}-`) && f.endsWith(".png"))
           .sort();
-        if (pngFiles.length !== SLIDE_SPECS.length) {
-          throw new Error(`${name}: expected ${SLIDE_SPECS.length} rendered PNG slides, got ${pngFiles.length}`);
+        if (pngFiles.length !== runtimeSpecs.length) {
+          throw new Error(`${name}: expected ${runtimeSpecs.length} rendered PNG slides, got ${pngFiles.length}`);
         }
         loSummary.push({ deck: name, slides: plans.length, textBoxes: boxes, words, pngCount: pngFiles.length });
       }

@@ -1,16 +1,32 @@
-import { useContext, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { countWords, SlideContent as SlideContentSchema, type ChartSpec, type PageType, type SlideContent, type ThemeId, type Unverified, type WidgetSpec } from "@kj/schema";
+import { createContext, useContext, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { countWords, decodeSourcePage, SlideContent as SlideContentSchema, SOURCE_STRIDE, type ChartSpec, type PageType, type SlideContent, type ThemeId, type Unverified, type WidgetSpec } from "@kj/schema";
 import { BUDGETS, type ListBudget, type TextBudget } from "@kj/templates";
 import { describeIssue, slotIssues, widgetIssues, type SlotIssue } from "@kj/templates/issues";
 import { resolveEmbed } from "@kj/widgets";
-import { ApiError } from "../api.ts";
+import { activeLessonPdfSources, ApiError } from "../api.ts";
+import { mediaApi, type MediaAssetDto } from "../textbook/api.ts";
+import { imageBlobToBoundedDataUrl, PageCropper } from "../textbook/PageCropper.tsx";
 import { formatChartCategories, formatChartSeries, parseChartCategories, parseChartSeries } from "./chartForm.ts";
 import { SlidePreview } from "./SlideView.tsx";
 import { activeUnverified, FlagContext, isFlagged, UnverifiedBox } from "./Unverified.tsx";
 
 type Obj = Record<string, any>;
 type Path = (string | number)[];
-type VisualKind = "formula" | "flow" | "table" | "function" | "chart" | "placeholder";
+type VisualKind = "formula" | "flow" | "table" | "function" | "chart" | "figure" | "placeholder";
+
+interface FigureEditorEnv {
+  lessonId?: string;
+  documentId?: string;
+  citedPages: number[];
+  assets: MediaAssetDto[];
+  addAsset: (asset: MediaAssetDto) => void;
+}
+
+const FigureEditorContext = createContext<FigureEditorEnv>({
+  citedPages: [],
+  assets: [],
+  addAsset: () => undefined,
+});
 
 interface SubField {
   key: string;
@@ -41,12 +57,12 @@ const FORM: Record<SlideContent["layout"], Def[]> = {
   statement: [
     title(B.statement.title),
     { type: "lines", key: "bullets", label: "要点 Bullets", budget: B.statement.bullets, total: B.statement.bodyTotal },
-    { type: "visual", key: "visual", label: "图示 Visual", kinds: ["formula", "flow", "table", "function", "chart", "placeholder"], narrow: true },
+    { type: "visual", key: "visual", label: "图示 Visual", kinds: ["formula", "flow", "table", "function", "chart", "figure", "placeholder"], narrow: true },
     { type: "items", key: "terms", label: "术语 Terms", budget: B.statement.terms, fields: [{ key: "term", label: "术语 Term", budget: B.statement.terms.item }, { key: "zh", label: "中文 Chinese", maxChars: 12 }] },
   ],
   chart: [
     title(B.chart.title),
-    { type: "visual", key: "chart", label: "图表 Chart", kinds: ["chart", "table", "function", "placeholder"], narrow: false },
+    { type: "visual", key: "chart", label: "图表 Chart", kinds: ["chart", "table", "function", "figure", "placeholder"], narrow: false },
     { type: "lines", key: "takeaways", label: "结论 Takeaways", budget: B.chart.takeaways },
     { type: "text", key: "source", label: "数据来源 Source", budget: B.chart.source },
   ],
@@ -100,10 +116,11 @@ const VISUAL_LABEL: Record<VisualKind, string> = {
   table: "表格 Table",
   function: "函数图像 Function plot",
   chart: "数据图表 Chart",
+  figure: "原书插图 / 截图 Figure",
   placeholder: "图示待补 Visual to add",
 };
 
-function visualTemplate(kind: VisualKind): WidgetSpec {
+function visualTemplate(kind: VisualKind, defaultFigure?: MediaAssetDto): WidgetSpec {
   switch (kind) {
     case "formula":
       return { kind, tex: "", caption: "" };
@@ -115,6 +132,10 @@ function visualTemplate(kind: VisualKind): WidgetSpec {
       return { kind, expr: "x", x: [0, 10], xLabel: "x", yLabel: "y", params: [] };
     case "chart":
       return { kind, type: "bar", xLabel: "", yLabel: "", categories: ["A", "B"], series: [{ name: "", data: [1, 2] }] };
+    case "figure": {
+      const cap = defaultFigure ? [defaultFigure.label, defaultFigure.caption].filter(Boolean).join(": ").slice(0, 120) : "";
+      return { kind, assetId: defaultFigure?.id ?? "", ...(cap ? { caption: cap } : {}) };
+    }
     case "placeholder":
       return { kind, hint: "" };
   }
@@ -370,6 +391,207 @@ function ChartFields({ value, path, issues, onChange }: { value: Obj; path: Path
 
 const splitCells = (s: string) => s.split("|").map((c) => c.trim());
 
+function FigureFields({ value, path, issues, onChange }: { value: Obj; path: Path; issues: SlotIssue[]; onChange: (p: Path, v: unknown) => void }) {
+  const figEnv = useContext(FigureEditorContext);
+  const at = (k: string) => [...path, k];
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState("");
+  const [showCropper, setShowCropper] = useState(false);
+
+  const citedSet = useMemo(() => new Set(figEnv.citedPages), [figEnv.citedPages]);
+  const sortedAssets = useMemo(() => {
+    const onCited: MediaAssetDto[] = [];
+    const others: MediaAssetDto[] = [];
+    for (const a of figEnv.assets) {
+      const vNo = a.virtualPageNo ?? a.pageNo;
+      if (vNo !== null && vNo !== undefined && citedSet.has(vNo)) onCited.push(a);
+      else others.push(a);
+    }
+    return [...onCited, ...others];
+  }, [figEnv.assets, citedSet]);
+
+  const currentAssetId = String(value.assetId ?? "");
+
+  function selectAsset(asset: MediaAssetDto) {
+    const autoCaption = [asset.label, asset.caption].filter(Boolean).join(": ").slice(0, 120);
+    onChange(path, {
+      kind: "figure",
+      assetId: asset.id,
+      caption: String(value.caption ?? "").trim() || autoCaption || undefined,
+      ...(value.alt ? { alt: String(value.alt) } : {}),
+    });
+  }
+
+  async function handleImageBlob(blob: Blob, defaultLabel: string) {
+    if (!figEnv.lessonId && !figEnv.documentId) return;
+    setUploading(true);
+    setUploadError("");
+    try {
+      const dataUrl = await imageBlobToBoundedDataUrl(blob, 1200);
+      const res = await mediaApi.upload({
+        ...(figEnv.lessonId ? { lessonId: figEnv.lessonId } : { documentId: figEnv.documentId }),
+        label: defaultLabel.slice(0, 80),
+        caption: String(value.caption ?? "").trim().slice(0, 120),
+        image: dataUrl,
+      });
+      figEnv.addAsset(res.asset);
+      onChange(path, {
+        kind: "figure",
+        assetId: res.asset.id,
+        ...(String(value.caption ?? "").trim()
+          ? { caption: String(value.caption).trim() }
+          : res.asset.label
+            ? { caption: res.asset.label }
+            : {}),
+        ...(value.alt ? { alt: String(value.alt) } : {}),
+      });
+    } catch (e) {
+      setUploadError(e instanceof ApiError ? e.message : (e as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  // Resolve primary or secondary PDF documentId + physical pageNo for drag-crop fallback:
+  const firstCited = figEnv.citedPages[0] ?? 1;
+  const pdfSources = activeLessonPdfSources(figEnv.documentId);
+  let cropDocId = figEnv.documentId ?? "";
+  let cropPageNo = firstCited;
+  if (firstCited > SOURCE_STRIDE && pdfSources.length > 0) {
+    const decoded = decodeSourcePage(firstCited);
+    if (pdfSources[decoded.pdfIndex]) {
+      cropDocId = pdfSources[decoded.pdfIndex]!.documentId;
+      cropPageNo = decoded.pageNo;
+    }
+  }
+
+  return (
+    <div
+      className="stack"
+      style={{ gap: 10 }}
+      data-testid="figure-slot-editor"
+      onPaste={(e) => {
+        const items = e.clipboardData?.items;
+        if (!items) return;
+        for (const item of Array.from(items)) {
+          if (item.type.startsWith("image/")) {
+            const blob = item.getAsFile();
+            if (blob) {
+              e.preventDefault();
+              void handleImageBlob(blob, "剪贴板截图");
+              break;
+            }
+          }
+        }
+      }}
+    >
+      {sortedAssets.length > 0 ? (
+        <div>
+          <span className="small muted">
+            选择本课已提取的教材原图或截图（本页引用优先）· Pick an extracted textbook figure:
+          </span>
+          <div className="row wrap" style={{ gap: 8, marginTop: 6 }} data-testid="figure-picker-grid">
+            {sortedAssets.map((a) => {
+              const selected = a.id === currentAssetId;
+              const vNo = a.virtualPageNo ?? a.pageNo;
+              const isCited = vNo !== null && vNo !== undefined && citedSet.has(vNo);
+              return (
+                <button
+                  key={a.id}
+                  type="button"
+                  data-testid={`pick-figure-${a.id}`}
+                  aria-pressed={selected}
+                  onClick={() => selectAsset(a)}
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    gap: 4,
+                    padding: 6,
+                    width: 140,
+                    borderRadius: 8,
+                    border: selected ? "2px solid var(--accent, #2563eb)" : "1px solid var(--line)",
+                    background: selected ? "rgba(37, 99, 235, 0.08)" : "#fff",
+                    cursor: "pointer",
+                  }}
+                >
+                  <img
+                    src={`/api/media/${encodeURIComponent(a.id)}`}
+                    alt={a.caption || a.label || "Figure"}
+                    style={{ width: 124, height: 78, objectFit: "contain", display: "block" }}
+                  />
+                  <span className="small" style={{ fontWeight: selected ? 700 : 400, maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {isCited ? "★ " : ""}
+                    {a.label || (a.pageNo ? `p.${a.pageNo}` : "上传图片")}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : (
+        <p className="muted small" style={{ margin: 0 }}>
+          还没有提取到本页原书插图，可直接上传/粘贴截图（Ctrl/Cmd+V），或从教材页拖框裁取。
+        </p>
+      )}
+
+      <div className="row wrap" style={{ gap: 8 }}>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/png,image/webp,image/jpeg"
+          hidden
+          data-testid="figure-upload-input"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void handleImageBlob(f, f.name.replace(/\.[a-z0-9]+$/i, ""));
+            e.target.value = "";
+          }}
+        />
+        <button
+          type="button"
+          className="btn small ghost"
+          disabled={uploading}
+          data-testid="figure-upload-btn"
+          onClick={() => fileRef.current?.click()}
+        >
+          {uploading ? "上传中…" : "🖼 上传图片 / Ctrl+V 粘贴截图 Upload or paste"}
+        </button>
+        {cropDocId && (
+          <button
+            type="button"
+            className="btn small ghost"
+            data-testid="figure-crop-toggle"
+            onClick={() => setShowCropper((v) => !v)}
+          >
+            {showCropper ? "收起教材裁图" : `✂ 从教材第 ${cropPageNo} 页拖框裁图 Crop from page`}
+          </button>
+        )}
+      </div>
+
+      {uploadError && <div className="alert error">{uploadError}</div>}
+
+      {showCropper && cropDocId && (
+        <PageCropper
+          documentId={cropDocId}
+          pageNo={cropPageNo}
+          onCancel={() => setShowCropper(false)}
+          onCropped={(asset) => {
+            figEnv.addAsset(asset);
+            selectAsset(asset);
+            setShowCropper(false);
+          }}
+        />
+      )}
+
+      <TextField label="图注说明 Caption（可选，最多 120 字）" value={String(value.caption ?? "")} maxChars={120} path={at("caption")} issues={issues} onChange={onChange} />
+      <TextField label="无障碍替代文字 Alt（可选）" value={String(value.alt ?? "")} maxChars={120} path={at("alt")} issues={issues} onChange={onChange} />
+      <FieldIssues issues={issues} path={at("assetId")} />
+    </div>
+  );
+}
+
 function VisualBody({ value, narrow, path, issues, onChange }: { value: Obj; narrow: boolean; path: Path; issues: SlotIssue[]; onChange: (p: Path, v: unknown) => void }) {
   const at = (k: string) => [...path, k];
   switch (value.kind as VisualKind) {
@@ -479,6 +701,8 @@ function VisualBody({ value, narrow, path, issues, onChange }: { value: Obj; nar
       return <TextField label="需要补什么图（老师上课前自己加）Hint" value={String(value.hint ?? "")} budget={B.placeholder.hint} path={at("hint")} issues={issues} onChange={onChange} />;
     case "chart":
       return <ChartFields value={value} path={path} issues={issues} onChange={onChange} />;
+    case "figure":
+      return <FigureFields value={value} path={path} issues={issues} onChange={onChange} />;
     default:
       return <JsonField value={value} path={path} onChange={onChange} />;
   }
@@ -486,6 +710,7 @@ function VisualBody({ value, narrow, path, issues, onChange }: { value: Obj; nar
 
 function VisualField({ def, value, path, issues, onChange }: { def: Extract<Def, { type: "visual" }>; value: Obj; path: Path; issues: SlotIssue[]; onChange: (p: Path, v: unknown) => void }) {
   const flags = useContext(FlagContext);
+  const figEnv = useContext(FigureEditorContext);
   const cache = useRef<Record<string, Obj>>({ [String(value.kind)]: value });
   const kind = String(value.kind) as VisualKind;
   return (
@@ -499,7 +724,13 @@ function VisualField({ def, value, path, issues, onChange }: { def: Extract<Def,
           onChange={(e) => {
             cache.current[kind] = value;
             const next = e.target.value as VisualKind;
-            onChange(path, cache.current[next] ?? visualTemplate(next));
+            const citedSet = new Set(figEnv.citedPages);
+            const preferredFig =
+              figEnv.assets.find((a) => {
+                const vNo = a.virtualPageNo ?? a.pageNo;
+                return vNo !== null && vNo !== undefined && citedSet.has(vNo);
+              }) ?? figEnv.assets[0];
+            onChange(path, cache.current[next] ?? visualTemplate(next, preferredFig));
           }}
         >
           {(def.kinds.includes(kind) ? def.kinds : [kind, ...def.kinds]).map((k) => (
@@ -641,6 +872,9 @@ export function SlotEditor({
   onRestoreUnverified,
   pageType,
   theme,
+  lessonId,
+  documentId,
+  sources = [],
   onSave,
   onCancel,
 }: {
@@ -652,6 +886,9 @@ export function SlotEditor({
   onRestoreUnverified?: (item: Unverified) => void;
   pageType: PageType;
   theme: ThemeId;
+  lessonId?: string;
+  documentId?: string;
+  sources?: number[];
   onSave: (content: SlideContent, notes: string) => Promise<void>;
   onCancel: () => void;
 }) {
@@ -659,6 +896,31 @@ export function SlotEditor({
   const [noteDraft, setNoteDraft] = useState(notes);
   const [errors, setErrors] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [lessonAssets, setLessonAssets] = useState<MediaAssetDto[]>([]);
+
+  useEffect(() => {
+    if (!lessonId && !documentId) return;
+    let alive = true;
+    const load = lessonId ? mediaApi.listForLesson(lessonId) : mediaApi.listForDocument(documentId!);
+    load
+      .then((r) => alive && setLessonAssets(r.assets))
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [lessonId, documentId]);
+
+  const figEnv = useMemo<FigureEditorEnv>(
+    () => ({
+      lessonId,
+      documentId,
+      citedPages: sources,
+      assets: lessonAssets,
+      addAsset: (asset) => setLessonAssets((prev) => (prev.some((x) => x.id === asset.id) ? prev : [...prev, asset])),
+    }),
+    [lessonId, documentId, sources, lessonAssets],
+  );
+
   const change = (p: Path, v: unknown) => setDraft((d) => setIn(d, p, v));
   const issues = useMemo(() => [...slotIssues(draft as SlideContent), ...widgetIssues(draft as SlideContent)], [draft]);
   const deferred = useDeferredValue(draft);
@@ -693,7 +955,9 @@ export function SlotEditor({
         <span className="muted small">实时预览 Live preview</span>
       </div>
       <UnverifiedBox items={unverified} dismissed={dismissedUnverified} onDismiss={onDismissUnverified} onRestore={onRestoreUnverified} />
-      <FlagContext.Provider value={activeFlags.map((u) => u.text)}>{FORM[content.layout].map((d) => render(d, draft, [], issues, change))}</FlagContext.Provider>
+      <FigureEditorContext.Provider value={figEnv}>
+        <FlagContext.Provider value={activeFlags.map((u) => u.text)}>{FORM[content.layout].map((d) => render(d, draft, [], issues, change))}</FlagContext.Provider>
+      </FigureEditorContext.Provider>
       <label className="slot-field">
         <span>讲稿 Speaker notes</span>
         <textarea rows={5} value={noteDraft} onChange={(e) => setNoteDraft(e.target.value)} />

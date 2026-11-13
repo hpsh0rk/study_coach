@@ -77,7 +77,14 @@ function validateChart(spec: ChartSpec, issues: WidgetIssue[]): void {
   if (spec.focus !== undefined && (spec.focus < 0 || spec.focus >= spec.series.length)) issues.push({ level: "error", code: "focus", message: "focus index out of range" });
 }
 
-export function validateWidget(spec: WidgetSpec): WidgetIssue[] {
+const FIGURE_ASSET_ID_RE = /^med_[0-9A-Za-z_-]{4,60}$/;
+
+export interface ValidateWidgetOptions {
+  /** Optional set of media asset IDs available to this lesson; unknown IDs fail validation. */
+  knownAssetIds?: ReadonlySet<string>;
+}
+
+export function validateWidget(spec: WidgetSpec, opts?: ValidateWidgetOptions): WidgetIssue[] {
   const issues: WidgetIssue[] = [];
   switch (spec.kind) {
     case "function":
@@ -94,6 +101,13 @@ export function validateWidget(spec: WidgetSpec): WidgetIssue[] {
       break;
     case "table":
       if (spec.rows.some((r) => r.length !== spec.columns.length)) issues.push({ level: "error", code: "table", message: "every table row needs one cell per column" });
+      break;
+    case "figure":
+      if (!FIGURE_ASSET_ID_RE.test(spec.assetId)) {
+        issues.push({ level: "error", code: "figure", message: `invalid figure assetId "${spec.assetId}"` });
+      } else if (opts?.knownAssetIds && !opts.knownAssetIds.has(spec.assetId)) {
+        issues.push({ level: "error", code: "figure", message: `unknown figure assetId "${spec.assetId}"` });
+      }
       break;
     case "placeholder":
       issues.push({ level: "warning", code: "placeholder", message: "图示待补 · visual still to be added" });

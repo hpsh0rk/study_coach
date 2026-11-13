@@ -379,6 +379,50 @@
   color: var(--kj-text);
 }
 
+/* ---- textbook figure ---- */
+.kj-widget-figure {
+  justify-content: center;
+  padding: 16px;
+}
+.kj-figure {
+  margin: 0;
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.kj-figure-stage {
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 18px;
+  background: #ffffff;
+  padding: 10px;
+  overflow: hidden;
+}
+.kj-figure-img {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  display: block;
+}
+.kj-figure-caption {
+  flex: 0 0 auto;
+  font-size: 36px;
+  line-height: 1.2;
+  color: var(--kj-soft);
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ---- cover ---- */
 .kj-layout-title {
   grid-template-rows: minmax(0, 1fr) 60px;

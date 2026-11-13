@@ -1,8 +1,10 @@
 import { buildChapterTree, pagesInRanges } from "@kj/textbook";
 import type { PageRange, ParsedPdf, TocEntry } from "@kj/schema";
-import type { CreateTextbook, DocumentRow, TextbookLookup } from "./api.ts";
+import type { CreateTextbook, DocumentRow, TextbookLookup, UploadMediaItem } from "./api.ts";
 
 export const MAX_MB = 200;
+export const FIGURE_UPLOAD_BATCH = 8;
+export const MAX_INGEST_FIGURE_PAGES = 45;
 
 export type IngestProgress = { kind: "checking" } | { kind: "parsing" | "uploading"; done: number; total: number };
 
@@ -33,6 +35,10 @@ export interface IngestDeps {
   restore: (id: string) => Promise<unknown>;
   /** The file was uploaded and later deleted: true restores that copy, false uploads it again as a new one. */
   confirmRestore: (doc: DocumentRow) => boolean | Promise<boolean>;
+  /** Optional browser 2× composite figure detector/cropper run on parsed pages (capped cleanly per lesson/upload). */
+  extractFigures?: (data: ArrayBuffer, opts?: IngestParseOpts) => Promise<(UploadMediaItem & { width?: number; height?: number })[]>;
+  /** Optional batch uploader storing extracted figures in D1 `media_assets`. */
+  putFigures?: (documentId: string, items: UploadMediaItem[]) => Promise<unknown>;
 }
 
 export interface PdfFile {
@@ -104,6 +110,7 @@ export async function ingestPdf(
     );
     const toUpload = wantedMissing ? parsed.pages : onlyPages(parsed.pages, found.missing);
     await upload(found.document.id, toUpload, found.pageBatch, deps, onProgress);
+    await uploadExtractedFigures(found.document.id, data, toUpload.map((p) => p.no), pageOffset, deps);
     return { id: found.document.id, outcome: restored ? "restored" : "resumed" };
   }
 
@@ -128,7 +135,41 @@ export async function ingestPdf(
     sha256,
   });
   await upload(id, parsed.pages, pageBatch, deps, onProgress);
+  const figTargetPages = options?.pageNumbers ?? (parsed.pages.length <= MAX_INGEST_FIGURE_PAGES ? parsed.pages.map((p) => p.no) : undefined);
+  if (figTargetPages?.length) {
+    await uploadExtractedFigures(id, data, figTargetPages, pageOffset, deps);
+  }
   return { id, outcome: "new" };
+}
+
+async function uploadExtractedFigures(
+  documentId: string,
+  data: ArrayBuffer,
+  pageNumbers: number[],
+  pageOffset: number | undefined,
+  deps: IngestDeps,
+): Promise<void> {
+  if (!deps.extractFigures || !deps.putFigures || pageNumbers.length === 0) return;
+  try {
+    const bounded = pageNumbers.slice(0, MAX_INGEST_FIGURE_PAGES);
+    const figures = await deps.extractFigures(data, {
+      pageNumbers: bounded,
+      ...(pageOffset ? { pageOffset } : {}),
+    });
+    for (let i = 0; i < figures.length; i += FIGURE_UPLOAD_BATCH) {
+      await deps.putFigures(
+        documentId,
+        figures.slice(i, i + FIGURE_UPLOAD_BATCH).map(({ pageNo, label, caption, image }) => ({
+          ...(pageNo !== undefined ? { pageNo } : {}),
+          ...(label ? { label } : {}),
+          ...(caption ? { caption } : {}),
+          image,
+        })),
+      );
+    }
+  } catch {
+    // Figure extraction/upload is a best-effort enrichment; never fail core text ingestion if a browser lacks WebP/Canvas support.
+  }
 }
 
 function onlyPages(pages: ParsedPdf["pages"], ranges: PageRange[]): ParsedPdf["pages"] {

@@ -103,6 +103,44 @@ describe("ingestPdf", () => {
     await expect(ingestPdf(file, deps)).rejects.toThrow("network");
     expect(calls.batches).toEqual([[1, 2], [3, 4]]);
   });
+
+  it("extracts and uploads capped composite textbook figures per (documentId, pageNo) during ingest without blocking when figure upload is optional", async () => {
+    const uploadedFigures: { docId: string; items: unknown[] }[] = [];
+    const extractedPages: number[][] = [];
+    const { deps } = fakes(undefined, {
+      extractFigures: async (_data, opts) => {
+        extractedPages.push(opts?.pageNumbers ?? []);
+        return [
+          {
+            pageNo: 2,
+            label: "Fig 1.2",
+            caption: "Wavefront diagram",
+            image: "data:image/webp;base64,UklGRhIAAABXRUJQ",
+            width: 640,
+            height: 400,
+          },
+        ];
+      },
+      putFigures: async (docId, items) => {
+        uploadedFigures.push({ docId, items });
+      },
+    });
+    const out = await ingestPdf(file, deps, undefined, { pageNumbers: [1, 2, 3] });
+    expect(out).toEqual({ id: "doc_1", outcome: "new" });
+    expect(extractedPages).toEqual([[1, 2, 3]]);
+    expect(uploadedFigures).toEqual([
+      {
+        docId: "doc_1",
+        items: [
+          expect.objectContaining({
+            pageNo: 2,
+            label: "Fig 1.2",
+            caption: "Wavefront diagram",
+          }),
+        ],
+      },
+    ]);
+  });
 });
 
 describe("fileProblem", () => {

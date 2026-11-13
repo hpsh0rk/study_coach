@@ -60,12 +60,12 @@ export function visualSlotOf(layout: SlideContent["layout"]): "visual" | "chart"
 }
 
 /** Widget errors (e.g. an expression that does not compile) as slot issues on the visual slot. */
-export function widgetIssues(c: SlideContent): SlotIssue[] {
+export function widgetIssues(c: SlideContent, opts?: { knownAssetIds?: ReadonlySet<string> }): SlotIssue[] {
   const slot = visualSlotOf(c.layout);
   const w = slot ? ((c as Record<string, unknown>)[slot] as WidgetSpec | undefined) : undefined;
   if (!slot || !w || typeof w !== "object" || !("kind" in w)) return [];
   try {
-    return validateWidget(w)
+    return validateWidget(w, opts)
       .filter((i) => i.level === "error")
       .map((i) => ({ path: [slot], message: i.message }));
   } catch (e) {
@@ -107,6 +107,8 @@ const SLOT_LABELS: Record<string, string> = {
   columns: "表头",
   rows: "表格行",
   caption: "说明文字",
+  assetId: "插图资源",
+  alt: "替代文字",
   tex: "公式",
   expr: "表达式",
   hint: "需要补的图",
@@ -148,6 +150,7 @@ export function issueText(message: string): string {
   if ((m = /param (\S+): max must exceed min/.exec(message))) return `滑块 ${m[1]}：最大值要大于最小值`;
   if ((m = /param (\S+): value out of range/.exec(message))) return `滑块 ${m[1]}：初始值不在范围内`;
   if (/forbidden TeX command/.test(message)) return "公式里有不允许的命令";
+  if (/unknown figure assetId|invalid figure assetId/.test(message)) return "插图不存在或不属于本节课，请重新选择或上传插图";
   if ((m = /series (.+?): (\d+) values for (\d+) categories/.exec(message))) return `数据系列 ${m[1]}：有 ${m[2]} 个数值，但有 ${m[3]} 个类别`;
   if (/expected object, received string/.test(message)) return "格式不对：这里需要分成几个小项填写";
   if (/Invalid input|expected/i.test(message)) return `格式不对（${message}）`;

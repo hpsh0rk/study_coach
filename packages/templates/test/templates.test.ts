@@ -32,9 +32,9 @@ describe("layouts", () => {
     expect(SLOT_SCHEMAS.statement.safeParse({ ...c, terms: [{ term: "牛顿第二定律", zh: "" }] }).success).toBe(true);
   });
 
-  it("gallery cells (incl. table and 图示待补 variants) satisfy the strict slot schemas", () => {
+  it("gallery cells (incl. table, figure and 图示待补 variants) satisfy the strict slot schemas", () => {
     const cells = galleryCells();
-    expect(cells.length).toBe(LAYOUT_IDS.length * 3 + 11);
+    expect(cells.length).toBe(LAYOUT_IDS.length * 3 + 12);
     expect(new Set(cells.map((c) => c.id)).size).toBe(cells.length);
     for (const g of cells) {
       const strict = SLOT_SCHEMAS[g.layout].safeParse(g.content);

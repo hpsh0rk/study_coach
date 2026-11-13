@@ -1,4 +1,4 @@
-import { tokenizeRichText, type ChartSpec, type ExperimentSim, type FormulaSpec, type FunctionSpec, type PageType, type Slide, type SlideContent, type TableSpec, type TeachingLanguage, type ThemeId, type Unverified, type VisualSpec } from "@kj/schema";
+import { tokenizeRichText, type ChartSpec, type ExperimentSim, type FigureSpec, type FormulaSpec, type FunctionSpec, type PageType, type Slide, type SlideContent, type TableSpec, type TeachingLanguage, type ThemeId, type Unverified, type VisualSpec } from "@kj/schema";
 import { CANVAS, FONT } from "@kj/templates";
 import { resolveEmbed, sampleFunction } from "@kj/widgets";
 import { lineCount, plain, texToText } from "./text.ts";
@@ -107,12 +107,12 @@ export interface ChartItem {
   dataLabels: boolean;
 }
 
-/** Data a native PPTX object cannot express faithfully; the exporter asks the app for a picture, else keeps `fallback`. */
+/** Data a native PPTX object cannot express faithfully (or an extracted textbook figure); the exporter asks the app for a picture, else keeps `fallback`. */
 export interface ImageItem {
   kind: "image";
   slot: string;
   rect: Rect;
-  spec: ChartSpec | FunctionSpec | FormulaSpec;
+  spec: ChartSpec | FunctionSpec | FormulaSpec | FigureSpec;
   fallback: TextItem;
 }
 
@@ -468,6 +468,42 @@ function visualItems(v: VisualSpec | ExperimentSim | ChartContentChart, rect: Re
         return [{ kind: "image", slot, rect: boxRect, spec: v, fallback: formulaBox }, ...captionItems];
       }
       return [formulaBox, ...captionItems];
+    }
+    case "figure": {
+      const hasCap = !!v.caption?.trim();
+      const imgRect: Rect = hasCap ? { x: rect.x, y: rect.y, w: rect.w, h: rect.h - 84 } : rect;
+      const fallback = text(
+        slot,
+        imgRect,
+        [
+          plainPara(byLang(lang, "原书插图", "Textbook figure", "原书插图 Textbook figure"), { bold: true, color: p.accent }),
+          ...(hasCap ? [richPara(v.caption!, p, { gap: 16, scale: 0.85, color: p.soft })] : []),
+        ],
+        p,
+        {
+          fontPx: FONT.bodyMin,
+          minFontPx: 32,
+          fill: p.panel,
+          line: p.panelLine,
+          inset: 28,
+          align: "center",
+          valign: "middle",
+          shape: "roundRect",
+        },
+      );
+      const capItems: Item[] = hasCap
+        ? [
+            text(`${slot}.caption`, { x: rect.x, y: imgRect.y + imgRect.h + 10, w: rect.w, h: 74 }, [richPara(v.caption!, p)], p, {
+              fontPx: 36,
+              minFontPx: 28,
+              color: p.soft,
+              align: "center",
+              valign: "top",
+              lineFactor: 1.15,
+            }),
+          ]
+        : [];
+      return [{ kind: "image", slot, rect: imgRect, spec: v, fallback }, ...capItems];
     }
     case "placeholder":
       notes.degraded.push("placeholder");

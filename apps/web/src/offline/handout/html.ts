@@ -185,6 +185,29 @@ html, body {
   font-size: 9pt;
   color: #475569;
 }
+.ho-figure {
+  margin: 8px 0;
+  padding: 8px 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  text-align: center;
+  break-inside: avoid;
+}
+.ho-figure-img {
+  max-width: 100%;
+  max-height: 68mm;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  display: block;
+  margin: 0 auto;
+}
+.ho-figure-caption {
+  margin-top: 4px;
+  font-size: 9pt;
+  color: #475569;
+}
 .ho-flow {
   display: flex;
   flex-wrap: wrap;
@@ -461,6 +484,18 @@ export function compileHandoutHtml(doc: HandoutDoc, opts: { fontCss?: string } =
       }
       for (const tbl of block.tables) {
         parts.push(renderTableHtml(tbl));
+      }
+      for (const fig of block.figures) {
+        parts.push('<figure class="ho-figure">');
+        if (fig.dataUrl) {
+          parts.push(`<img class="ho-figure-img" src="${escapeHtml(fig.dataUrl)}" alt="${escapeHtml(fig.alt)}">`);
+        } else {
+          parts.push(`<div class="ho-src">【教材插图 Figure：${escapeHtml(fig.alt)}】</div>`);
+        }
+        if (fig.caption) {
+          parts.push(`<figcaption class="ho-figure-caption">${renderRunsHtml(fig.caption)}</figcaption>`);
+        }
+        parts.push("</figure>");
       }
       parts.push("</div>");
     }

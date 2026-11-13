@@ -15,6 +15,7 @@ interface DraftSlide {
 }
 
 const FORMULA = /\b[a-zA-Z]\s*=\s*[a-zA-Z0-9]/;
+const WANTS_FIGURES_RE = /书本.*图|原书.*图|教材.*图|课本.*图|书上.*图|多用.*原图|直接用.*图|\b(?:textbook|book|coursebook|source)\s+(?:figures?|images?|diagrams?|illustrations?|pictures?)\b/i;
 
 function sectionsOf(input: DraftInput): PlannerSection[] {
   if (input.sections.length) return input.sections;
@@ -78,12 +79,15 @@ export function stubOutline(input: DraftInput): { objectives: string[]; slides: 
   });
 
   const sim = simFor(input);
+  const figPages = new Set((input.figures ?? []).flatMap((f) => (f.pageNo !== undefined ? [f.pageNo] : [])));
+  const wantsFigures = WANTS_FIGURES_RE.test(input.params.focus ?? "");
   let experimentUsed = false;
   sections.forEach((s, i) => {
     const loop = i + 1;
     const text = textOf(input.pages, s);
     const sentences = sentencesOf(text);
     const pages = pagesOf(s);
+    const hasSectionFigure = pages.some((p) => figPages.has(p)) || (input.figures ?? []).some((f) => f.pageNo === undefined);
     const head = cleanTitle(s.title);
     const points = sentences.slice(1, 4).map((x) => shorten(x, 9));
     slides.push({
@@ -91,7 +95,7 @@ export function stubOutline(input: DraftInput): { objectives: string[]; slides: 
       title: shorten(sentences[0] ?? head, 12),
       purpose: `Introduce ${head}`,
       keyPoints: points.length ? points : [head],
-      visual: FORMULA.test(text) ? "formula" : "flow",
+      visual: hasSectionFigure && (wantsFigures || !FORMULA.test(text)) ? "figure" : FORMULA.test(text) ? "formula" : "flow",
       minutes: 3,
       sourcePages: pages,
       loop,

@@ -1,5 +1,5 @@
 import { checkSlide, type Violation } from "@kj/pedagogy";
-import { countHighlightedWords, countWords, hasCjk, tokenizeRichText, type GlossaryEntry, type PageType, type SlideContent, type TableSpec, type TeachingLanguage, type WidgetSpec } from "@kj/schema";
+import { countHighlightedWords, countWords, hasCjk, tokenizeRichText, type FigureCatalogEntry, type GlossaryEntry, type PageType, type SlideContent, type TableSpec, type TeachingLanguage, type WidgetSpec } from "@kj/schema";
 import { BUDGETS } from "@kj/templates";
 import { slotIssues } from "@kj/templates/issues";
 import { validateWidget, type WidgetIssue } from "@kj/widgets";
@@ -14,12 +14,17 @@ function widgetsOf(c: SlideContent) {
 const STANDALONE_CONJUNCTION = /^(?:或|或者|和|与|及|or|and)$/i;
 
 /** Everything that would make the slide wrong or over budget. */
-export function problemsOf(c: SlideContent, pageType?: PageType, notes?: string): { errors: string[]; warnings: string[] } {
+export function problemsOf(
+  c: SlideContent,
+  pageType?: PageType,
+  notes?: string,
+  opts?: { knownAssetIds?: ReadonlySet<string> },
+): { errors: string[]; warnings: string[] } {
   const errors: string[] = [];
   const warnings: string[] = [];
   for (const msg of new Set(slotIssues(c).map((i) => `${i.path.join(".")}: ${i.message}`))) if (errors.length < 12) errors.push(msg);
   for (const w of widgetsOf(c)) {
-    for (const i of validateWidget(w) as WidgetIssue[]) (i.level === "error" ? errors : warnings).push(`widget: ${i.message}`);
+    for (const i of validateWidget(w, opts) as WidgetIssue[]) (i.level === "error" ? errors : warnings).push(`widget: ${i.message}`);
     if (w.kind === "flow" && w.steps.some((s) => STANDALONE_CONJUNCTION.test(s.trim()))) {
       errors.push('widget: flow steps must be sequential stages, never standalone conjunctions like "或"');
     }
@@ -376,17 +381,50 @@ export function trimExcessHighlights(c: SlideContent): SlideContent {
   }
 }
 
+export interface SanitizeWidgetsOptions {
+  knownAssetIds?: ReadonlySet<string>;
+  fallbackFigures?: FigureCatalogEntry[];
+}
+
 /**
- * Last-resort, deterministic: heals out-of-range `chart.focus`, and replaces any visual that still fails
- * validation (e.g. an expression that does not compile) by the "图示待补" placeholder (experiment plots by a safe wave).
+ * Last-resort, deterministic: heals out-of-range `chart.focus`, snaps a hallucinated figure `assetId` to the sole
+ * available figure on the cited page when unambiguous, and replaces any visual that still fails validation
+ * by the "图示待补" placeholder (experiment plots by a safe wave).
  */
-export function sanitizeWidgets(raw: SlideContent): { content: SlideContent; replaced: string[] } {
+export function sanitizeWidgets(raw: SlideContent, opts?: SanitizeWidgetsOptions): { content: SlideContent; replaced: string[] } {
   const c = healChartFocus(raw);
-  const bad = (w: WidgetSpec | undefined) => !!w && validateWidget(w).some((i) => i.level === "error");
-  const why = (w: WidgetSpec) => validateWidget(w).find((i) => i.level === "error")?.message ?? "invalid";
+  const bad = (w: WidgetSpec | undefined) => !!w && validateWidget(w, opts).some((i) => i.level === "error");
+  const why = (w: WidgetSpec) => validateWidget(w, opts).find((i) => i.level === "error")?.message ?? "invalid";
+  const snapFigure = (w: WidgetSpec): { snapped?: Extract<WidgetSpec, { kind: "figure" }>; note?: string } => {
+    if (w.kind !== "figure" || !opts?.fallbackFigures || opts.fallbackFigures.length !== 1) return {};
+    const sole = opts.fallbackFigures[0]!;
+    if (opts.knownAssetIds && !opts.knownAssetIds.has(sole.assetId)) return {};
+    const fallbackCap = [sole.label, sole.caption].filter(Boolean).join(": ").slice(0, 120);
+    return {
+      snapped: {
+        kind: "figure",
+        assetId: sole.assetId,
+        ...(w.caption ? { caption: w.caption } : fallbackCap ? { caption: fallbackCap } : {}),
+        ...(w.alt ? { alt: w.alt } : {}),
+      },
+      note: `figure assetId "${w.assetId}" → "${sole.assetId}"`,
+    };
+  };
   const placeholder = { kind: "placeholder" as const, hint: PLACEHOLDER_HINT };
-  if (c.layout === "statement" && bad(c.visual)) return { content: { ...c, visual: placeholder }, replaced: [`visual → 图示待补 (${why(c.visual)})`] };
-  if (c.layout === "chart" && bad(c.chart)) return { content: { ...c, chart: placeholder }, replaced: [`chart → 图示待补 (${why(c.chart)})`] };
+  if (c.layout === "statement" && bad(c.visual)) {
+    const snapped = snapFigure(c.visual);
+    if (snapped.snapped && !bad(snapped.snapped)) {
+      return { content: { ...c, visual: snapped.snapped }, replaced: [snapped.note!] };
+    }
+    return { content: { ...c, visual: placeholder }, replaced: [`visual → 图示待补 (${why(c.visual)})`] };
+  }
+  if (c.layout === "chart" && bad(c.chart)) {
+    const snapped = snapFigure(c.chart);
+    if (snapped.snapped && !bad(snapped.snapped)) {
+      return { content: { ...c, chart: snapped.snapped }, replaced: [snapped.note!] };
+    }
+    return { content: { ...c, chart: placeholder }, replaced: [`chart → 图示待补 (${why(c.chart)})`] };
+  }
   if (c.layout === "experiment" && bad(c.sim)) {
     const safe = { kind: "function" as const, expr: "A*sin(2*pi*x/L)", x: [0, 4] as [number, number], y: [-3, 3] as [number, number], xLabel: "distance / m", yLabel: "displacement / cm", params: [
       { name: "A", label: "Amplitude A / cm", min: 0.5, max: 3, step: 0.1, value: 2 },

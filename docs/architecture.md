@@ -1,14 +1,14 @@
 # AI 课件工坊 · 架构（v10，教材模块：教材读写收进一个模块，见 docs/design/textbook-module.md）
 
-> 状态：2026-11-13 · 与 `main` 上的代码一致（设计评审修复收口、后台与 E2E 按域拆分、核心能力测试集、实时网关 / 解析加固，以及全链路走查三批优化全部合并后）。来源文档：第一性原理审查 · 夜间决策记录（权威）· HTML 课件调研 · 教学规则（规则编号 L/P/V/I/T/Q 出自此文）· 老师调研 · 项目决策记录 · 对抗审查 1 / 2 / 3 · 消融结果（均在项目资料库 `docs/`，不在本仓库）。代码与本文冲突时以代码为准，并修正本文。
+> 状态：2026-11-13 · 与 `main` 上的代码一致（设计评审修复收口、后台与 E2E 按域拆分、核心能力测试集、实时网关 / 解析加固、全链路走查三批优化，以及厚教材局部导入 / 多源 PDF + 考纲截图、内联红字加粗 + 30pt 大字 PPTX、原书 2× 合成插图提取嵌入与配套讲义导出全部合并后）。来源文档：第一性原理审查 · 夜间决策记录（权威）· HTML 课件调研 · 教学规则（规则编号 L/P/V/I/T/Q 出自此文）· 老师调研 · 项目决策记录 · 对抗审查 1 / 2 / 3 · 消融结果（均在项目资料库 `docs/`，不在本仓库）。代码与本文冲突时以代码为准，并修正本文。
 
 ---
 
 ## 0. 一页结论
 
-- **产品主线只有一条**：上传 PDF → 选章节 → 设置这节课 → **确认时间预算大纲（唯一强制卡点）** → 逐页生成、可编辑 → 放映 / 分享。界面是线性的五步向导，每步只有一个主按钮。
+- **产品主线只有一条**：上传 PDF（支持千页教材秒级目录预检与按页段局部极速导入、多份 PDF 补充源及考纲截图识别） → 选章节 → 设置这节课（1500 字教学指令 Brief） → **确认时间预算大纲（唯一强制卡点，含考纲覆盖核对）** → 逐页生成、可编辑（支持原书 2× 合成插图自动配图、页面拖框裁图与粘贴截图） → 放映 / 分享 / 导出（单文件离线 HTML、标准 28pt / 课堂 30pt 可编辑 `.pptx`、A4 打印版与可编辑 `.docx` 配套讲义）。界面是线性的五步向导，每步只有一个主按钮。
 - **运行时只用 Workers + Static Assets + D1**，`wrangler dev` 本地免费运行，适配 Workers 免费版（每次调用 10ms CPU、50 次 D1 查询）。没有 Durable Objects、Workflows、Queues、R2、Containers。
-- **PDF 在老师浏览器里用 pdf.js 解析**；服务端只存“章节树 + 每页文本 + 印刷页码”。
+- **PDF 在老师浏览器里用 pdf.js 解析与 2× 合成裁图**；服务端只存“章节树 + 每页文本 + 印刷页码”与裁剪后的轻量插图 `media_assets`（保留矢量箭头与文字标注，单图 ≤ 768 KB，无需 R2）。
 - **密码用 WebCrypto PBKDF2-SHA256，300k 次迭代**（本机约 35ms；取舍见 §9）。
 - **卡点 = SQLite 触发器 + 409**：已确认的大纲版本不可改不可删；页面只能挂在已确认版本上；生成接口对未确认版本返回 409。超出课时 ±15% 时确认需要老师显式“仍然确认”，服务端同样强制（409 → 带 ack 重试）。
 - **大纲并发编辑不丢稿**：草稿用 `rev` 乐观锁；另一个标签页先保存时返回 409 `OUTLINE_CHANGED`。浏览器把冲突前的本机修改按课和大纲版本存进 `localStorage`，载入服务器最新版后提供“恢复我的修改”，再次保存时使用最新 `rev`。
@@ -35,26 +35,29 @@
 
 ```
 老师浏览器（React SPA，apps/web）
- ├─ 教材摄取（src/textbook：ingest.ts 编排、pdf.ts 是唯一加载 pdf.js 的地方、api.ts 教材接口）：
- │   先算文件 sha256 → POST /documents/lookup：已有的直接用（不解析不上传），没传完的只补缺页，
- │   删除过的可恢复；否则 pdf.js 解析目录、每页文本、印刷页码（getPageLabels）→ 建树 → 分批上传（每批 40 页）
+ ├─ 教材摄取（src/textbook：ingest.ts 编排、pdf.ts 是唯一加载 pdf.js 的地方、PageCropper.tsx 页面拖框裁图、api.ts 教材与插图接口）：
+ │   先算文件 sha256 → inspectPdf 秒级目录预检（支持局部页段极速导入与起始页码偏移校准）→ POST /documents/lookup：已有的直接用，没传完的只补缺页，
+ │   删除过的可恢复；否则 pdf.js 解析目录（深度 4）、每页文本、印刷页码（getPageLabels）→ 建树 → 分批上传（每批 40 页），并对所选页执行 2× Canvas 合成插图检测与裁剪上传（POST /media/batch）
  │   CMap 与标准字体随 SPA 发布在 /pdfjs/（中文 CID 字体的 PDF 没有它们就抽不出字）
  ├─ 向导（路由级 React.lazy 按需分包，登录首屏不加载 pdf.js / ECharts / KaTeX）：
- │        上传 → 章节（树 / 按书上页码输入，首尾页预览，字数估时与拆课提示）
- │        → 课堂设置 → 大纲（时间条、密度灯、未覆盖、术语表、目标 KaTeX、停止等待；规则与服务端同一份代码）
- │        → 生成（先例题后其余，并发 4、遇 429 降为 2、支持随时停止；带微调指令 `instruction` 的单页重生成 / 吸顶实时预览与图表表单编辑 / 快捷切主题 / 撤销 / 可忽略的待核实）→ 放映 / 分享
- ├─ 放映：观众窗口 /play/:id（无讲稿）+ 演讲者窗口 /presenter/:id（KaTeX 讲稿与答案，BroadcastChannel 同步翻页、黑屏、投票人数、笔画）
+ │        上传 → 章节（树 / 按书上页码输入、联动 40/45/60/90 分钟篇幅条、关联真题卷等补充 PDF）
+ │        → 课堂设置（1500 字教学指令 Brief、粘贴/上传考纲截图识别必覆盖清单）→ 大纲（时间条、考纲覆盖核对卡、密度灯、未覆盖、术语表、目标 KaTeX、停止等待；规则与服务端同一份代码）
+ │        → 生成（先例题后其余，并发 4、遇 429 降为 2、支持随时停止；带微调指令 `instruction` 的单页重生成 / 吸顶实时预览与图表+原书插图编辑 / 快捷切主题 / 撤销 / 可忽略的待核实）→ 放映 / 分享 / 导出
+ ├─ 放映：观众窗口 /play/:id（无讲稿）+ 演讲者窗口 /presenter/:id（KaTeX + 红字加粗讲稿与答案，BroadcastChannel 同步翻页、黑屏、投票人数、笔画）
  │        画笔层（canvas，按页存在内存，不落库）；手机端支持单指滑动翻页、控制栏折行与一键横屏阅读
- ├─ 离线导出：public/offline/runtime.{js,css} + 按需内联 runtime-charts.js（无图表课件剥离 ECharts）+ deck（?audience=teacher|student）+ 内置实验 + 字体子集 → 一个 .html
- └─ 渲染：templates/render + widgets/render + player（展示公式超宽自适应缩放，溢出在此实测）
+ ├─ 离线与多格式导出：
+ │   · 离线单文件 HTML：public/offline/runtime.{js,css} + 按需内联 runtime-charts.js + deck（?audience=teacher|student）+ 内置实验 + Base64 原书插图 + 字体子集 → 一个 .html（0 网络请求）
+ │   · 可编辑 PPTX：标准 28pt / 课堂 30pt 字号档位 + 原生 `==红字加粗==` / `**加粗**` runs + 原书插图等比 contain 嵌入 + ECharts/KaTeX 2× PNG 快照 → .pptx
+ │   · 配套讲义（学生填空留白版 / 教师红字解析版）：同源确定性编译 → A4 打印版 .html（一键另存矢量 PDF）与零外部依赖可编辑 OOXML .docx（内嵌 word/media 插图）
+ └─ 渲染：templates/render + widgets/render + player（内联 `==红字加粗==` / `**加粗**`、原书插图 `figure`、展示公式超宽自适应缩放，溢出在此实测）
         │ HTTPS / JSON（x-kj-csrf 头 + httpOnly 会话 Cookie）
 Worker（Hono，apps/app）
- ├─ routes（HTTP 边界、鉴权、zod 校验、用例编排）
- ├─ generation（draftOutline / writeSlide）→ ai（唯一模型出口）→ DeepSeek / GLM / OpenAI 兼容 / Messages 兼容网关
+ ├─ routes（HTTP 边界、鉴权、可读中文 zod 校验、用例编排：documents / lessons / reuse / media / share / admin / auth）
+ ├─ generation（draftOutline / writeSlide，注入多源虚拟页码、考纲条目与每页插图目录）→ ai（唯一模型出口）→ DeepSeek / GLM / OpenAI 兼容 / Messages 兼容网关
  ├─ textbook（教材模块：documents / pages / chapters 的唯一读写入口；index.ts 读接口、write.ts 写接口只给 routes/documents.ts、tables.ts 表定义）
- └─ store（课的 D1 仓储与读模型：快照、复用、聚合查询、lessonView、分享视图；读教材只经 textbook/index.ts）；db/index.ts（drizzle 句柄）
+ └─ store & media（课与插图资产 D1 仓储：多源 `sources_json` 虚拟页映射 `SOURCE_STRIDE = 100_000`、`media_assets` 查重/配额/分享签名读取 `?share=<token>`、快照、复用、聚合查询）；db/index.ts（drizzle 句柄）
 D1：orgs, users, sessions, login_attempts, ai_providers, ai_calls, audit_log,
-    documents, pages, chapters, lessons, outline_versions, slides, slide_locks, share_links
+    documents, pages, chapters, lessons, outline_versions, slides, slide_locks, share_links, media_assets
 静态资源：SPA、字体（Arimo、Noto Sans SC）、KaTeX、内置实验 /sims/*.html
 ```
 
@@ -119,7 +122,7 @@ D1：orgs, users, sessions, login_attempts, ai_providers, ai_calls, audit_log,
 | `pptx` | 兼容导出：课件 → 可编辑 .pptx（HTML 课件仍是主格式） | `planSlide(slide, {theme, pageLabels, language}) → {items, notes, degraded}`（9 个版式 → 原生文本框 / 形状 / 表格 / 图表，逻辑 1920×1080 坐标，56px = 28pt；`fitFont` 按 56→48px 降档；非精确可转纯文本的复杂展示公式生成 `ImageItem`，由浏览器渲染 KaTeX 2× PNG 快照或无头回退 `texToText`）、`exportPptx(deck, {chartImage?}) → {data, filename, degraded, overflow}`、`PPTX_FONT`（PingFang SC，macOS 自带，不嵌入字体）、`texToText`（含 `\vec`、`\xrightarrow`、`cases` 与多字符下标） / `plain`；`scripts/render-check.ts` 与 `scripts/browser-verify.ts`（LibreOffice headless + Chromium ECharts / KaTeX 2× PNG 光栅化校验） |
 | `tools/eval` | 消融评测与质量回放（不属于产品） | `pnpm eval:run`（manifest 场景 → 流水线 → 每场景 × 次数一个 deck JSON；先例题后其余，遇 429 并发 4→2 降级）、`pnpm eval:render`（Chromium 渲染，写回 `slides[].overflow`）；`pnpm eval:run --noise` / `pnpm eval:faults`（注入故障，量每道防线的拦截率与干净数据上的误报率）；`pnpm quality:record` / `pnpm quality:replay`（受 `--confirm-real-call` 保护的真服务录制与 0 网络请求的离线质量回放，CI 显式执行）；`AblationFlags = PipelineOptions + {scope, outline, renderMode, autoConfirm}` |
 
-E2E 按 `overflow` 与 `auth → lesson → textbook → admin → walkthrough → bundle` 串行：只改密并登录一次，共用一个本地 D1；公共 fixture、导航、截图、PDF 和本地假服务放在 `e2e/fixtures.ts`、`helpers.ts`、`mocks.ts`。
+E2E 按 `overflow` 与 `auth → lesson → textbook → admin → walkthrough → bundle → multisource → handout → figures` 串行：只改密并登录一次，共用一个本地 D1；公共 fixture、导航、截图、PDF 和本地假服务放在 `e2e/fixtures.ts`、`helpers.ts`、`mocks.ts`。
 
 ---
 
@@ -193,7 +196,8 @@ PipelineOptions = { budgetsInPrompt, outlineCheckRetry, slideCheckRetry, truncat
 | `documents` | id, org_id, owner_id, filename, title, size_bytes, page_count, pages_received, has_bookmarks, file_sha256, archived_at, purged_at | `purged_at`（迁移 0014）：彻底删除（只在没有任何课——包括已删除的课——引用它时）：页和章节删掉、`file_sha256` 清空，行保留，让 `parse_usage` 的当天额度照算；读取一律 404。`file_sha256`（迁移 0006）：浏览器算的文件哈希，部分唯一索引 `documents_owner_sha_uq` 保证同一老师未删除的教材里每个文件只有一份；旧数据为空、不去重； 扫描页由服务端按 `pages.words` 判断，不存标志；`archived_at`：软删除（迁移 0005），列表和新建课看不到，已用它做的课仍可读页、改范围、粘贴扫描页文字 |
 | `pages` | document_id, no, text, label, words, chars, parser, flags, kind | PK(document_id, no)；`chars` / `parser` / `flags` 来自迁移 0007：`chars` 替代 `LENGTH(text)`（回填），`parser` 是 `pdfjs/1`、`paste`（老师粘贴）、外部解析器 `mineru-agent/1` / `mineru/1`（迁移 0009 起）或看图模型 `vlm:<模型>/1`（迁移 0010 起；界面提示老师核对数字）；都带版本号，作为（文件 sha256，页号，解析器）缓存键的一部分，`flags` 是可疑文字的种类（JSON，0007 之前存的页为 `[]`）。都由服务端 `pageFacts` 算，不信任浏览器。`kind`（迁移 0008，可空）是浏览器探针给的页种类：服务端没有 PDF，只能存下来；它只决定提示和路由（哪些页值得换解析器、哪些页允许粘贴替换），不进提示词。粘贴后 `kind` 不变（是关于 PDF 的事实），`parser` 变为 `paste` 即视为已补 |
 | `chapters` | document_id, id, parent_id, ord, level, title, page_start, page_end, words | |
-| `lessons` | id, org_id, owner_id, document_id, title, scope, params, theme, drafting_until, archived_at | `drafting_until`：起草锁（§1）；`archived_at`：软删除（迁移 0004），`ownedLesson` 和列表都看不到；`lessons_document_idx`（迁移 0019）加速按教材统计课数 |
+| `lessons` | id, org_id, owner_id, document_id, title, scope, sources_json, params, theme, drafting_until, archived_at | `sources_json`（迁移 0020）：多 PDF 页段与考纲截图/教案条目（`LessonSource[]`），主教材仍同步写 `document_id` 与 `scope`，单书与多书无缝兼容且次要 PDF 同样受 `409 IN_USE` 彻底删除保护；`drafting_until`：起草锁（§1）；`archived_at`：软删除（迁移 0004）；`lessons_document_idx`（迁移 0019）加速按教材统计课数 |
+| `media_assets` | id, org_id, owner_id, document_id, lesson_id, page_no, label, caption, mime, width, height, size_bytes, data, sha256, created_at | 迁移 0021：存浏览器 `2×` 合成裁剪的原书插图（保留矢量箭头与文字标注）及老师拖框裁图 / 粘贴截图（PNG / WebP / JPEG，单张 ≤ 768 KB，单页 ≤ 6 张、单书 ≤ 120 张、单课 ≤ 40 张、每师总计 ≤ 50 MB）；唯一索引 `media_assets_dedup_uq` 按 `(org_id, owner_id, document_id, lesson_id, page_no, sha256)` 幂等去重；教材或课程彻底删除时同步清理二进制资产；`GET /api/media/:id` 返回 `Cache-Control: private, max-age=31536000, immutable` 并支持 `?share=<token>` 仅读取该分享链接页面实际引用的插图 |
 | `outline_versions` | id, lesson_id, version, outline, params, scope, spec_count, rev, ack_over_budget, confirmed_at | UNIQUE(lesson_id, version)；触发器 `outline_versions_confirmed_no_update` / `_no_delete`；`rev` 乐观锁 |
 | `slides` | id, lesson_id, outline_version_id, spec_id, spec_hash（= slideKey）, layout, page_type, minutes, content, notes, sources, warnings, unverified, provider_id, prev_content, prev_notes | UNIQUE(outline_version_id, spec_id)；INDEX(lesson_id, spec_hash)；触发器 `slides_require_confirmed_insert` |
 | `slide_locks` | outline_version_id, spec_id, until | 迁移 0018（设计评审 A10）+ 迁移 0019 `slide_locks_until_idx`：生成一页时先清理过期锁并占这一行（`until` = 现在 + 150 秒，过期的可以直接抢），生成完删掉；占不到 → 409 `SLIDE_IN_PROGRESS`。拿到锁后再查一次已有的页，两个标签页同时点“生成”只调用一次模型；登录与会话写入路径同样顺带清理过期的 `sessions` 与 `login_attempts`（迁移 0019 索引覆盖，`ai_calls` 另有 `ai_calls_user_time_idx`） |
@@ -301,7 +305,7 @@ PipelineOptions = { budgetsInPrompt, outlineCheckRetry, slideCheckRetry, truncat
 - `POST /lessons/:id/duplicate`：新课复制最新已确认版本（大纲、参数与范围快照、确认时间）和它的全部页面（新 id，`spec_hash` 不变，`prev_*` 清空，所以没有可撤销的上一步），有更新的草稿时也复制；所有复制的版本 `rev` = 0；分享链接、起草锁和单元归属都不复制。之后“修改大纲”→ 确认时由 `carryOverSlides` 按 `slideKey` 复用，只有改过的页需要模型。
 - `POST /lessons/unit`：把所选范围按叶子章节（父章节在第一个子章节之前的引言页归父章节）切成片，`pedagogy.planUnit(pieces, 课时, count?)` 按字数均分成 N 节（单片超过目标 1.25 倍或超过 115% 课时时在页边界切开，标题加“(1)”“(2)”；不给 count 时从估算节数起逐个加一，直到每节 ≤ 115% 课时），`?dryRun=1` 只返回预览 `{lessons[{title, ranges, estimatedMinutes, over}], maxMinutes}` 不写库；建课时每节课一个新 lesson，课名 = 单元名 · 节号范围，`scope.unit` 记下单元；向导里那节还没有大纲的课作为第 1 节复用。只够一节课 → 400 `UNIT_TOO_SMALL`；要复用的课已有大纲或正在起草 → 409 `LESSON_IN_USE`。
 
-**提示词版本**：`outline.draft@6`（排序配对页规则）、`slide.write@9`（先投票、排序 / 配对、实验结果、外层 `{content, notes}` JSON Schema 与 `steps` 例题 / 渐隐定制 Schema 及裸槽位解包）。
+**提示词版本**：`outline.draft@6`（排序配对页、多源虚拟页码、考纲核对清单与原书插图目录）、`slide.write@11`（先投票、排序 / 配对、实验结果、内联 `==重点红字加粗==` 密度护栏、`en+zh` 短句防截断、原书插图 `figure` 选择与外层 `{content, notes}` JSON Schema）。
 
 **免费版约束**：我的课列表是一条带相关子查询的 SQL；新建教材按每条 11 章（99 个绑定参数）多行插入且每批 `d.batch` ≤ 40 条语句（800 章大目录安全落库，异常回滚）；页面上传每批 40 页（每页一条 upsert，留出鉴权等查询余量）；复用插入每批 5 行（D1 每条语句 ≤ 100 个绑定参数）；JSON Schema 预计算并缓存。
 
@@ -337,6 +341,8 @@ PipelineOptions = { budgetsInPrompt, outlineCheckRetry, slideCheckRetry, truncat
 | POST | `/api/lessons/:id/duplicate` | `{title?}` → 201 新课的 lesson 视图（默认标题加“（新学期）”；见 §5“复用”） |
 | POST | `/api/lessons/unit` | `{documentId, chapterIds, ranges, title?, params?, count?, lessonId?}` → 201 `{unit, lessons[{id, title, ranges, estimatedMinutes}]}`；`?dryRun=1` → 200 预览，不建课 |
 | POST / PATCH / DELETE | `/api/lessons/:id/share` | POST `{versionId?, ack?, answers?}` → `{path, versionId, version, held, answers}`（见 §5“分享”）；PATCH `{answers}` 只切换答案模式；DELETE 取消分享。GET `/api/share/:token` 返回冻结版本的学生版课件（按链接的答案模式，带弱 `ETag` 与 `If-None-Match` → `304` 协商缓存） |
+| POST | `/api/lessons/syllabus-image` · `/api/lessons/:id/syllabus-image` | 考纲截图识别：调用已启用的 `purpose: vision` 模型将粘贴/上传的考纲图片转写为结构化考纲条目清单存入 `sources_json` |
+| GET / POST / DELETE | `/api/media` · `/api/media/batch` · `/api/media/:id` | 教材插图与截图资产：上传校验 PNG / WebP / JPEG 文件头尺寸与大小上限并幂等去重；按 `lessonId`（自动映射多源虚拟页号 `virtualPageNo`）或 `documentId`（可选 `pages=`）列出元数据；`GET /api/media/:id` 输出不可变缓存二进制流（登录态鉴权或有效分享链接 `?share=<token>` 且该图被当前分享页引用） |
 
 ---
 
@@ -361,7 +367,7 @@ PipelineOptions = { budgetsInPrompt, outlineCheckRetry, slideCheckRetry, truncat
 | 推迟项 | 恢复条件 |
 |---|---|
 | 更多内置实验 | 下一迭代 |
-| 教材插图（R2 + 页图框选） | 下一迭代 |
+| 大体积超高清插图对象存储（R2） | 单师 50 MB / D1 500 MB 免费额度不够用时（当前 `0021_media_assets.sql` 已满足课堂高清 WebP/PNG 插图与手动裁图） |
 | Workflows（关页面后继续生成） | 老师反馈中断影响使用 |
 | 无书签教材的启发式建树 | 真实教材无书签比例 > 30% |
 | 大纲批注 → AI 修订 → diff | 纵切第 2 片 |

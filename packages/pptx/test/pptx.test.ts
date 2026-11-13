@@ -25,10 +25,11 @@ describe("layout mapping", () => {
     }
   });
 
-  it("keeps text native and editable: no slide becomes a picture, student text stays ≥ 48px (labels like 'why' excepted)", () => {
+  it("keeps text native and editable: no slide becomes a picture (except explicit textbook figure visuals), student text stays ≥ 48px (labels like 'why' excepted)", () => {
     for (const c of cells) {
       const p = plan(c.content);
-      expect(p.items.some((i) => i.kind === "image"), c.id).toBe(false);
+      const hasExplicitFigure = c.content.layout === "statement" && c.content.visual.kind === "figure";
+      expect(p.items.some((i) => i.kind === "image"), c.id).toBe(hasExplicitFigure);
       for (const t of texts(p)) {
         if (LABEL_SLOTS.test(t.slot)) continue;
         for (const para of t.paras.filter((q) => (q.runs[0]?.scale ?? 1) >= 1)) expect(t.fontPx * (para.runs[0]?.scale ?? 1), `${c.id} ${t.slot}`).toBeGreaterThanOrEqual(FONT.bodyMin - 0.01);
@@ -482,5 +483,86 @@ describe("the .pptx file", () => {
       fontScale: "large",
     });
     expect(denseGallery.overflow).toEqual([]);
+  });
+
+  it("embeds { kind: 'figure' } visuals with proportional contain aspect-ratio fit and editable caption box (plus fallback when image unavailable)", async () => {
+    const { deflateSync } = await import("node:zlib");
+    const makeWidePng = (w: number, h: number) => {
+      const crcTable = new Uint32Array(256);
+      for (let n = 0; n < 256; n++) {
+        let c = n;
+        for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+        crcTable[n] = c >>> 0;
+      }
+      const crc32 = (buf: Buffer) => {
+        let c = 0xffffffff;
+        for (const b of buf) c = crcTable[(c ^ b) & 0xff]! ^ (c >>> 8);
+        return (c ^ 0xffffffff) >>> 0;
+      };
+      const chunk = (t: string, d: Buffer) => {
+        const tb = Buffer.from(t);
+        const lb = Buffer.alloc(4);
+        lb.writeUInt32BE(d.length);
+        const cb = Buffer.alloc(4);
+        cb.writeUInt32BE(crc32(Buffer.concat([tb, d])));
+        return Buffer.concat([lb, tb, d, cb]);
+      };
+      const ihdr = Buffer.alloc(13);
+      ihdr.writeUInt32BE(w, 0);
+      ihdr.writeUInt32BE(h, 4);
+      ihdr.set([8, 2, 0, 0, 0], 8);
+      const raw = Buffer.alloc(h * (1 + w * 3), 210);
+      for (let y = 0; y < h; y++) raw[y * (1 + w * 3)] = 0;
+      return `data:image/png;base64,${Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), chunk("IHDR", ihdr), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]).toString("base64")}`;
+    };
+
+    const widePng = makeWidePng(800, 400); // exact 2:1 aspect ratio
+    const figDeck = {
+      title: "IGCSE Magnetism Figures",
+      theme: "classic" as const,
+      slides: [
+        {
+          content: {
+            layout: "statement" as const,
+            title: "Magnetic field around a solenoid",
+            bullets: ["Parallel field lines inside", "Resembles a bar magnet outside"],
+            visual: {
+              kind: "figure" as const,
+              assetId: "med_solenoid704",
+              caption: "Fig 16.8: ==Solenoid== magnetic field",
+            },
+            terms: [{ term: "solenoid", zh: "螺线管" }],
+          },
+          notes: "Explain right-hand grip rule.",
+          sources: [704],
+          pageType: "concept" as const,
+        },
+      ],
+    };
+
+    const exported = await exportPptx(figDeck, {
+      chartImage: async (item) => (item.spec.kind === "figure" && item.spec.assetId === "med_solenoid704" ? widePng : null),
+    });
+    expect(exported.overflow).toEqual([]);
+    expect(exported.degraded).toEqual([]);
+
+    const zip = await JSZip.loadAsync(exported.data);
+    const slideXml = await zip.file("ppt/slides/slide1.xml")!.async("string");
+    const relsXml = await zip.file("ppt/slides/_rels/slide1.xml.rels")!.async("string");
+    expect(relsXml).toContain("/image");
+    expect(slideXml).toContain("<p:pic>");
+    expect(slideXml).toContain("Fig 16.8");
+    expect(slideXml).toContain('val="C81E1E"');
+
+    // Verify proportional 2:1 contain aspect ratio in <p:pic> <a:ext cx="..." cy="..."/> (not stretched to tall box!)
+    const picMatch = /<p:pic>[\s\S]*?<a:ext cx="(\d+)" cy="(\d+)"\/>[\s\S]*?<\/p:pic>/.exec(slideXml);
+    expect(picMatch).not.toBeNull();
+    const cx = Number(picMatch![1]);
+    const cy = Number(picMatch![2]);
+    expect(cx / cy).toBeCloseTo(2.0, 2);
+
+    // Headless fallback without chartImage still produces a valid slide without overflow:
+    const fallbackExport = await exportPptx(figDeck);
+    expect(fallbackExport.overflow).toEqual([]);
   });
 });

@@ -48,6 +48,7 @@ import {
 } from "../store.ts";
 import { chapterTree, multiLabelsFor, multiSelectionPages, multiSlideSourcePages, resolveScope } from "../textbook/index.ts";
 import { MAX_IMAGE_CHARS, transcribeSyllabusImage } from "../textbook/parsers/vision.ts";
+import { figureAssetIdsInContent, figureCatalogForLesson, listLessonMedia, purgeLesson } from "../media.ts";
 
 const AnswerMode = z.enum(["hidden", "shown"]);
 
@@ -97,10 +98,15 @@ async function generateSlideForVersion(
     const worked = workedSpecFor(outline, specId);
     const workedRow = worked ? (await d.select({ content: slides.content }).from(slides).where(and(eq(slides.outlineVersionId, v.id), eq(slides.specId, worked))).limit(1))[0] : undefined;
     const workedContent = workedRow ? SlideContent.parse(JSON.parse(workedRow.content)) : undefined;
+    const [pages, figures] = await Promise.all([
+      multiSlideSourcePages(c.env, pdfSources, spec.sourcePages),
+      figureCatalogForLesson(c.env, lesson, v),
+    ]);
     const res = await writeSlide(makeAi(c.env, u.orgId), outline, specId, {
       lessonTitle: lesson.title,
       params,
-      pages: await multiSlideSourcePages(c.env, pdfSources, spec.sourcePages),
+      pages,
+      figures,
       workedProblem: workedContent?.layout === "steps" ? workedContent.problem : undefined,
       ...(instruction ? { instruction } : {}),
       ctx: { orgId: u.orgId, userId: u.id, lessonId: lesson.id },
@@ -375,7 +381,11 @@ export const lessonRoutes = new Hono<AppBindings>()
     const scope = lessonScope(lesson);
     const sources = lessonSources(lesson);
     const pdfSources = pdfSourcesOf(sources, lesson.documentId, scope);
-    const [pageTexts, tree] = await Promise.all([multiSelectionPages(c.env, pdfSources), chapterTree(c.env, lesson.documentId)]);
+    const [pageTexts, tree, figures] = await Promise.all([
+      multiSelectionPages(c.env, pdfSources),
+      chapterTree(c.env, lesson.documentId),
+      figureCatalogForLesson(c.env, lesson),
+    ]);
     if (!pageTexts.length) {
       throw new HttpError(422, "NO_SOURCE_TEXT", "所选页面都没有可读的文字（可能是扫描图），不能凭空起草。请回到“选章节”，为这些页粘贴文字 · The selected pages have no text; paste it on the chapters step");
     }
@@ -395,6 +405,7 @@ export const lessonRoutes = new Hono<AppBindings>()
           params: lessonParams(lesson),
           sections: sectionsOf(tree, scope),
           pages: pageTexts,
+          ...(figures.length ? { figures } : {}),
           ...(sources.length ? { sources } : {}),
           ctx: { orgId: u.orgId, userId: u.id, lessonId: lesson.id },
         });
@@ -487,9 +498,15 @@ export const lessonRoutes = new Hono<AppBindings>()
       }
       content = parsed.data as SlideContent;
     }
-    const broken = body.content !== undefined ? widgetIssues(content) : [];
+    let knownAssetIds: ReadonlySet<string> | undefined;
+    if (body.content !== undefined && figureAssetIdsInContent(content).length > 0) {
+      const rowVersion = await versionOf(c.env, lesson.id, row.outlineVersionId);
+      const accessible = await listLessonMedia(c.env, lesson, rowVersion);
+      knownAssetIds = new Set(accessible.map((a) => a.id));
+    }
+    const broken = body.content !== undefined ? widgetIssues(content, knownAssetIds ? { knownAssetIds } : undefined) : [];
     if (broken.length) throw new HttpError(422, "INVALID_CONTENT", broken.map(describeIssue).join("；"), broken);
-    const found = problemsOf(content, row.pageType as Parameters<typeof problemsOf>[1]);
+    const found = problemsOf(content, row.pageType as Parameters<typeof problemsOf>[1], undefined, knownAssetIds ? { knownAssetIds } : undefined);
     const notes = body.notes ?? row.notes;
     const unverified = await unverifiedFor(c.env, lesson.documentId, row, content, notes);
     await db(c.env)
@@ -584,5 +601,11 @@ export const lessonRoutes = new Hono<AppBindings>()
       db(c.env).update(lessons).set({ archivedAt: null }).where(eq(lessons.id, lesson.id)),
       db(c.env).insert(auditLog).values({ orgId: lesson.orgId, actorId: c.get("user").id, action: "lesson.restored", target: lesson.id }),
     ]);
+    return c.json({ ok: true });
+  })
+  .delete("/:id/permanent", async (c) => {
+    const u = c.get("user");
+    const lesson = await ownedLesson(c.env, u, c.req.param("id"), { archived: true });
+    await purgeLesson(c.env, u, lesson);
     return c.json({ ok: true });
   });

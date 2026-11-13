@@ -77,6 +77,15 @@ export const TableSpec = z.object({
 });
 export type TableSpec = z.infer<typeof TableSpec>;
 
+/** Extracted textbook figure or teacher-uploaded/cropped diagram stored in D1 `media_assets`. */
+export const FigureSpec = z.object({
+  kind: z.literal("figure"),
+  assetId: z.string().trim().min(1).max(64),
+  caption: z.string().trim().max(120).optional(),
+  alt: z.string().trim().max(120).optional(),
+});
+export type FigureSpec = z.infer<typeof FigureSpec>;
+
 /** "图示待补": the page needs a visual nobody has supplied yet; `hint` says what would help. */
 export const PlaceholderSpec = z.object({
   kind: z.literal("placeholder"),
@@ -84,11 +93,11 @@ export const PlaceholderSpec = z.object({
 });
 export type PlaceholderSpec = z.infer<typeof PlaceholderSpec>;
 
-export const VisualSpec = z.discriminatedUnion("kind", [ChartSpec, FunctionSpec, FlowSpec, FormulaSpec, TableSpec, PlaceholderSpec]);
+export const VisualSpec = z.discriminatedUnion("kind", [ChartSpec, FunctionSpec, FlowSpec, FormulaSpec, TableSpec, FigureSpec, PlaceholderSpec]);
 export type VisualSpec = z.infer<typeof VisualSpec>;
 
 export const ExperimentSim = z.discriminatedUnion("kind", [FunctionSpec, SimSpec]);
 export type ExperimentSim = z.infer<typeof ExperimentSim>;
 
-export const WidgetSpec = z.discriminatedUnion("kind", [ChartSpec, FunctionSpec, FlowSpec, FormulaSpec, SimSpec, TableSpec, PlaceholderSpec]);
+export const WidgetSpec = z.discriminatedUnion("kind", [ChartSpec, FunctionSpec, FlowSpec, FormulaSpec, SimSpec, TableSpec, FigureSpec, PlaceholderSpec]);
 export type WidgetSpec = z.infer<typeof WidgetSpec>;

@@ -175,7 +175,17 @@ export function galleryCells(): GalleryCell[] {
     if (ch.layout === "chart") cells.push({ id: `chart-table-${lang}`, layout: "chart", content: { ...ch, chart: maxBudgetTable(lang) } });
   }
   const st = maxBudgetContent("statement", "zh");
-  if (st.layout === "statement") cells.push({ id: "statement-placeholder", layout: "statement", content: { ...st, visual: { kind: "placeholder", hint: filler(BUDGETS.placeholder.hint.max, "zh", 3) } } });
+  if (st.layout === "statement") {
+    cells.push({ id: "statement-placeholder", layout: "statement", content: { ...st, visual: { kind: "placeholder", hint: filler(BUDGETS.placeholder.hint.max, "zh", 3) } } });
+    cells.push({
+      id: "statement-figure",
+      layout: "statement",
+      content: {
+        ...st,
+        visual: { kind: "figure", assetId: "med_gallery_solenoid", caption: "Fig 16.8: 螺线管周围磁场方向与极性示意" },
+      },
+    });
+  }
   for (const lang of ["en", "zh"] as const) {
     const base = maxBudgetContent("statement", lang);
     const steps = Array.from({ length: BUDGETS.flow.max }, (_, i) => filler(BUDGETS.flow.item.max, lang, i + 4));

@@ -8,6 +8,7 @@ import { adminRoutes } from "./routes/admin.ts";
 import { authRoutes } from "./routes/auth.ts";
 import { documentRoutes } from "./routes/documents.ts";
 import { lessonRoutes } from "./routes/lessons.ts";
+import { mediaRoutes } from "./routes/media.ts";
 import { reuseRoutes } from "./routes/reuse.ts";
 import { shareRoutes } from "./routes/share.ts";
 
@@ -29,6 +30,7 @@ app.route("/api/admin", adminRoutes);
 app.route("/api/documents", documentRoutes);
 app.route("/api/lessons", reuseRoutes);
 app.route("/api/lessons", lessonRoutes);
+app.route("/api/media", mediaRoutes);
 app.route("/api/share", shareRoutes);
 app.all("/api/*", (c) => c.json({ error: { code: "NOT_FOUND", message: "Not found" } }, 404));
 

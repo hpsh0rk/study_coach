@@ -237,7 +237,7 @@ export function probePage(view: number[], items: TextItem[], text: string, ops: 
  */
 export function pageRenderer(file: Blob, opts: { assets?: string; maxSide?: number; quality?: number } = {}) {
   let loading: ReturnType<typeof getDocument> | null = null;
-  const doc = async () => (loading ??= getDocument({ data: new Uint8Array(await file.arrayBuffer()), ...pdfjsAssetOptions(opts.assets) })).promise;
+  const doc = async () => (loading ??= getDocument({ data: new Uint8Array(await file.arrayBuffer()).slice(), ...pdfjsAssetOptions(opts.assets) })).promise;
   return {
     async render(no: number): Promise<string> {
       const page = await (await doc()).getPage(no);
@@ -255,6 +255,484 @@ export function pageRenderer(file: Blob, opts: { assets?: string; maxSide?: numb
       loading = null;
     },
   };
+}
+
+export interface NormalizedRect {
+  /** 0..1 from left edge of page. */
+  x: number;
+  /** 0..1 from top edge of page. */
+  y: number;
+  /** 0..1 width fraction. */
+  w: number;
+  /** 0..1 height fraction. */
+  h: number;
+}
+
+export interface DetectedPageFigure {
+  label: string;
+  caption: string;
+  normBox: NormalizedRect;
+}
+
+export interface ExtractedPdfFigure {
+  pageNo: number;
+  label: string;
+  caption: string;
+  image: string;
+  width: number;
+  height: number;
+}
+
+interface TextLineWithText extends Line {
+  text: string;
+  y0: number;
+  y1: number;
+}
+
+const CAPTION_ANCHOR_RE = /^((?:Figure|Fig\.?)\s*\d+(?:[.-]\d+)*[a-z]?|(?:附图|图)\s*\d+(?:[.-]\d+)*[a-z]?)(?:[\s:：.—–-]+(.*))?$/i;
+const MAX_DETECTED_PER_PAGE = 4;
+const DEFAULT_MAX_EXTRACT_PAGES = 45;
+const DEFAULT_MAX_EXTRACTED_FIGURES = 36;
+
+function unionBox(a: Box, b: Box): Box {
+  return {
+    x0: Math.min(a.x0, b.x0),
+    y0: Math.min(a.y0, b.y0),
+    x1: Math.max(a.x1, b.x1),
+    y1: Math.max(a.y1, b.y1),
+  };
+}
+
+function boxesTouchOrNear(a: Box, b: Box, padX: number, padY: number): boolean {
+  return a.x0 - padX <= b.x1 && a.x1 + padX >= b.x0 && a.y0 - padY <= b.y1 && a.y1 + padY >= b.y0;
+}
+
+function textLinesWithStrings(items: TextItem[]): TextLineWithText[] {
+  const lines: TextLineWithText[] = [];
+  const sorted = items
+    .filter((it) => it.str.trim() && Math.hypot(it.transform[2]!, it.transform[3]!) >= MIN_FONT)
+    .sort((a, b) => b.transform[5]! - a.transform[5]! || a.transform[4]! - b.transform[4]!);
+  for (const it of sorted) {
+    const size = Math.max(1, Math.hypot(it.transform[2]!, it.transform[3]!));
+    const x0 = it.transform[4]!;
+    const x1 = x0 + Math.max(it.width, size * 0.5);
+    const y = it.transform[5]!;
+    const y0 = y - size * 0.25;
+    const y1 = y + size * 0.95;
+    const line = lines.find((l) => Math.abs(l.y - y) < Math.max(l.size, size) * 0.55);
+    if (!line) {
+      lines.push({ y, y0, y1, size, x0, x1, cells: 1, text: it.str.trim() });
+    } else {
+      const gap = x0 - line.x1;
+      if (gap > 2 * size) line.cells++;
+      line.text = `${line.text}${gap > size * 0.2 ? " " : ""}${it.str.trim()}`;
+      line.x0 = Math.min(line.x0, x0);
+      line.x1 = Math.max(line.x1, x1);
+      line.y0 = Math.min(line.y0, y0);
+      line.y1 = Math.max(line.y1, y1);
+      line.size = Math.max(line.size, size);
+    }
+  }
+  return lines;
+}
+
+/**
+ * Detects textbook figures on one PDF page in normalized top-left `[0..1]` coordinates:
+ * - Collects non-decorative `OPS.paintImageXObject` CTM boxes (filtering tiny header/footer icons and full-page backgrounds);
+ * - Pairs adjacent `Figure X.Y` / `Fig. X.Y` / `图 X` captions (and detects pure-vector diagrams anchored by captions);
+ * - Expands each figure's bounding box around nearby vector paths (arrows, field lines, circuit lines) and short diagram text labels (`"N"`, `"S"`, `"Force"`).
+ */
+export function detectPageFigures(view: number[], items: TextItem[], ops: OperatorList | null): DetectedPageFigure[] {
+  if (!ops) return [];
+  const vx0 = view[0] ?? 0;
+  const vy0 = view[1] ?? 0;
+  const vx1 = view[2] ?? 600;
+  const vy1 = view[3] ?? 800;
+  const pageW = Math.max(1, vx1 - vx0);
+  const pageH = Math.max(1, vy1 - vy0);
+  const pageArea = pageW * pageH;
+
+  const stack: Matrix[] = [];
+  let ctm = IDENTITY;
+  const imageBoxes: Box[] = [];
+  const vectorBoxes: Box[] = [];
+
+  ops.fnArray.forEach((fn, i) => {
+    const args = ops.argsArray[i] as unknown[] | null;
+    if (fn === OPS.save) stack.push(ctm);
+    else if (fn === OPS.restore) ctm = stack.pop() ?? IDENTITY;
+    else if (fn === OPS.transform && args) ctm = mul(ctm, args as number[]);
+    else if (fn === OPS.paintFormXObjectBegin) {
+      stack.push(ctm);
+      if (Array.isArray(args?.[0])) ctm = mul(ctm, args[0] as number[]);
+    } else if (fn === OPS.paintFormXObjectEnd) ctm = stack.pop() ?? IDENTITY;
+    else if (IMAGES.has(fn)) {
+      const b = boxOf([0, 0, 1, 1], ctm);
+      const w = b.x1 - b.x0;
+      const h = b.y1 - b.y0;
+      const area = w * h;
+      const inHeaderOrFooter = b.y0 > vy1 - pageH * 0.085 || b.y1 < vy0 + pageH * 0.065;
+      // Filter tiny decorative icons (< 42pt side or < 2600 pt^2) and full-page scan/background washes (> 82% of page)
+      if (w >= 42 && h >= 36 && area >= 2600 && area <= pageArea * 0.82 && !(inHeaderOrFooter && h < 55)) {
+        imageBoxes.push(b);
+      }
+    }     else if (fn === OPS.constructPath && args?.[2]) {
+      const b = boxOf(args[2] as ArrayLike<number>, ctm);
+      const w = b.x1 - b.x0;
+      const h = b.y1 - b.y0;
+      const maxDim = Math.max(w, h);
+      const area = w * h;
+      const isPageRule = w > pageW * 0.82 && h < 4;
+      if (maxDim >= 6 && area <= pageArea * 0.7 && !isPageRule && b.y0 <= vy1 - pageH * 0.06 && b.y1 >= vy0 + pageH * 0.05) {
+        vectorBoxes.push(b);
+      }
+    } else if (fn === OPS.rectangle && Array.isArray(args) && args.length >= 4) {
+      const rx = Number(args[0]);
+      const ry = Number(args[1]);
+      const rw = Number(args[2]);
+      const rh = Number(args[3]);
+      if (Number.isFinite(rx) && Number.isFinite(ry) && Number.isFinite(rw) && Number.isFinite(rh)) {
+        const b = boxOf([rx, ry, rx + rw, ry + rh], ctm);
+        const w = b.x1 - b.x0;
+        const h = b.y1 - b.y0;
+        if (Math.max(w, h) >= 6 && w * h <= pageArea * 0.7 && !(w > pageW * 0.82 && h < 4)) {
+          vectorBoxes.push(b);
+        }
+      }
+    }
+  });
+
+  // Merge touching/overlapping raster image tiles (publishers often slice one diagram photo into strips)
+  const mergedRegions: Box[] = imageBoxes.map((b) => ({ ...b }));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let i = 0; i < mergedRegions.length; i++) {
+      for (let j = i + 1; j < mergedRegions.length; j++) {
+        if (boxesTouchOrNear(mergedRegions[i]!, mergedRegions[j]!, 14, 14)) {
+          mergedRegions[i] = unionBox(mergedRegions[i]!, mergedRegions[j]!);
+          mergedRegions.splice(j, 1);
+          changed = true;
+          break;
+        }
+      }
+      if (changed) break;
+    }
+  }
+
+  const lines = textLinesWithStrings(items);
+  const captions = lines.flatMap((line) => {
+    const m = CAPTION_ANCHOR_RE.exec(line.text.trim());
+    if (!m) return [];
+    const rawLabel = m[1]!.replace(/\s+/g, " ").trim();
+    const rest = (m[2] ?? "").replace(/\s+/g, " ").trim();
+    return [{ line, label: rawLabel, caption: rest || rawLabel }];
+  });
+
+  // Short diagram callout labels ("N", "S", "Force", "Current", "2.5 A", etc.) vs body prose lines
+  const shortLabels = lines.filter((line) => {
+    const trimmed = line.text.trim();
+    if (!trimmed || CAPTION_ANCHOR_RE.test(trimmed)) return false;
+    const inMargin = line.y0 > vy1 - pageH * 0.075 || line.y1 < vy0 + pageH * 0.06;
+    if (inMargin) return false;
+    return trimmed.length <= 22 && (line.x1 - line.x0) < pageW * 0.42;
+  });
+
+  const proseLines = lines.filter((line) => {
+    const trimmed = line.text.trim();
+    if (!trimmed || CAPTION_ANCHOR_RE.test(trimmed)) return false;
+    return trimmed.length > 35 || (line.x1 - line.x0) >= pageW * 0.52;
+  });
+
+  interface Candidate {
+    box: Box;
+    label: string;
+    caption: string;
+    captionLine?: TextLineWithText;
+  }
+
+  const candidates: Candidate[] = mergedRegions.map((box) => ({ box: { ...box }, label: "", caption: "" }));
+
+  // Pair each caption anchor to its nearest diagram above (preferred) or below, or synthesize a vector cluster above it!
+  for (const cap of captions) {
+    let bestIdx = -1;
+    let bestDist = Infinity;
+    for (let idx = 0; idx < candidates.length; idx++) {
+      const c = candidates[idx]!;
+      if (c.captionLine) continue;
+      const horizOverlap = Math.min(c.box.x1, cap.line.x1 + 80) - Math.max(c.box.x0, cap.line.x0 - 80);
+      if (horizOverlap < -40) continue;
+      // PDF y grows upwards: diagram directly ABOVE caption has c.box.y0 >= cap.line.y1 - 12
+      const gapAbove = c.box.y0 - cap.line.y1;
+      const gapBelow = cap.line.y0 - c.box.y1;
+      if (gapAbove >= -18 && gapAbove <= pageH * 0.28 && gapAbove < bestDist) {
+        bestDist = gapAbove;
+        bestIdx = idx;
+      } else if (gapBelow >= -12 && gapBelow <= pageH * 0.14 && gapBelow + 40 < bestDist) {
+        bestDist = gapBelow + 40;
+        bestIdx = idx;
+      }
+    }
+
+    if (bestIdx >= 0) {
+      candidates[bestIdx]!.label = cap.label;
+      candidates[bestIdx]!.caption = cap.caption;
+      candidates[bestIdx]!.captionLine = cap.line;
+      continue;
+    }
+
+    // Pure-vector diagram above a `Figure X.Y` caption (no raster XObject): find vector primitives between caption and nearest prose paragraph above!
+    const ceilingProseY = proseLines
+      .filter((p) => p.y0 > cap.line.y1 + 12)
+      .reduce((minY, p) => Math.min(minY, p.y0), vy1 - pageH * 0.06);
+    const searchTop = Math.min(ceilingProseY - 4, cap.line.y1 + pageH * 0.42);
+    const vecInBand = vectorBoxes.filter(
+      (v) => v.y0 >= cap.line.y1 - 4 && v.y1 <= searchTop + 6 && v.x1 >= vx0 + 16 && v.x0 <= vx1 - 16,
+    );
+    if (vecInBand.length >= 2) {
+      let vUnion = { ...vecInBand[0]! };
+      for (const v of vecInBand.slice(1)) vUnion = unionBox(vUnion, v);
+      if (vUnion.x1 - vUnion.x0 >= 36 && vUnion.y1 - vUnion.y0 >= 28) {
+        candidates.push({
+          box: vUnion,
+          label: cap.label,
+          caption: cap.caption,
+          captionLine: cap.line,
+        });
+      }
+    }
+  }
+
+  // Expand each candidate box to absorb connected/adjacent vector arrows and short callout labels ("N", "S", "Force")
+  // while stopping cleanly before surrounding body prose lines and captions!
+  const out: DetectedPageFigure[] = [];
+  const sortedCandidates = candidates
+    .sort((a, b) => b.box.y1 - a.box.y1 || a.box.x0 - b.box.x0)
+    .slice(0, MAX_DETECTED_PER_PAGE);
+
+  for (const cand of sortedCandidates) {
+    let box = { ...cand.box };
+    const ceilingY = proseLines
+      .filter((p) => p.y0 >= cand.box.y1 - 2)
+      .reduce((minY, p) => Math.min(minY, p.y0 - 3), vy1 - 6);
+    const captionTopY = cand.captionLine && cand.captionLine.y1 <= cand.box.y0 + 16 ? cand.captionLine.y1 + 2 : -Infinity;
+    const floorProseY = proseLines
+      .filter((p) => p.y1 <= cand.box.y0 + 2)
+      .reduce((maxY, p) => Math.max(maxY, p.y1 + 3), vy0 + 6);
+    const floorY = Math.max(floorProseY, captionTopY);
+
+    for (let pass = 0; pass < 3; pass++) {
+      for (const v of vectorBoxes) {
+        if (v.y1 > ceilingY + 4 || v.y0 < floorY - 4) continue;
+        if (boxesTouchOrNear(box, v, 36, 26)) {
+          box = unionBox(box, v);
+        }
+      }
+      for (const lbl of shortLabels) {
+        const lb: Box = { x0: lbl.x0, y0: lbl.y0, x1: lbl.x1, y1: lbl.y1 };
+        if (lb.y1 > ceilingY + 4 || lb.y0 < floorY - 4) continue;
+        if (boxesTouchOrNear(box, lb, 58, 30)) {
+          box = unionBox(box, lb);
+        }
+      }
+    }
+
+    // Add breathing padding (10pt) clamped to page and prose boundaries:
+    const pad = 10;
+    const x0 = Math.max(vx0, box.x0 - pad);
+    const x1 = Math.min(vx1, box.x1 + pad);
+    const y0 = Math.max(vy0, Math.max(floorY, box.y0 - pad));
+    const y1 = Math.min(vx1 ? vy1 : 800, Math.min(ceilingY, box.y1 + pad));
+    if (x1 - x0 < 40 || y1 - y0 < 32) continue;
+
+    // Convert PDF bottom-up coordinates to normalized top-left [0..1] viewport coordinates:
+    const nx = Math.max(0, Math.min(1, (x0 - vx0) / pageW));
+    const ny = Math.max(0, Math.min(1, (vy1 - y1) / pageH));
+    const nw = Math.max(0.05, Math.min(1 - nx, (x1 - x0) / pageW));
+    const nh = Math.max(0.05, Math.min(1 - ny, (y1 - y0) / pageH));
+
+    out.push({
+      label: cand.label.slice(0, 80),
+      caption: cand.caption.slice(0, 200),
+      normBox: { x: nx, y: ny, w: nw, h: nh },
+    });
+  }
+
+  return out;
+}
+
+function encodeCanvasImage(canvas: HTMLCanvasElement, quality = 0.86): string {
+  const webp = canvas.toDataURL("image/webp", quality);
+  if (webp.startsWith("data:image/webp")) return webp;
+  return canvas.toDataURL("image/png");
+}
+
+/** Crops a normalized `[0..1]` rectangle from a rendered page canvas, scaling down proportionally so `maxSide <= 1200`. */
+export function cropNormalizedRegion(
+  sourceCanvas: HTMLCanvasElement,
+  norm: NormalizedRect,
+  opts: { maxSide?: number; quality?: number; createCanvas?: (w: number, h: number) => HTMLCanvasElement } = {},
+): { image: string; width: number; height: number } {
+  const maxSide = opts.maxSide ?? 1200;
+  const makeCanvas =
+    opts.createCanvas ??
+    ((w: number, h: number) => {
+      const c = document.createElement("canvas");
+      c.width = w;
+      c.height = h;
+      return c;
+    });
+  const sw = Math.max(1, sourceCanvas.width);
+  const sh = Math.max(1, sourceCanvas.height);
+  const sx = Math.max(0, Math.min(sw - 1, Math.round(norm.x * sw)));
+  const sy = Math.max(0, Math.min(sh - 1, Math.round(norm.y * sh)));
+  const cw = Math.max(1, Math.min(sw - sx, Math.round(norm.w * sw)));
+  const ch = Math.max(1, Math.min(sh - sy, Math.round(norm.h * sh)));
+
+  const downscale = Math.min(1, maxSide / Math.max(cw, ch));
+  const outW = Math.max(1, Math.round(cw * downscale));
+  const outH = Math.max(1, Math.round(ch * downscale));
+
+  const outCanvas = makeCanvas(outW, outH);
+  outCanvas.width = outW;
+  outCanvas.height = outH;
+  const ctx = outCanvas.getContext("2d");
+  if (ctx) {
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, outW, outH);
+    ctx.drawImage(sourceCanvas, sx, sy, cw, ch, 0, 0, outW, outH);
+  }
+  return {
+    image: encodeCanvasImage(outCanvas, opts.quality ?? 0.86),
+    width: outW,
+    height: outH,
+  };
+}
+
+export interface ExtractFiguresOptions {
+  assets?: string;
+  pageNumbers?: number[];
+  pageOffset?: number;
+  /** Maximum output pixel dimension per cropped figure (default 1200). */
+  maxSide?: number;
+  /** Maximum pages scanned for composite figure rendering in one pass so ingestion stays fast (default 45). */
+  maxPages?: number;
+  /** Maximum figures extracted in one pass (default 36). */
+  maxFigures?: number;
+  quality?: number;
+  createCanvas?: (w: number, h: number) => HTMLCanvasElement;
+  renderPageToCanvas?: (page: PDFPageProxy, viewport: ReturnType<PDFPageProxy["getViewport"]>, canvas: HTMLCanvasElement) => Promise<void>;
+}
+
+/**
+ * Extracts composite `2×` rendered textbook figures (preserving raster base + PDF vector arrows + text labels)
+ * across selected pages of a PDF. Pages with zero detected figures never allocate or render a canvas!
+ */
+export async function extractPdfFigures(data: ArrayBuffer, opts: ExtractFiguresOptions = {}): Promise<ExtractedPdfFigure[]> {
+  const shift = Math.max(0, Math.trunc((opts.pageOffset ?? 1) - 1));
+  const maxSide = opts.maxSide ?? 1200;
+  const maxPages = opts.maxPages ?? DEFAULT_MAX_EXTRACT_PAGES;
+  const maxFigures = opts.maxFigures ?? DEFAULT_MAX_EXTRACTED_FIGURES;
+  const makeCanvas =
+    opts.createCanvas ??
+    ((w: number, h: number) => {
+      const c = document.createElement("canvas");
+      c.width = w;
+      c.height = h;
+      return c;
+    });
+
+  const task = getDocument({ data: new Uint8Array(data).slice(), ...pdfjsAssetOptions(opts.assets) });
+  const pdf = await task.promise;
+  try {
+    const targetPhysPages = opts.pageNumbers
+      ? [
+          ...new Set(
+            opts.pageNumbers
+              .map((n) => Math.trunc(n))
+              .map((n) => (shift > 0 && n > pdf.numPages ? n - shift : n))
+              .filter((phys) => phys >= 1 && phys <= pdf.numPages),
+          ),
+        ].sort((a, b) => a - b)
+      : Array.from({ length: pdf.numPages }, (_, i) => i + 1);
+
+    const boundedPages = targetPhysPages.slice(0, maxPages);
+    const results: ExtractedPdfFigure[] = [];
+
+    for (const physNo of boundedPages) {
+      if (results.length >= maxFigures) break;
+      const pageNo = physNo + shift;
+      const page = await pdf.getPage(physNo);
+      try {
+        const [content, ops] = await Promise.all([page.getTextContent(), page.getOperatorList().catch(() => null)]);
+        const items = content.items.filter((it): it is TextItem => "str" in it);
+        const detected = detectPageFigures(page.view, items, ops);
+        if (!detected.length) continue;
+
+        // Render full composite page at 2x scale once, then crop each detected figure region!
+        const viewport = page.getViewport({ scale: 2 });
+        const pageCanvas = makeCanvas(Math.round(viewport.width), Math.round(viewport.height));
+        pageCanvas.width = Math.round(viewport.width);
+        pageCanvas.height = Math.round(viewport.height);
+        if (opts.renderPageToCanvas) {
+          await opts.renderPageToCanvas(page, viewport, pageCanvas);
+        } else {
+          await page.render({ canvas: pageCanvas, viewport, background: "#ffffff" }).promise;
+        }
+
+        for (let k = 0; k < detected.length && results.length < maxFigures; k++) {
+          const det = detected[k]!;
+          const cropped = cropNormalizedRegion(pageCanvas, det.normBox, {
+            maxSide,
+            quality: opts.quality,
+            createCanvas: makeCanvas,
+          });
+          const fallbackLabel = det.label || `p.${pageNo} Fig ${k + 1}`;
+          results.push({
+            pageNo,
+            label: fallbackLabel,
+            caption: det.caption || fallbackLabel,
+            image: cropped.image,
+            width: cropped.width,
+            height: cropped.height,
+          });
+        }
+      } finally {
+        page.cleanup();
+      }
+    }
+    return results;
+  } finally {
+    await task.destroy();
+  }
+}
+
+/** Renders one page of a PDF Blob at `2×` scale into a Canvas for interactive drag-cropping in the browser. */
+export async function renderPdfPageCanvas(
+  file: Blob,
+  pageNo: number,
+  opts: { assets?: string; scale?: number; pageOffset?: number } = {},
+): Promise<HTMLCanvasElement> {
+  const shift = Math.max(0, Math.trunc((opts.pageOffset ?? 1) - 1));
+  const task = getDocument({ data: new Uint8Array(await file.arrayBuffer()).slice(), ...pdfjsAssetOptions(opts.assets) });
+  const pdf = await task.promise;
+  try {
+    const physNo = shift > 0 && pageNo > pdf.numPages ? pageNo - shift : pageNo;
+    const clamped = Math.max(1, Math.min(pdf.numPages, Math.trunc(physNo)));
+    const page = await pdf.getPage(clamped);
+    try {
+      const viewport = page.getViewport({ scale: opts.scale ?? 2 });
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(viewport.width);
+      canvas.height = Math.round(viewport.height);
+      await page.render({ canvas, viewport, background: "#ffffff" }).promise;
+      return canvas;
+    } finally {
+      page.cleanup();
+    }
+  } finally {
+    await task.destroy();
+  }
 }
 
 export interface ParseOptions {
@@ -280,7 +758,7 @@ function normalizeCallArgs<T extends object>(fallbackOrOpts?: string | T, maybeO
 export async function inspectPdf(data: ArrayBuffer, fallbackOrOpts?: string | InspectOptions, maybeOpts?: InspectOptions): Promise<PdfInspection> {
   const { fallbackTitle, opts } = normalizeCallArgs(fallbackOrOpts, maybeOpts);
   const shift = Math.max(0, Math.trunc((opts.pageOffset ?? 1) - 1));
-  const task = getDocument({ data: new Uint8Array(data), ...pdfjsAssetOptions(opts.assets) });
+  const task = getDocument({ data: new Uint8Array(data).slice(), ...pdfjsAssetOptions(opts.assets) });
   const pdf = await task.promise;
   try {
     const [meta, outlineRaw, rawLabels] = await Promise.all([
@@ -313,7 +791,7 @@ export async function inspectPdf(data: ArrayBuffer, fallbackOrOpts?: string | In
 export async function parsePdf(data: ArrayBuffer, fallbackOrOpts?: string | ParseOptions, maybeOpts?: ParseOptions): Promise<ParsedPdf> {
   const { fallbackTitle, opts } = normalizeCallArgs(fallbackOrOpts, maybeOpts);
   const shift = Math.max(0, Math.trunc((opts.pageOffset ?? 1) - 1));
-  const task = getDocument({ data: new Uint8Array(data), ...pdfjsAssetOptions(opts.assets) });
+  const task = getDocument({ data: new Uint8Array(data).slice(), ...pdfjsAssetOptions(opts.assets) });
   const pdf = await task.promise;
   try {
     const meta = await pdf.getMetadata().catch(() => null);

@@ -31,6 +31,8 @@ export interface PlayerOptions {
   onInk?(index: number, strokes: Stroke[]): void;
   /** Escape pressed while the pen is off: leave the presentation. */
   onEscape?(): void;
+  /** Optional share token so `/s/:token` loads `/api/media/:id?share=<token>`. */
+  shareToken?: string;
 }
 
 const TALLY_KEYS = ["PageDown", "PageUp", "Enter", "ArrowRight", "ArrowLeft", "ArrowDown", "ArrowUp"];
@@ -68,11 +70,11 @@ function scaleInto(container: HTMLElement, inner: HTMLElement, after?: () => voi
 }
 
 /** Static, fully revealed thumbnail. Returns a disposer. */
-export function renderThumb(container: HTMLElement, slide: Pick<Slide, "content" | "sources">, theme: ThemeId, opts: { badge?: string; index?: number; pageLabels?: Record<number, string>; language?: TeachingLanguage } = {}): () => void {
+export function renderThumb(container: HTMLElement, slide: Pick<Slide, "content" | "sources">, theme: ThemeId, opts: { badge?: string; index?: number; pageLabels?: Record<number, string>; language?: TeachingLanguage; shareToken?: string } = {}): () => void {
   container.replaceChildren();
   container.classList.add("kj-thumb");
   const wrap = el("div", "kj-thumb-inner", container);
-  const r = renderSlide(slide, { theme, interactive: false, badge: opts.badge, index: opts.index, pageLabels: opts.pageLabels, language: opts.language });
+  const r = renderSlide(slide, { theme, interactive: false, badge: opts.badge, index: opts.index, pageLabels: opts.pageLabels, language: opts.language, ...(opts.shareToken ? { shareToken: opts.shareToken } : {}) });
   wrap.append(r.el);
   applyStep(r.el, r.steps);
   const obs = scaleInto(container, wrap);
@@ -408,6 +410,7 @@ export class Player {
       hideAnswers: this.opts.hideAnswers,
       allowPollClick: !this.opts.hideAnswers,
       tally: this.tallies.get(this.pos.index),
+      ...(this.opts.shareToken ? { shareToken: this.opts.shareToken } : {}),
     });
     this.buildTallyInputs();
     this.ink.setSlide(this.pos.index);

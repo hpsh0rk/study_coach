@@ -29,6 +29,7 @@ jobs:
       # Exported .pptx through LibreOffice: no text box needs more height than planned, no word leaves the slide.
       - run: sudo apt-get install -y --no-install-recommends libreoffice-impress-nogui poppler-utils
       - run: pnpm --filter @kj/pptx render-check
+      - run: pnpm --filter @kj/pptx browser-verify
       - if: failure()
         uses: actions/upload-artifact@v4
         with:

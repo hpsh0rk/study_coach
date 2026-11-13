@@ -13,7 +13,7 @@ import { clearOutlineDraft, loadOutlineDraft, saveOutlineDraft } from "./outline
 import { Stepper, StepIntro, type StepKey } from "./Stepper.tsx";
 import { UNSAVED_MESSAGE, useUnsavedGuard } from "./unsaved.ts";
 
-const VISUAL_LABEL: Record<VisualKind, string> = { none: "无 None", chart: "图表 Chart", function: "函数图 Plot", flow: "流程 Flow", formula: "公式 Formula", sim: "模拟实验 Sim", table: "表格 Table" };
+const VISUAL_LABEL: Record<VisualKind, string> = { none: "无 None", chart: "图表 Chart", function: "函数图 Plot", flow: "流程 Flow", formula: "公式 Formula", sim: "模拟实验 Sim", table: "表格 Table", figure: "原书插图 Figure" };
 const visualLabel = (v: VisualKind, spec: SlideSpec) => (v === "none" && LAYOUTS[spec.layout].visual === "required" ? "图示待补 Visual to add" : VISUAL_LABEL[v]);
 const cleanedOutline = (outline: Outline, language: TeachingLanguage = "en+zh"): Outline => ({
   ...outline,

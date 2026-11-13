@@ -1,12 +1,16 @@
 import { texToText } from "@kj/pptx";
-import type { HandoutDoc, HandoutRun, HandoutTable } from "./model.ts";
-import { buildZip } from "./zip.ts";
+import type { HandoutDoc, HandoutFigure, HandoutRun, HandoutTable } from "./model.ts";
+import { buildZip, type ZipInputEntry } from "./zip.ts";
 
 /** A4 Portrait in twips (1 mm = 56.6929 twips): 210mm x 297mm = 11906 x 16838; 16mm margin = 907 twips. */
 const A4_WIDTH_DXA = 11906;
 const A4_HEIGHT_DXA = 16838;
 const A4_MARGIN_DXA = 907;
 const PRINTABLE_WIDTH_DXA = A4_WIDTH_DXA - A4_MARGIN_DXA * 2; // 10092
+/** Max inline drawing dimensions in EMU (1 inch = 914400 EMU, 1 px @ 96dpi = 9525 EMU). */
+const MAX_DRAWING_CX_EMU = 4_876_800; // ~5.33 in (135 mm)
+const MAX_DRAWING_CY_EMU = 2_857_500; // ~3.125 in (79 mm)
+const EMU_PER_PX = 9525;
 
 const RED_ACCENT_HEX = "C81E1E";
 
@@ -77,6 +81,7 @@ interface ParaOpts {
   spaceBefore?: number;
   spaceAfter?: number;
   indentLeft?: number;
+  align?: "left" | "center" | "right";
   shadingFill?: string;
   borderLeftColor?: string;
   borderBottomColor?: string;
@@ -87,6 +92,7 @@ function wPara(innerRunsXml: string, opts: ParaOpts = {}): string {
   const pPr: string[] = [];
   if (opts.pStyle) pPr.push(`<w:pStyle w:val="${opts.pStyle}"/>`);
   if (opts.keepNext) pPr.push("<w:keepNext/>");
+  if (opts.align) pPr.push(`<w:jc w:val="${opts.align}"/>`);
   if (opts.borderLeftColor || opts.borderBottomColor) {
     const borders: string[] = [];
     if (opts.borderLeftColor) borders.push(`<w:left w:val="single" w:sz="18" w:space="8" w:color="${opts.borderLeftColor}"/>`);
@@ -223,18 +229,70 @@ function buildStylesXml(): string {
   ].join("");
 }
 
-function buildContentTypesXml(): string {
+function proportionalFigureEmu(widthPx: number, heightPx: number): { cx: number; cy: number } {
+  const w = Math.max(1, widthPx);
+  const h = Math.max(1, heightPx);
+  const natCx = w * EMU_PER_PX;
+  const natCy = h * EMU_PER_PX;
+  const scale = Math.min(1.5, MAX_DRAWING_CX_EMU / natCx, MAX_DRAWING_CY_EMU / natCy);
+  return {
+    cx: Math.max(95_250, Math.round(natCx * scale)),
+    cy: Math.max(95_250, Math.round(natCy * scale)),
+  };
+}
+
+function wDrawingInline(relId: string, docPrId: number, cx: number, cy: number, alt: string): string {
+  const safeAlt = escapeXml(alt || `Figure ${docPrId}`);
+  return [
+    "<w:r><w:drawing>",
+    '<wp:inline distT="0" distB="0" distL="0" distR="0">',
+    `<wp:extent cx="${cx}" cy="${cy}"/>`,
+    '<wp:effectExtent l="0" t="0" r="0" b="0"/>',
+    `<wp:docPr id="${docPrId}" name="Picture ${docPrId}" descr="${safeAlt}"/>`,
+    '<wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/></wp:cNvGraphicFramePr>',
+    '<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">',
+    '<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">',
+    '<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">',
+    `<pic:nvPicPr><pic:cNvPr id="${docPrId}" name="image${docPrId}.png" descr="${safeAlt}"/><pic:cNvPicPr><a:picLocks noChangeAspect="1" noChangeArrowheads="1"/></pic:cNvPicPr></pic:nvPicPr>`,
+    `<pic:blipFill><a:blip r:embed="${relId}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>`,
+    `<pic:spPr bwMode="auto"><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></pic:spPr>`,
+    "</pic:pic>",
+    "</a:graphicData>",
+    "</a:graphic>",
+    "</wp:inline>",
+    "</w:drawing></w:r>",
+  ].join("");
+}
+
+function decodeDataUrlPngBytes(dataUrl: string | undefined): Uint8Array | null {
+  if (!dataUrl) return null;
+  const m = /^data:image\/png;base64,([A-Za-z0-9+/=\s]+)$/i.exec(dataUrl.trim());
+  if (!m) return null;
+  try {
+    const bin = atob(m[1]!.replace(/\s+/g, ""));
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+function buildContentTypesXml(hasPng: boolean): string {
   return [
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
     '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">',
     '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>',
     '<Default Extension="xml" ContentType="application/xml"/>',
+    hasPng ? '<Default Extension="png" ContentType="image/png"/>' : "",
     '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>',
     '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>',
     '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>',
     '<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>',
     "</Types>",
-  ].join("");
+  ]
+    .filter(Boolean)
+    .join("");
 }
 
 function buildRootRelsXml(): string {
@@ -248,11 +306,15 @@ function buildRootRelsXml(): string {
   ].join("");
 }
 
-function buildDocRelsXml(): string {
+function buildDocRelsXml(mediaRels: { relId: string; target: string }[]): string {
   return [
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
     '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
     '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>',
+    ...mediaRels.map(
+      (m) =>
+        `<Relationship Id="${m.relId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="${m.target}"/>`,
+    ),
     "</Relationships>",
   ].join("");
 }
@@ -282,6 +344,23 @@ function buildAppPropsXml(): string {
 export function compileHandoutDocx(doc: HandoutDoc): Uint8Array {
   const isTeacher = doc.copy === "teacher";
   const body: string[] = [];
+  const mediaEntries: { relId: string; target: string; zipName: string; bytes: Uint8Array }[] = [];
+  const mediaByAssetId = new Map<string, { relId: string }>();
+  let nextDocPrId = 1;
+
+  const ensureMediaRel = (fig: HandoutFigure): string | null => {
+    const cached = mediaByAssetId.get(fig.assetId);
+    if (cached) return cached.relId;
+    const pngBytes = fig.pngBytes ?? decodeDataUrlPngBytes(fig.dataUrl);
+    if (!pngBytes || pngBytes.byteLength === 0) return null;
+    const idx = mediaEntries.length + 1;
+    const relId = `rId${idx + 1}`;
+    const target = `media/image${idx}.png`;
+    const zipName = `word/${target}`;
+    mediaEntries.push({ relId, target, zipName, bytes: pngBytes });
+    mediaByAssetId.set(fig.assetId, { relId });
+    return relId;
+  };
 
   // 1. Header & Syllabus / Learning Objectives Checklist
   body.push(
@@ -363,6 +442,38 @@ export function compileHandoutDocx(doc: HandoutDoc): Uint8Array {
       }
       for (const tbl of block.tables) {
         body.push(renderHandoutTableXml(tbl));
+      }
+      for (const fig of block.figures) {
+        const relId = ensureMediaRel(fig);
+        if (relId) {
+          const { cx, cy } = proportionalFigureEmu(fig.width, fig.height);
+          const docPrId = nextDocPrId++;
+          body.push(
+            wPara(wDrawingInline(relId, docPrId, cx, cy, fig.alt), {
+              align: "center",
+              spaceBefore: 80,
+              spaceAfter: fig.caption ? 30 : 80,
+              keepNext: !!fig.caption,
+            }),
+          );
+        } else {
+          body.push(
+            wPara(wRun(`【教材插图 Figure：${fig.alt}】`, { italic: true, color: "475569", sizeHalfPt: 19 }), {
+              align: "center",
+              spaceBefore: 60,
+              spaceAfter: fig.caption ? 20 : 60,
+            }),
+          );
+        }
+        if (fig.caption) {
+          body.push(
+            wPara(runsToXml(fig.caption, { sizeHalfPt: 19, color: "475569" }), {
+              align: "center",
+              spaceBefore: 20,
+              spaceAfter: 80,
+            }),
+          );
+        }
       }
     }
     if (isTeacher && group.misconceptions.length > 0) {
@@ -500,18 +611,20 @@ export function compileHandoutDocx(doc: HandoutDoc): Uint8Array {
 
   const documentXml = [
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
-    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">',
+    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">',
     `<w:body>${body.join("")}${sectPr}</w:body>`,
     "</w:document>",
   ].join("");
 
-  return buildZip([
-    { name: "[Content_Types].xml", data: buildContentTypesXml() },
+  const zipFiles: ZipInputEntry[] = [
+    { name: "[Content_Types].xml", data: buildContentTypesXml(mediaEntries.length > 0) },
     { name: "_rels/.rels", data: buildRootRelsXml() },
-    { name: "word/_rels/document.xml.rels", data: buildDocRelsXml() },
+    { name: "word/_rels/document.xml.rels", data: buildDocRelsXml(mediaEntries) },
     { name: "word/styles.xml", data: buildStylesXml() },
     { name: "word/document.xml", data: documentXml },
+    ...mediaEntries.map((m) => ({ name: m.zipName, data: m.bytes })),
     { name: "docProps/core.xml", data: buildCorePropsXml(doc.header.title) },
     { name: "docProps/app.xml", data: buildAppPropsXml() },
-  ]);
+  ];
+  return buildZip(zipFiles);
 }

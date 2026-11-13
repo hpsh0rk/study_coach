@@ -54,10 +54,13 @@ function sigFigRange(text: string): { min: number; max: number } {
   return { min, max: stripped.length };
 }
 
+const FIG_REF_RE = /\b(?:figure|fig\.?)\s*\d+(?:[.-]\d+)*[a-z]?|(?:附图|图)\s*\d+(?:[.-]\d+)*[a-z]?/gi;
+
 /** Numbers in prose or plain math, with thousands separators ("20 000", "3,000") and "a × 10^b". */
 export function numbersIn(raw: string): FoundNumber[] {
   const s = texToPlain(stripRichMarkers(raw))
     .replace(/\bp\.\s*\d+/gi, " ")
+    .replace(FIG_REF_RE, " ")
     .replace(/(?<![\d.]\s*(?:×|x|\*)\s*)\b10\s*\^\s*\(?([-−]?\d+)\)?/g, "1 × 10^$1");
   const out: FoundNumber[] = [];
   for (const m of s.matchAll(NUM_RE)) {
@@ -73,7 +76,7 @@ export function numbersIn(raw: string): FoundNumber[] {
 }
 
 function fractionNumbersIn(raw: string): FoundNumber[] {
-  const s = texToPlain(stripRichMarkers(raw)).replace(/\bp\.\s*\d+/gi, " ");
+  const s = texToPlain(stripRichMarkers(raw)).replace(/\bp\.\s*\d+/gi, " ").replace(FIG_REF_RE, " ");
   const out: FoundNumber[] = [];
   for (const m of s.matchAll(FRAC_RE)) {
     const [, sign, numStr, denStr] = m;

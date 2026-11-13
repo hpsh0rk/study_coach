@@ -9,8 +9,13 @@ import type { ExternalParserInfo, PastedPage } from "./api.ts";
  * never has it. Lost on reload; the chapters step then asks the teacher to pick the file again.
  */
 const files = new Map<string, Blob>();
-export const rememberFile = (documentId: string, file: Blob) => void files.set(documentId, file);
+const offsets = new Map<string, number>();
+export const rememberFile = (documentId: string, file: Blob, pageOffset = 1) => {
+  files.set(documentId, file);
+  offsets.set(documentId, pageOffset > 1 ? Math.trunc(pageOffset) : 1);
+};
 export const rememberedFile = (documentId: string) => files.get(documentId);
+export const rememberedPageOffset = (documentId: string) => offsets.get(documentId) ?? 1;
 
 /** OCR helps scans and broken fonts; it would only blur pages whose problem is formulas drawn as outlines. */
 const OCR_KINDS: readonly PageKind[] = ["scanned", "garbled"];

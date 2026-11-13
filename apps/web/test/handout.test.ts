@@ -859,4 +859,110 @@ describe("Handout Editable OOXML `.docx` compiler (`docx.ts` + `zip.ts`)", () =>
       expect(text).toContain("Flow & <Angles> \"Test\"");
     }
   });
+
+  it("embeds { kind: 'figure' } images into standalone A4 HTML (inline data URL) and OOXML .docx (word/media/imageN.png + rels + <w:drawing><wp:inline> with proportional EMU dimensions)", async () => {
+    const { deflateSync } = await import("node:zlib");
+    const makePng = (w: number, h: number) => {
+      const crcTable = new Uint32Array(256);
+      for (let n = 0; n < 256; n++) {
+        let c = n;
+        for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+        crcTable[n] = c >>> 0;
+      }
+      const crc32 = (buf: Buffer) => {
+        let c = 0xffffffff;
+        for (const b of buf) c = crcTable[(c ^ b) & 0xff]! ^ (c >>> 8);
+        return (c ^ 0xffffffff) >>> 0;
+      };
+      const chunk = (t: string, d: Buffer) => {
+        const tb = Buffer.from(t);
+        const lb = Buffer.alloc(4);
+        lb.writeUInt32BE(d.length);
+        const cb = Buffer.alloc(4);
+        cb.writeUInt32BE(crc32(Buffer.concat([tb, d])));
+        return Buffer.concat([lb, tb, d, cb]);
+      };
+      const ihdr = Buffer.alloc(13);
+      ihdr.writeUInt32BE(w, 0);
+      ihdr.writeUInt32BE(h, 4);
+      ihdr.set([8, 2, 0, 0, 0], 8);
+      const raw = Buffer.alloc(h * (1 + w * 3), 220);
+      for (let y = 0; y < h; y++) raw[y * (1 + w * 3)] = 0;
+      const bytes = new Uint8Array(
+        Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), chunk("IHDR", ihdr), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]),
+      );
+      return {
+        dataUrl: `data:image/png;base64,${Buffer.from(bytes).toString("base64")}`,
+        pngBytes: bytes,
+        width: w,
+        height: h,
+      };
+    };
+
+    const solenoidImg = makePng(600, 300); // 2:1 aspect ratio
+    const base = makeIgcseMagnetismFixture();
+    const figSlide: Slide = {
+      id: "sl-fig-704",
+      specId: "s-process-1",
+      outlineVersionId: "ov-fig",
+      layout: "statement",
+      pageType: "process",
+      minutes: 4,
+      sources: [708],
+      notes: "Trace magnetic field lines inside the solenoid.",
+      warnings: [],
+      content: {
+        layout: "statement",
+        title: "Field Around a Solenoid",
+        bullets: ["Field inside is ==uniform and parallel=="],
+        visual: {
+          kind: "figure",
+          assetId: "med_solenoid708",
+          caption: "Fig 16.8: Magnetic field around a **solenoid**",
+          alt: "Solenoid magnetic field diagram",
+        },
+        terms: [{ term: "solenoid", zh: "螺线管" }],
+      },
+    };
+    const slides = base.slides.map((s) => (s.specId === "s-process-1" ? figSlide : s));
+    const media = {
+      med_solenoid708: solenoidImg,
+    };
+
+    for (const copy of ["student", "teacher"] as const) {
+      const doc = buildHandoutDoc({ lesson: base.lesson, outline: base.outline, slides, copy, media });
+      const html = compileHandoutHtml(doc);
+      expect(html).toContain(solenoidImg.dataUrl);
+      expect(html).toContain("Fig 16.8");
+      expect(html).not.toContain("/api/media/med_solenoid708");
+
+      const entries = readZip(compileHandoutDocx(doc));
+      expect(entries.has("word/media/image1.png")).toBe(true);
+      expect(entries.get("word/media/image1.png")).toEqual(solenoidImg.pngBytes);
+
+      const ctXml = new TextDecoder().decode(entries.get("[Content_Types].xml")!);
+      const relsXml = new TextDecoder().decode(entries.get("word/_rels/document.xml.rels")!);
+      const docXml = new TextDecoder().decode(entries.get("word/document.xml")!);
+
+      assertWellFormedXml(ctXml, `${copy}:Content_Types`);
+      assertWellFormedXml(relsXml, `${copy}:document.xml.rels`);
+      assertWellFormedXml(docXml, `${copy}:document.xml`);
+
+      expect(ctXml).toContain('Extension="png" ContentType="image/png"');
+      expect(relsXml).toContain('Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"');
+      expect(relsXml).toContain('Target="media/image1.png"');
+      expect(docXml).toContain("<w:drawing>");
+      expect(docXml).toContain("<wp:inline");
+      expect(docXml).toContain('r:embed="rId2"');
+
+      // Check proportional 2:1 EMU dimensions (cx / cy == 2.0):
+      const extMatch = /<wp:extent cx="(\d+)" cy="(\d+)"\/>/.exec(docXml);
+      expect(extMatch).not.toBeNull();
+      const cx = Number(extMatch![1]);
+      const cy = Number(extMatch![2]);
+      expect(cx).toBeGreaterThan(1_000_000);
+      expect(cx).toBeLessThanOrEqual(5_200_000);
+      expect(cx / cy).toBeCloseTo(2.0, 2);
+    }
+  });
 });

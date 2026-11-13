@@ -132,6 +132,69 @@ function addChart(pptx: PptxGenJS, slide: PptxGenJS.Slide, it: ChartItem, font: 
   });
 }
 
+function parseDataUrlDimensions(dataUrl: string): { width: number; height: number } | null {
+  const m = /^data:image\/(?:png|jpeg|jpg|webp);base64,([A-Za-z0-9+/=\s]+)$/i.exec(dataUrl.trim());
+  if (!m) return null;
+  let bin: string;
+  try {
+    bin = atob(m[1]!.replace(/\s+/g, "").slice(0, 4096));
+  } catch {
+    return null;
+  }
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const view = new DataView(bytes.buffer);
+  // PNG IHDR
+  if (bytes.length >= 24 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+    const width = view.getUint32(16, false);
+    const height = view.getUint32(20, false);
+    if (width > 0 && height > 0) return { width, height };
+  }
+  // JPEG SOF
+  if (bytes.length >= 12 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+    let off = 2;
+    while (off + 9 < bytes.length) {
+      if (bytes[off] !== 0xff) {
+        off++;
+        continue;
+      }
+      while (off < bytes.length && bytes[off] === 0xff) off++;
+      if (off >= bytes.length) break;
+      const marker = bytes[off++]!;
+      if (marker === 0xd8 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7) || marker === 0x01) continue;
+      if (off + 2 > bytes.length) break;
+      const len = view.getUint16(off, false);
+      if (len < 2 || off + len > bytes.length) break;
+      if (((marker >= 0xc0 && marker <= 0xc3) || (marker >= 0xc5 && marker <= 0xc7)) && len >= 7) {
+        const height = view.getUint16(off + 3, false);
+        const width = view.getUint16(off + 5, false);
+        if (width > 0 && height > 0) return { width, height };
+      }
+      off += len;
+    }
+  }
+  return null;
+}
+
+function containBoxInches(rect: { x: number; y: number; w: number; h: number }, dims: { width: number; height: number } | null) {
+  const bx = inch(rect.x);
+  const by = inch(rect.y);
+  const bw = inch(rect.w);
+  const bh = inch(rect.h);
+  if (!dims || !(dims.width > 0 && dims.height > 0)) {
+    return { x: bx, y: by, w: bw, h: bh, sizing: { type: "contain" as const, w: bw, h: bh } };
+  }
+  const scale = Math.min(bw / dims.width, bh / dims.height);
+  const w = dims.width * scale;
+  const h = dims.height * scale;
+  return {
+    x: bx + (bw - w) / 2,
+    y: by + (bh - h) / 2,
+    w,
+    h,
+  };
+}
+
 async function addItem(pptx: PptxGenJS, slide: PptxGenJS.Slide, it: Item, o: WriteOptions): Promise<void> {
   const p = o.palette;
   switch (it.kind) {
@@ -146,7 +209,7 @@ async function addItem(pptx: PptxGenJS, slide: PptxGenJS.Slide, it: Item, o: Wri
       return addChart(pptx, slide, it, o.fontFace, p);
     case "image": {
       const data = await o.chartImage?.(it).catch(() => null);
-      if (data) slide.addImage({ data, ...box(it), sizing: { type: "contain", w: inch(it.rect.w), h: inch(it.rect.h) } });
+      if (data) slide.addImage({ data, ...containBoxInches(it.rect, parseDataUrlDimensions(data)) });
       else addText(pptx, slide, it.fallback, o.fontFace, o.probe);
       return;
     }

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { Slide } from "@kj/schema";
 import { seededRandom, withoutAnswers } from "@kj/templates";
 import { CLASSROOM_FIXTURES } from "@kj/templates/testing/classroom";
-import { offlineDeckData, serializeOfflineDeck } from "../src/offline/exportDeck.ts";
+import { offlineDeckData, serializeOfflineDeck, figureAssetIdsOf } from "../src/offline/exportDeck.ts";
 
 const fixture = CLASSROOM_FIXTURES[0]!;
 const slide = (value: (typeof fixture.slides)[number], content = value.content): Slide => ({
@@ -45,5 +45,31 @@ describe("offline student payload boundary", () => {
     expect(json).not.toContain("TEACHER-MISCONCEPTION");
     expect(json).toContain("TEACHER-KEY-EN");
     expect(json).toContain("TEACHER-EXIT-EN");
+  });
+
+  it("extracts referenced figure assetIds and embeds pre-fetched data URLs into OfflineDeck.media", () => {
+    const figSlide: Slide = {
+      id: "sl-fig",
+      specId: "sp-fig",
+      outlineVersionId: "ov-frozen",
+      layout: "statement",
+      pageType: "concept",
+      minutes: 3,
+      content: {
+        layout: "statement",
+        title: "Solenoid magnetic field",
+        bullets: ["Field lines are parallel inside"],
+        visual: { kind: "figure", assetId: "med_solenoid704", caption: "Fig 16.8" },
+        terms: [],
+      },
+      notes: "",
+      sources: [704],
+      warnings: [],
+      unverified: [],
+    };
+    expect(figureAssetIdsOf([figSlide])).toEqual(["med_solenoid704"]);
+    const media = { med_solenoid704: "data:image/png;base64,iVBORw0KGgo=" };
+    const data = offlineDeckData({ lesson: lesson("shown"), slides: [figSlide] }, "teacher", {}, media);
+    expect(data.media).toEqual(media);
   });
 });

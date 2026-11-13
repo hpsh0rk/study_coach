@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { PageType } from "./outline.ts";
-import { ChartSpec, ExperimentSim, FunctionSpec, PlaceholderSpec, TableSpec, VisualSpec } from "./widgets.ts";
+import { ChartSpec, ExperimentSim, FigureSpec, FunctionSpec, PlaceholderSpec, TableSpec, VisualSpec } from "./widgets.ts";
 
 /**
  * Structural slot shapes per layout. Text may contain inline math as $...$.
@@ -26,7 +26,7 @@ export const StatementContent = z.object({
 export const ChartContent = z.object({
   layout: z.literal("chart"),
   title: text.min(1),
-  chart: z.discriminatedUnion("kind", [ChartSpec, FunctionSpec, TableSpec, PlaceholderSpec]),
+  chart: z.discriminatedUnion("kind", [ChartSpec, FunctionSpec, TableSpec, FigureSpec, PlaceholderSpec]),
   takeaways: z.array(text.min(1)),
   source: text.default(""),
 });

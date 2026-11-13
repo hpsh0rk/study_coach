@@ -3,10 +3,10 @@ import { Link, useNavigate } from "react-router";
 import { buildChapterTree, normalizeRanges, pageForLabel, pagesInRanges, shiftToc } from "@kj/textbook";
 import type { PageRange, PdfInspection } from "@kj/schema";
 import { ApiError } from "../../api.ts";
-import { documentApi, type DocumentRow } from "../../textbook/api.ts";
+import { documentApi, mediaApi, type DocumentRow } from "../../textbook/api.ts";
 import { rememberFile } from "../../textbook/external.ts";
 import { fileProblem, ingestPdf, MAX_MB, sha256Hex } from "../../textbook/ingest.ts";
-import { inspectPdf, parsePdf } from "../../textbook/pdf.ts";
+import { extractPdfFigures, inspectPdf, parsePdf } from "../../textbook/pdf.ts";
 import { Stepper, StepIntro } from "./Stepper.tsx";
 
 export const LARGE_PDF_THRESHOLD = 120;
@@ -106,6 +106,12 @@ export function UploadStep() {
             window.confirm(
               `这份 PDF 之前上传过（“${d.title}”），后来删除了。恢复它？选“取消”会重新上传一份。· You deleted this PDF earlier. Restore it? Cancel uploads it again.`,
             ),
+          extractFigures: (data, parseOpts) =>
+            extractPdfFigures(data, {
+              ...(parseOpts?.pageNumbers ? { pageNumbers: parseOpts.pageNumbers } : {}),
+              ...(parseOpts?.pageOffset ? { pageOffset: parseOpts.pageOffset } : {}),
+            }),
+          putFigures: (docId, items) => mediaApi.uploadBatch(docId, items),
         },
         setPhase,
         {
@@ -114,7 +120,7 @@ export function UploadStep() {
           ...(opts?.fullToc ? { fullToc: opts.fullToc } : {}),
         },
       );
-      if (!opts?.pageOffset || opts.pageOffset <= 1) rememberFile(id, file);
+      rememberFile(id, file, opts?.pageOffset);
       setPreflight(null);
       nav(`/new/${id}`, {
         state: {
