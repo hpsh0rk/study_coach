@@ -22,8 +22,12 @@ export interface WriteInput {
   ctx: CallContext;
   /** Problem of the preceding worked example, so faded/practice pages stay isomorphic to it. */
   workedProblem?: string;
+  /** Optional teacher steering instruction when regenerating a single slide (trimmed, max 200 chars). */
+  instruction?: string;
   options?: Partial<PipelineOptions>;
 }
+
+export type SlideInput = WriteInput;
 
 /** Source text the writer sees (capped at SLIDE_SOURCE_CHARS). A slide without source pages gets none. */
 export function sourcePagesFor(spec: SlideSpec, input: Pick<WriteInput, "pages" | "options">): PageText[] {
@@ -193,7 +197,7 @@ const WIDGET_RULES = [
   '- formula: {"kind":"formula","tex":"v = f\\\\lambda","caption":"..."} (KaTeX).',
   '- function: {"kind":"function","expr":"A*sin(2*pi*x/L)","x":[0,4],"y":[-3,3],"xLabel":"distance / m","yLabel":"displacement / cm","params":[{"name":"A","label":"Amplitude / cm","min":0,"max":3,"step":0.1,"value":2}]} — expr uses only x, param names, numbers, + - * / ^, parentheses, pi, e and sin cos tan sqrt abs exp ln log min max.',
   '- chart: {"kind":"chart","type":"bar|line|scatter","xLabel":"...","yLabel":"... / unit","categories":[...],"series":[{"name":"...","data":[...]}],"focus":0} — ≤ 4 series, ≤ 7 categories, real values from the source only.',
-  '- flow: {"kind":"flow","steps":["...", "..."]} — 2–5 steps, at most 4 words each.',
+  '- flow: {"kind":"flow","steps":["...", "..."]} — 2–5 sequential process or causal steps (A → B → C), at most 4 words each; never use standalone conjunctions like "或" or "or" as a step box.',
   '- table: {"kind":"table","columns":["Quantity","Unit"],"rows":[["wavelength","λ / m"]],"caption":"..."} — every row has one cell per column; cells are 1–2 words or a number with unit, taken from the source.',
   '- placeholder: {"kind":"placeholder","hint":"Photo of a ripple tank"} — "图示待补": only when the point needs a picture no widget above can draw.',
 ].join("\n");
@@ -221,21 +225,40 @@ function glossaryText(glossary: GlossaryEntry[]): string {
   return `Lesson glossary — use exactly these terms and translations, never a different one: ${glossary.map((g) => (g.zh ? `${g.term} = ${g.zh}` : g.term)).join("; ")}`;
 }
 
+const PROBLEM_PAGE_TYPES = new Set(["worked", "faded", "practice", "check", "exit", "retrieval"]);
+const PROBLEM_SLIDE_LAYOUTS = new Set(["steps", "quiz", "questions"]);
+
 export function buildMessages(spec: SlideSpec, input: WriteInput, outline: Outline, problems?: string[]) {
   const o = optionsOf(input.options);
   const pages = sourcePagesFor(spec, input);
   const sim = spec.layout === "experiment" ? findEmbed(`${spec.title} ${spec.keyPoints.join(" ")} ${pages.map((p) => p.text).join(" ")}`) : undefined;
   const visualRule = visualRuleFor(spec, o.visualPlanning);
-  const lang = input.params.language === "zh" ? "Simplified Chinese" : "English";
+  const languageRule =
+    input.params.language === "zh"
+      ? 'Screen text and speaker `notes` in pure Simplified Chinese. On statement slides, `terms` must use Simplified Chinese term names in `term` (with `zh: ""`), never English words unless teaching an explicit English symbol.'
+      : input.params.language === "en+zh"
+        ? "Bilingual classroom mode (English + Simplified Chinese): write concise English primary text paired with Simplified Chinese glosses for key domain terms across slide types (not only statement `terms` chips — include concise Chinese key-term glosses where helpful within the word budget, and fill `terms[].zh` on statement slides)."
+        : 'Screen text and speaker `notes` in pure English (leave `terms[].zh` empty).';
   const def = PAGE_TYPES[spec.pageType];
+  const isProblem = PROBLEM_PAGE_TYPES.has(spec.pageType) || PROBLEM_SLIDE_LAYOUTS.has(spec.layout);
+  const workedSpecId = workedSpecFor(outline, spec.id);
+  const workedPlan = workedSpecId ? outline.slides.find((s) => s.id === workedSpecId) : undefined;
+  const priorWorkedSummary =
+    input.workedProblem ?? (workedPlan ? `${workedPlan.title}${workedPlan.keyPoints.length ? ` (${workedPlan.keyPoints.join("; ")})` : ""}` : undefined);
+  const sourceRule = isProblem
+    ? pages.length
+      ? "Every definition, physical law and formula must come from the source pages; for worked, faded, practice and check problems, use numbers planned in `keyPoints` or invent realistic, distinct numbers when the source pages lack distinct exercise numbers."
+      : "Stay faithful to the slide plan and core formulas; use realistic, consistent numbers for exercises."
+    : pages.length
+      ? "Every number, definition and formula must come from the source pages."
+      : "Stay faithful to the slide plan; do not invent numbers.";
+  const trimmedInstruction = input.instruction?.trim().slice(0, 200);
   const system = [
-    `You write the on-screen content of ONE slide of a lesson (student level: ${input.params.level}). Screen text in ${lang}.`,
-    input.params.language === "en+zh" ? "Students are Chinese speakers learning in English: give key terms with Chinese translations in `terms` where the layout has them." : "",
+    `You write the on-screen content of ONE slide of a lesson (student level: ${input.params.level}). ${languageRule}`,
     `Layout "${spec.layout}" (${LAYOUTS[spec.layout].label.en}); page type ${spec.pageType} (${def.label.en}), about ${spec.minutes} minutes.`,
     o.budgetsInPrompt ? budgetText(spec.layout) : "",
     "Rules: one teaching point; assertion-style title; short phrases, not paragraphs; no teacher talk or clichés on screen (no 'In this lesson', 'Let's', 'dive into', 'crucial'); use $...$ for inline math. Do not repeat what the neighbouring slides cover.",
-    (pages.length ? "Every number, definition and formula must come from the source pages." : "Stay faithful to the slide plan; do not invent numbers.") +
-      " Put explanations, a question to ask, the expected answer or common misconception, and timing into `notes` (60–150 words).",
+    `${sourceRule} Always write non-empty speaker \`notes\` (60–150 words) covering explanation, a question to ask, expected answer or misconception, and timing.`,
     glossaryText(outline.glossary),
     visualRule,
     spec.pageType === "faded"
@@ -243,12 +266,12 @@ export function buildMessages(spec: SlideSpec, input: WriteInput, outline: Outli
       : spec.layout === "steps"
         ? 'Worked example: each item in `steps` is {"text":"...","why":"..."}; omit `fadeFrom` so every step is shown.'
         : "",
-    (spec.pageType === "faded" || spec.pageType === "practice") && input.workedProblem
-      ? `Use the same problem structure as the preceding worked example, with new numbers: "${input.workedProblem}".`
+    (spec.pageType === "faded" || spec.pageType === "practice") && priorWorkedSummary
+      ? `Use the same problem structure and formula as the preceding worked example ("${priorWorkedSummary}"), but MUST use genuinely DIFFERENT numbers (honor numbers planned in Slide plan keyPoints if given; never clone the worked example's exact numbers).`
       : "",
     spec.pageType === "retrieval" ? "Recap questions test prior knowledge this lesson builds on, not today's new content." : "",
     spec.layout === "quiz"
-      ? "Each wrong option names the misconception it diagnoses; `answer` is the 0-based index of the correct option. Set `poll: true` when the next part of the lesson depends on this idea (a hinge question the class votes on by show of hands before the answer); otherwise omit it."
+      ? "Each wrong option names the misconception it diagnoses; `answer` is the 0-based index of the correct option. Ensure the question stem, given conditions, options, `answer` and `explain` never contradict each other (e.g. never ask about 'same mass' while marking 'larger mass' correct). Set `poll: true` when the next part of the lesson depends on this idea (a hinge question the class votes on by show of hands before the answer); otherwise omit it."
       : "",
     spec.layout === "order"
       ? 'Ordering activity: for a sequence or process, mode "order" with the cards in the correct order; for term ↔ definition or cause ↔ effect pairs, mode "match" with each card\'s partner in `match`. The player shuffles the cards; put the answer key in the notes.'
@@ -265,6 +288,7 @@ export function buildMessages(spec: SlideSpec, input: WriteInput, outline: Outli
     neighbours(spec, outline) ? `Context: ${neighbours(spec, outline)}` : "",
     `Slide plan: ${JSON.stringify({ title: spec.title, purpose: spec.purpose, keyPoints: spec.keyPoints, ...(o.visualPlanning === "outline" && LAYOUTS[spec.layout].visual === "required" ? { visual: spec.visual } : {}), layout: spec.layout })}`,
     pages.length ? `<source>\n${neutralizeSource(pages.map((p) => `[p.${p.no}] ${p.text}`).join("\n"))}\n</source>` : "",
+    trimmedInstruction ? `Teacher instruction for regenerating this slide: ${neutralizeSource(trimmedInstruction)}` : "",
     problems?.length ? `Your previous answer had these problems; fix them:\n${problems.map((p) => `- ${p}`).join("\n")}` : "",
   ]
     .filter(Boolean)
@@ -308,20 +332,20 @@ export async function writeSlide(ai: AiLayer, outline: Outline, specId: string, 
       ctx: input.ctx,
     });
 
-  const finish = (c: SlideContent) => pinSim(applyGlossary(c, outline.glossary), spec, pages);
+  const finish = (c: SlideContent) => pinSim(applyGlossary(c, outline.glossary, input.params.language), spec, pages);
   const checkText = checkSourceText(spec.sourcePages, input.pages);
   const invented = (c: SlideContent, notes: string) =>
-    verifyNumbers(c, checkText, { pageType: spec.pageType, notes })
+    verifyNumbers(c, checkText, { pageType: spec.pageType, notes, sources: spec.sourcePages })
       .filter((u) => u.kind === "number" || u.kind === "calc")
       .map((u) => (u.kind === "number" ? `number ${u.text}: not on the cited pages (待核实) — use only numbers from the source, or remove it` : `calculation ${u.text}: does not compute (待核实) — ${u.detail}`));
   let res = await call();
   let content = finish(res.output.content);
-  let found = problemsOf(content, spec.pageType);
+  let found = problemsOf(content, spec.pageType, res.output.notes);
   const firstInvented = invented(content, res.output.notes);
   if ((found.errors.length || firstInvented.length) && res.providerId !== "stub" && o.slideCheckRetry) {
     res = await call([...found.errors, ...firstInvented]);
     content = finish(res.output.content);
-    found = problemsOf(content, spec.pageType);
+    found = problemsOf(content, spec.pageType, res.output.notes);
   }
   // Fallbacks that always end in a slide the editor accepts (truncateFallback=false is an eval-only ablation).
   const repair = (c: SlideContent) => {
@@ -337,14 +361,15 @@ export async function writeSlide(ai: AiLayer, outline: Outline, specId: string, 
     if (invalidSlots(content).length) throw new SlideInvalidError(before);
     safe = { ...safe, replaced: [...safe.replaced, `slide → deterministic fallback (${before.slice(0, 2).join("; ")})`] };
   }
-  found = problemsOf(content, spec.pageType);
-  const notes = res.output.notes.slice(0, NOTES_MAX);
+  const rawNotes = res.output.notes.trim();
+  const notes = (rawNotes ? res.output.notes : stubSlide({ spec, outline, lessonTitle: input.lessonTitle, pages }).notes).slice(0, NOTES_MAX);
+  found = problemsOf(content, spec.pageType, notes);
   return {
     content,
     notes,
     sources: spec.sourcePages,
     warnings: [...safe.replaced.map((r) => `widget replaced: ${r}`), ...found.errors, ...found.warnings, ...suspiciousContent(content, notes)],
-    unverified: [...sourceUnverified(spec), ...verifyNumbers(content, checkText, { pageType: spec.pageType, notes })].slice(0, 10),
+    unverified: [...sourceUnverified(spec), ...verifyNumbers(content, checkText, { pageType: spec.pageType, notes, sources: spec.sourcePages })].slice(0, 10),
     providerId: res.providerId,
   };
 }

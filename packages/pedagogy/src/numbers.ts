@@ -36,17 +36,22 @@ export interface FoundNumber {
   value: number;
   decimals: number;
   significantFigures: number;
+  maxSignificantFigures?: number;
+  exactFraction?: boolean;
 }
 
 // CJK normally has no spaces around quantities ("12牛顿"), while Latin chemical tokens (CO2/H2O) stay excluded.
 const NUM_RE = /(?<![A-Za-z\d_.])([-−]?)(\d{1,3}(?:[,\u00a0\u202f ]\d{3})+(?!\d)|\d+)(?:\.(\d+))?(?:\s*(?:×|x|\*)\s*10\s*\^\s*\(?([-−]?\d+)\)?)?/g;
+const FRAC_RE = /(?<![A-Za-z\d_./])([-−]?)\(?\s*(\d{1,2})\s*\)?\s*\/\s*\(?\s*([1-9]\d?)\s*\)?(?![A-Za-z\d_./])/g;
 
-function significantFigures(text: string): number {
+function sigFigRange(text: string): { min: number; max: number } {
   const mantissa = text.split(/\s*(?:×|x|\*)\s*10\s*\^/i)[0]!.replace(/[-−+,\u00a0\u202f ]/g, "");
   const decimal = mantissa.includes(".");
-  let digits = mantissa.replace(".", "").replace(/^0+/, "");
-  if (!decimal) digits = digits.replace(/0+$/, "");
-  return Math.max(1, digits.length);
+  const stripped = mantissa.replace(".", "").replace(/^0+/, "");
+  if (!stripped) return { min: 1, max: 1 };
+  if (decimal) return { min: stripped.length, max: stripped.length };
+  const min = Math.max(1, stripped.replace(/0+$/, "").length);
+  return { min, max: stripped.length };
 }
 
 /** Numbers in prose or plain math, with thousands separators ("20 000", "3,000") and "a × 10^b". */
@@ -61,7 +66,23 @@ export function numbersIn(raw: string): FoundNumber[] {
     if (exp) value *= 10 ** Number(exp.replace("−", "-"));
     if (sign) value = -value;
     if (!Number.isFinite(value)) continue;
-    out.push({ text: whole.trim(), value, decimals: exp ? 0 : (frac?.length ?? 0), significantFigures: significantFigures(whole) });
+    const range = sigFigRange(whole);
+    out.push({ text: whole.trim(), value, decimals: exp ? 0 : (frac?.length ?? 0), significantFigures: range.min, maxSignificantFigures: range.max });
+  }
+  return out;
+}
+
+function fractionNumbersIn(raw: string): FoundNumber[] {
+  const s = texToPlain(raw).replace(/\bp\.\s*\d+/gi, " ");
+  const out: FoundNumber[] = [];
+  for (const m of s.matchAll(FRAC_RE)) {
+    const [, sign, numStr, denStr] = m;
+    const p = Number(numStr);
+    const q = Number(denStr);
+    if (!q || q < 2 || q > 20 || p < 1 || p > 20) continue;
+    const value = (sign ? -1 : 1) * (p / q);
+    const decPart = String(Math.abs(value)).split(".")[1] ?? "";
+    out.push({ text: `${sign ?? ""}${p}/${q}`, value, decimals: decPart.length, significantFigures: 1, maxSignificantFigures: 4, exactFraction: true });
   }
   return out;
 }
@@ -74,29 +95,57 @@ interface FoundQuantity {
 }
 
 const QUANTITY_RE =
-  /([-−]?(?:\d{1,3}(?:[,\u00a0\u202f ]\d{3})+|\d+)(?:\.\d+)?(?:\s*(?:×|x|\*)\s*10\s*\^\s*\(?[-−]?\d+\)?)?)\s*(kilometres?\s+per\s+second|meters?\s+per\s+second|metres?\s+per\s+second|km\s*\/\s*s|m\s*\/\s*s(?:²|\^2)?|米\s*\/\s*秒(?:²|\^2)?|千米\s*\/\s*秒|kilohertz|kHz|hertz|Hz|赫兹|kilograms?|kg|千克|grams?|g|newtons?|N|牛顿|centimetres?|centimeters?|cm|millimetres?|millimeters?|mm|kilometres?|kilometers?|km|metres?|meters?|m|米|seconds?|s|秒)(?![A-Za-z])/giu;
+  /([-−]?(?:(?:\(\s*\d{1,2}\s*\)\s*\/\s*\(\s*[1-9]\d?\s*\)|\d{1,2}\s*\/\s*[1-9]\d?)|(?:\d{1,3}(?:[,\u00a0\u202f ]\d{3})+|\d+)(?:\.\d+)?(?:\s*(?:×|x|\*)\s*10\s*\^\s*\(?[-−]?\d+\)?)?))\s*(kJ\s*\/\s*mol|J\s*\/\s*mol|千焦\s*\/\s*摩(?:尔)?|焦(?:耳)?\s*\/\s*摩(?:尔)?|kilometres?\s+per\s+second|kilometers?\s+per\s+second|metres?\s+per\s+second|meters?\s+per\s+second|km\s*\/\s*s|m\s*\/\s*s(?:²|\^2)?|cm\s*\/\s*s|米\s*\/\s*秒(?:²|\^2)?|千米\s*\/\s*秒|厘米\s*\/\s*秒|kilohertz|kHz|千赫|hertz|Hz|赫兹|kilograms?|kg|千克|grams?|g|克|kilonewtons?|kN|千牛|newtons?|N|牛顿|牛|megajoules?|MJ|兆焦|kilojoules?|kJ|千焦|joules?|J|焦耳|焦|megawatts?|MW|兆瓦|kilowatts?|kW|千瓦|watts?|W|瓦特|瓦|kilovolts?|kV|千伏|millivolts?|mV|毫伏|volts?|V|伏特|伏|milliamperes?|milliamps?|mA|毫安|amperes?|amps?|A|安培|安|kiloohms?|kilohms?|kΩ|千欧|ohms?|Ω|欧姆|欧|megapascals?|MPa|兆帕|kilopascal?s?|kPa|千帕|pascals?|Pa|帕斯卡|帕|degrees?\s+celsius|celsius|°C|℃|摄氏度|kelvins?|K|开尔文|moles?|mol|摩尔|摩|millilitres?|milliliters?|mL|毫升|litres?|liters?|L|升|millicoulombs?|mC|毫库|coulombs?|C|库仑|库|kilometres?|kilometers?|km|千米|公里|centimetres?|centimeters?|cm|厘米|millimetres?|millimeters?|mm|毫米|metres?|meters?|m|米|seconds?|s|秒)(?![A-Za-z²³^/])(?!(?:\s*[×·*])?\s*[A-Za-zα-ωΑ-Ω]\s*(?:\^|[²³]|_))/giu;
 
 function normalizedUnit(raw: string): { dimension: string; factor: number } | undefined {
-  const unit = raw.toLowerCase().replace(/\s+/g, "");
+  const exact = raw.replace(/\s+/g, "");
+  const unit = exact.toLowerCase();
+  if (["kj/mol", "千焦/摩", "千焦/摩尔"].includes(unit)) return { dimension: "molar_energy", factor: 1e3 };
+  if (["j/mol", "焦/摩", "焦/摩尔", "焦耳/摩", "焦耳/摩尔"].includes(unit)) return { dimension: "molar_energy", factor: 1 };
   if (["kilometrespersecond", "kilometerspersecond", "km/s", "千米/秒"].includes(unit)) return { dimension: "speed", factor: 1e3 };
   if (["metrespersecond", "meterspersecond", "m/s", "米/秒"].includes(unit)) return { dimension: "speed", factor: 1 };
+  if (["cm/s", "厘米/秒"].includes(unit)) return { dimension: "speed", factor: 1e-2 };
   if (["m/s²", "m/s^2", "米/秒²", "米/秒^2"].includes(unit)) return { dimension: "acceleration", factor: 1 };
-  if (["kilohertz", "khz"].includes(unit)) return { dimension: "frequency", factor: 1e3 };
+  if (["kilohertz", "khz", "千赫"].includes(unit)) return { dimension: "frequency", factor: 1e3 };
   if (["hertz", "hz", "赫兹"].includes(unit)) return { dimension: "frequency", factor: 1 };
   if (["kilogram", "kilograms", "kg", "千克"].includes(unit)) return { dimension: "mass", factor: 1 };
-  if (["gram", "grams", "g"].includes(unit)) return { dimension: "mass", factor: 1e-3 };
-  if (["newton", "newtons", "n", "牛顿"].includes(unit)) return { dimension: "force", factor: 1 };
-  if (["kilometre", "kilometres", "kilometer", "kilometers", "km"].includes(unit)) return { dimension: "length", factor: 1e3 };
-  if (["centimetre", "centimetres", "centimeter", "centimeters", "cm"].includes(unit)) return { dimension: "length", factor: 1e-2 };
-  if (["millimetre", "millimetres", "millimeter", "millimeters", "mm"].includes(unit)) return { dimension: "length", factor: 1e-3 };
-  if (["metre", "metres", "meter", "meters", "m", "米"].includes(unit)) return { dimension: "length", factor: 1 };
-  if (["second", "seconds", "s", "秒"].includes(unit)) return { dimension: "time", factor: 1 };
+  if (["gram", "grams", "克"].includes(unit) || exact === "g") return { dimension: "mass", factor: 1e-3 };
+  if (["kilonewton", "kilonewtons", "千牛"].includes(unit) || exact === "kN") return { dimension: "force", factor: 1e3 };
+  if (["newton", "newtons", "牛顿", "牛"].includes(unit) || exact === "N") return { dimension: "force", factor: 1 };
+  if (["megajoule", "megajoules", "兆焦"].includes(unit) || exact === "MJ") return { dimension: "energy", factor: 1e6 };
+  if (["kilojoule", "kilojoules", "千焦"].includes(unit) || exact === "kJ") return { dimension: "energy", factor: 1e3 };
+  if (["joule", "joules", "焦耳", "焦"].includes(unit) || exact === "J") return { dimension: "energy", factor: 1 };
+  if (["megawatt", "megawatts", "兆瓦"].includes(unit) || exact === "MW") return { dimension: "power", factor: 1e6 };
+  if (["kilowatt", "kilowatts", "千瓦"].includes(unit) || exact === "kW") return { dimension: "power", factor: 1e3 };
+  if (["watt", "watts", "瓦特", "瓦"].includes(unit) || exact === "W") return { dimension: "power", factor: 1 };
+  if (["kilovolt", "kilovolts", "千伏"].includes(unit) || exact === "kV") return { dimension: "voltage", factor: 1e3 };
+  if (["millivolt", "millivolts", "毫伏"].includes(unit) || exact === "mV") return { dimension: "voltage", factor: 1e-3 };
+  if (["volt", "volts", "伏特", "伏"].includes(unit) || exact === "V") return { dimension: "voltage", factor: 1 };
+  if (["milliampere", "milliamperes", "milliamps", "毫安"].includes(unit) || exact === "mA") return { dimension: "current", factor: 1e-3 };
+  if (["ampere", "amperes", "amp", "amps", "安培", "安"].includes(unit) || exact === "A") return { dimension: "current", factor: 1 };
+  if (["kiloohm", "kiloohms", "kilohm", "kilohms", "千欧"].includes(unit) || exact === "kΩ") return { dimension: "resistance", factor: 1e3 };
+  if (["ohm", "ohms", "Ω", "ω", "欧姆", "欧"].includes(unit) && (exact !== "ω")) return { dimension: "resistance", factor: 1 };
+  if (["megapascal", "megapascals", "兆帕"].includes(unit) || exact === "MPa") return { dimension: "pressure", factor: 1e6 };
+  if (["kilopascal", "kilopascals", "千帕"].includes(unit) || exact === "kPa") return { dimension: "pressure", factor: 1e3 };
+  if (["pascal", "pascals", "帕斯卡", "帕"].includes(unit) || exact === "Pa") return { dimension: "pressure", factor: 1 };
+  if (["degreescelsius", "degreecelsius", "celsius", "°c", "℃", "摄氏度"].includes(unit)) return { dimension: "temperature_c", factor: 1 };
+  if (["kelvin", "kelvins", "开尔文"].includes(unit) || exact === "K") return { dimension: "temperature_k", factor: 1 };
+  if (["mole", "moles", "mol", "摩尔", "摩"].includes(unit)) return { dimension: "amount", factor: 1 };
+  if (["millilitre", "millilitres", "milliliter", "milliliters", "毫升"].includes(unit) || exact === "mL" || exact === "ml") return { dimension: "volume", factor: 1e-3 };
+  if (["litre", "litres", "liter", "liters", "升"].includes(unit) || exact === "L") return { dimension: "volume", factor: 1 };
+  if (["millicoulomb", "millicoulombs", "毫库"].includes(unit) || exact === "mC") return { dimension: "charge", factor: 1e-3 };
+  if (["coulomb", "coulombs", "库仑", "库"].includes(unit) || exact === "C") return { dimension: "charge", factor: 1 };
+  if (["kilometre", "kilometres", "kilometer", "kilometers", "km", "千米", "公里"].includes(unit)) return { dimension: "length", factor: 1e3 };
+  if (["centimetre", "centimetres", "centimeter", "centimeters", "cm", "厘米"].includes(unit)) return { dimension: "length", factor: 1e-2 };
+  if (["millimetre", "millimetres", "millimeter", "millimeters", "mm", "毫米"].includes(unit)) return { dimension: "length", factor: 1e-3 };
+  if (["metre", "metres", "meter", "meters", "米"].includes(unit) || exact === "m") return { dimension: "length", factor: 1 };
+  if (["second", "seconds", "秒"].includes(unit) || exact === "s") return { dimension: "time", factor: 1 };
 }
 
 function quantitiesIn(raw: string): FoundQuantity[] {
   const out: FoundQuantity[] = [];
   for (const match of texToPlain(raw).matchAll(QUANTITY_RE)) {
-    const number = numbersIn(match[1]!)[0];
+    const number = fractionNumbersIn(match[1]!)[0] ?? numbersIn(match[1]!)[0];
     const unit = normalizedUnit(match[2]!);
     if (!number || !unit) continue;
     out.push({ text: match[0].trim(), number, dimension: unit.dimension, baseValue: number.value * unit.factor });
@@ -309,8 +358,12 @@ export function symbolsOf(formula: string, tex: boolean): Set<string> {
   return out;
 }
 
+function stripSubscripts(s: string): string {
+  return s.replace(/_\s*\(?[A-Za-zα-ωΑ-Ω\d]+\)?/gu, "");
+}
+
 function monomialOf(raw: string): Map<string, number> | undefined {
-  const text = texToPlain(raw)
+  const text = stripSubscripts(texToPlain(raw))
     .replace(GREEK_WORDS, (word) => GREEK[word] ?? GREEK[word.toLowerCase()] ?? word)
     .replace(/\s+x\s+/gi, "*")
     .replace(/[×·]/g, "*")
@@ -352,27 +405,151 @@ function monomialOf(raw: string): Map<string, number> | undefined {
   return powers.size ? powers : undefined;
 }
 
-/** Canonical multiplicative-law fingerprint: F=ma and a=F/m are equal; a=Fm is not. */
+function splitSignedTerms(raw: string): { sign: 1 | -1; body: string }[] | undefined {
+  const normalized = raw.replace(/[−–]/g, "-").trim();
+  if (!normalized) return undefined;
+  const terms: { sign: 1 | -1; body: string }[] = [];
+  let depth = 0;
+  let start = 0;
+  let sign: 1 | -1 = 1;
+  let i = 0;
+  if (normalized[0] === "+" || normalized[0] === "-") {
+    sign = normalized[0] === "-" ? -1 : 1;
+    i = 1;
+    start = 1;
+  }
+  for (; i < normalized.length; i++) {
+    const ch = normalized[i]!;
+    if (ch === "(" || ch === "{") depth++;
+    else if (ch === ")" || ch === "}") depth = Math.max(0, depth - 1);
+    else if (depth === 0 && (ch === "+" || ch === "-") && normalized[i - 1] !== "^") {
+      const body = normalized.slice(start, i).trim();
+      if (!body) return undefined;
+      terms.push({ sign, body });
+      sign = ch === "-" ? -1 : 1;
+      start = i + 1;
+    }
+  }
+  const tail = normalized.slice(start).trim();
+  if (!tail) return undefined;
+  terms.push({ sign, body: tail });
+  return terms;
+}
+
+function additiveTermOf(raw: string): { coeff: number; vars: string } | undefined {
+  const text = texToPlain(raw)
+    .replace(GREEK_WORDS, (word) => GREEK[word] ?? GREEK[word.toLowerCase()] ?? word)
+    .replace(/\((\d+(?:\.\d+)?)\)\s*\/\s*\((\d+(?:\.\d+)?)\)/g, (_, a: string, b: string) => `${Number(a) / Number(b)}*`)
+    .replace(/_\s*\(?([A-Za-z\d]+)\)?/g, (_, sub: string) => (/^\d+$/.test(sub) ? `_${sub}` : ""))
+    .replace(/\s+x\s+/gi, "*")
+    .replace(/[×·]/g, "*")
+    .replace(/[(){}\s]/g, "");
+  if (!text || /[+=]/.test(text) || /-(?!\d)/.test(text)) return undefined;
+  const powers = new Map<string, number>();
+  let coeff = 1;
+  let direction = 1;
+  for (let i = 0; i < text.length; ) {
+    const char = text[i]!;
+    if (char === "*") {
+      direction = 1;
+      i++;
+      continue;
+    }
+    if (char === "/") {
+      direction = -1;
+      i++;
+      continue;
+    }
+    const numMatch = /^\d+(?:\.\d+)?/.exec(text.slice(i));
+    if (numMatch) {
+      const n = Number(numMatch[0]);
+      if (!n || !Number.isFinite(n)) return undefined;
+      coeff = direction === 1 ? coeff * n : coeff / n;
+      direction = 1;
+      i += numMatch[0].length;
+      continue;
+    }
+    const symMatch = /^[A-Za-zα-ωΑ-Ω](?:_\d+)?/.exec(text.slice(i));
+    if (!symMatch) return undefined;
+    const sym = symMatch[0];
+    i += sym.length;
+    let exponent = 1;
+    const rest = text.slice(i);
+    const explicit = /^\^(-?\d+)/.exec(rest);
+    if (explicit) {
+      exponent = Number(explicit[1]);
+      i += explicit[0].length;
+    } else if (rest[0] === "²" || rest[0] === "³") {
+      exponent = rest[0] === "²" ? 2 : 3;
+      i++;
+    }
+    powers.set(sym, (powers.get(sym) ?? 0) + direction * exponent);
+    direction = 1;
+  }
+  const entries = [...powers].filter(([, e]) => e !== 0).sort(([a], [b]) => a.localeCompare(b));
+  if (!entries.length) return undefined;
+  return { coeff, vars: entries.map(([s, e]) => `${s}:${e}`).join("*") };
+}
+
+function extractAdditiveLhs(beforeEq: string): string | undefined {
+  const tokens = beforeEq.trim().split(/\s+/).filter(Boolean);
+  if (!tokens.length) return undefined;
+  const picked = [tokens[tokens.length - 1]!];
+  for (let i = tokens.length - 2; i >= 0; i--) {
+    const prev = tokens[i]!;
+    const curr = tokens[i + 1]!;
+    if (/[+\-−*×·/÷^]$/.test(prev) || /^[+\-−*×·/÷^]/.test(curr)) picked.unshift(prev);
+    else break;
+  }
+  return picked.join(" ");
+}
+
+function additiveFingerprint(lhsRaw: string, rhsRaw: string): string | undefined {
+  const lhsTerms = splitSignedTerms(lhsRaw);
+  const rhsTerms = splitSignedTerms(rhsRaw);
+  if (!lhsTerms || !rhsTerms || (lhsTerms.length === 1 && rhsTerms.length === 1)) return undefined;
+  const net = new Map<string, number>();
+  for (const [sideSign, list] of [
+    [1, lhsTerms],
+    [-1, rhsTerms],
+  ] as const) {
+    for (const term of list) {
+      const parsed = additiveTermOf(term.body);
+      if (!parsed) return undefined;
+      net.set(parsed.vars, (net.get(parsed.vars) ?? 0) + sideSign * term.sign * parsed.coeff);
+    }
+  }
+  const entries = [...net].filter(([, c]) => Math.abs(c) > 1e-9).sort(([a], [b]) => a.localeCompare(b));
+  if (entries.length < 2) return undefined;
+  const scale = entries[0]![1];
+  return `sum:${entries.map(([vars, c]) => `${vars}=${Math.round((c / scale) * 1e6) / 1e6}`).join("|")}`;
+}
+
+/** Canonical law fingerprint: F=ma ↔ a=F/m (not a=Fm), and v=u+at ↔ u=v-at (not v=u-at). */
 function formulaFingerprint(raw: string): string | undefined {
   const plain = texToPlain(raw);
   const at = plain.indexOf("=");
   if (at < 0) return undefined;
-  const lhsToken = /(?<![A-Za-zα-ωΑ-Ω\d.])([A-Za-zα-ωΑ-Ω])\s*$/.exec(plain.slice(0, at))?.[1];
-  if (!lhsToken) return undefined;
   const right = plain
     .slice(at + 1)
     .split(/[=≈.;,，。；！？（:\uff1a\p{Script=Han}]|(?:\s{2,})/u)[0]!
     .trim();
-  const lhs = monomialOf(lhsToken);
-  const rhs = monomialOf(right);
-  if (!lhs || !rhs) return undefined;
-  const powers = new Map(lhs);
-  for (const [symbol, exponent] of rhs) powers.set(symbol, (powers.get(symbol) ?? 0) - exponent);
-  for (const [symbol, exponent] of powers) if (exponent === 0) powers.delete(symbol);
-  const entries = [...powers].sort(([a], [b]) => a.localeCompare(b));
-  if (!entries.length) return undefined;
-  if (entries[0]![1] < 0) entries.forEach((entry) => (entry[1] *= -1));
-  return entries.map(([symbol, exponent]) => `${symbol}:${exponent}`).join("|");
+  const lhsToken = /(?<![A-Za-zα-ωΑ-Ω\d.])([A-Za-zα-ωΑ-Ω](?:_\s*\(?[A-Za-z\d]+\)?)?)\s*$/.exec(plain.slice(0, at))?.[1];
+  if (lhsToken) {
+    const lhs = monomialOf(lhsToken);
+    const rhs = monomialOf(right);
+    if (lhs && rhs) {
+      const powers = new Map(lhs);
+      for (const [symbol, exponent] of rhs) powers.set(symbol, (powers.get(symbol) ?? 0) - exponent);
+      for (const [symbol, exponent] of powers) if (exponent === 0) powers.delete(symbol);
+      const entries = [...powers].sort(([a], [b]) => a.localeCompare(b));
+      if (!entries.length) return undefined;
+      if (entries[0]![1] < 0) entries.forEach((entry) => (entry[1] *= -1));
+      return entries.map(([symbol, exponent]) => `${symbol}:${exponent}`).join("|");
+    }
+  }
+  const lhsExpr = extractAdditiveLhs(plain.slice(0, at));
+  return lhsExpr ? additiveFingerprint(lhsExpr, right) : undefined;
 }
 
 interface SourceFormula {
@@ -466,6 +643,23 @@ export interface VerifyOptions {
   pageType?: PageType;
   /** Speaker notes: their calculations (answer keys) are re-checked too. */
   notes?: string;
+  /** Cited source page numbers, when known (`[]` skips source-page flags on synthesis/problem slides). */
+  sources?: readonly number[];
+}
+
+function sigFigsCompatible(candidate: FoundNumber, source: FoundNumber): boolean {
+  if (candidate.exactFraction || source.exactFraction) return true;
+  const cMin = candidate.significantFigures;
+  const cMax = candidate.maxSignificantFigures ?? cMin;
+  const sMin = source.significantFigures;
+  const sMax = source.maxSignificantFigures ?? sMin;
+  if (cMin <= sMax && sMin <= cMax) return true;
+  const cleanC = candidate.text.replace(/[-−+,\u00a0\u202f ]/g, "");
+  const cleanS = source.text.replace(/[-−+,\u00a0\u202f ]/g, "");
+  return (
+    close(candidate.value, source.value, 1e-9) &&
+    ((/^[1-9]\d*0\.0+$/.test(cleanC) && /^[1-9]\d*0$/.test(cleanS)) || (/^[1-9]\d*0$/.test(cleanC) && /^[1-9]\d*0\.0+$/.test(cleanS)))
+  );
 }
 
 /** Numbers, formulas and calculations on a slide that the cited source text does not support. */
@@ -484,19 +678,26 @@ export function verifyNumbers(content: SlideContent, source: string, opts: Verif
   calc.issues.forEach(add);
 
   const problem = PROBLEM_LAYOUTS.has(content.layout) || (opts.pageType !== undefined && PROBLEM_TYPES.has(opts.pageType));
+  const synthesis = content.layout === "title" || content.layout === "summary" || opts.pageType === "cover" || opts.pageType === "summary";
+  const uncitedSkip = (opts.sources !== undefined && opts.sources.length === 0) || (!source.trim() && (synthesis || problem));
+  if (uncitedSkip) return out.slice(0, MAX_FLAGS);
+
   if (!problem) {
-    const sourceFound = numbersIn(source);
+    const sourceFound = [...numbersIn(source), ...fractionNumbersIn(source)];
     const sourceNums = sourceFound.map((n) => n.value);
     const verified = [...sourceNums, ...calc.results];
     const textCandidates = [...prose, ...tex].flatMap(numbersIn);
     const candidates = textCandidates.concat(
-      data.map((v) => ({ text: String(v), value: v, decimals: (String(v).split(".")[1] ?? "").length, significantFigures: significantFigures(String(v)) })),
+      data.map((v) => {
+        const range = sigFigRange(String(v));
+        return { text: String(v), value: v, decimals: (String(v).split(".")[1] ?? "").length, significantFigures: range.min, maxSignificantFigures: range.max };
+      }),
     );
     for (const n of candidates) {
       if (isTrivial(n)) continue;
       const sourceMatches = matchingSourceNumbers(n, sourceFound);
       if (sourceMatches.length || inSource(n, calc.results)) {
-        if (textCandidates.includes(n) && sourceMatches.length && !sourceMatches.some((match) => match.significantFigures === n.significantFigures)) {
+        if (textCandidates.includes(n) && sourceMatches.length && !sourceMatches.some((match) => sigFigsCompatible(n, match))) {
           add({ kind: "number", text: n.text, detail: "引用页中的有效数字精度不同 · significant figures do not match the cited pages" });
         }
         continue;

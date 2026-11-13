@@ -134,11 +134,20 @@ export function splitSeparated(markdown: string, count: number): string[] {
   return out;
 }
 
-/** Parser Markdown as page text: images and comments dropped, HTML tables as `a | b` rows; headings and LaTeX kept. */
+function formatImageAlt(raw: string): string {
+  const alt = raw.replace(/\s+/g, " ").trim();
+  if (!alt) return "";
+  if (/^(?:[\w./-]+\/)?[\w.-]+\.(?:png|jpe?g|gif|webp|svg|bmp|tiff?|pdf)$/i.test(alt)) return "";
+  if (/^[0-9a-f-]{8,}$/i.test(alt)) return "";
+  if (/^(?:fig(?:ure)?|img|image|pic(?:ture)?|photo|diagram|illustration|icon|logo|scan|page|图|图片|插图)[-_.\s]*\d*$/i.test(alt)) return "";
+  return `[插图：${alt}]`;
+}
+
+/** Parser Markdown as page text: meaningful figure captions kept as `[插图：<alt>]`, comments dropped, HTML tables as `a | b` rows; headings and LaTeX kept. */
 export function cleanParsedMarkdown(md: string): string {
   return md
     .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, (_, alt: string) => formatImageAlt(alt))
     .replace(/<\/?table[^>]*>/gi, "\n")
     .replace(/[ \t]*<\/t[dh]>\s*<t[dh][^>]*>[ \t]*/gi, " | ")
     .replace(/<tr[^>]*>(?:\s*<t[dh][^>]*>[ \t]*)?/gi, "\n")

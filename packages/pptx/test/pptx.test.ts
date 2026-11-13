@@ -188,16 +188,128 @@ describe("charts, tables and formulas", () => {
     expect(t.rows).toEqual(spec.rows);
   });
 
-  it("formulas become readable Unicode text with the TeX kept in the notes", () => {
+  it("formulas become readable Unicode text with the TeX kept in the notes, and non-exact display formulas emit an ImageItem with clean text fallback", async () => {
     expect(texToText("v = f\\lambda").text).toBe("v = fλ");
-    expect(texToText("E_k = \\frac{1}{2}mv^2").text).toBe("Eₖ = 1/2mv²".replace("ₖ", "_(k)"));
+    expect(texToText("E_k = \\frac{1}{2}mv^2").text).toBe("Eₖ = 1/2mv²");
     expect(texToText("a = \\frac{\\Delta v}{t}").text).toBe("a = (Δ v)/t");
     expect(texToText("x_{1} + 10^{-3}").text).toBe("x₁ + 10⁻³");
     expect(texToText("\\sqrt{2gh}").text).toBe("√(2gh)");
     expect(texToText("\\oint B").exact).toBe(false);
+
+    // Upgraded vectors, extensible reaction arrows, cases environments, and multi-char/CJK subscripts
+    const vec = texToText("\\vec{F}_{\\text{合}} = m\\vec{a}");
+    expect(vec.text).toContain("F\u20d7");
+    expect(vec.text).toContain("a\u20d7");
+    expect(vec.text).not.toContain("_(");
+    expect(vec.exact).toBe(false);
+
+    const arrow = texToText("2\\text{H}_2 + \\text{O}_2 \\xrightarrow{\\text{点燃}} 2\\text{H}_2\\text{O}");
+    expect(arrow.text).toBe("2H₂ + O₂ —[点燃]→ 2H₂O");
+    expect(arrow.text).not.toContain("xrightarrow");
+    expect(arrow.exact).toBe(false);
+
+    const cases = texToText("f(x) = \\begin{cases} x^2, & x \\ge 0 \\\\ -x, & x < 0 \\end{cases}");
+    expect(cases.text).toBe("f(x) = { x², x ≥ 0; -x, x < 0 }");
+    expect(cases.text).not.toContain("begincases");
+    expect(cases.exact).toBe(false);
+
+    // Exact formula stays a native TextItem
     const p = plan({ layout: "statement", title: "T", bullets: ["Speed is $v = f\\lambda$"], visual: { kind: "formula", tex: "v = f\\lambda" }, terms: [] });
     expect(onSlide(p)).toContain("Speed is v = fλ");
+    expect(p.items.some((i) => i.kind === "image")).toBe(false);
     expect(p.notes).toContain("公式原文（LaTeX）：v = f\\lambda");
+
+    // Non-exact display formula emits an ImageItem whose fallback is clean texToText, and embeds PNG when snapshotter is supplied
+    const complexFormulaSlide = {
+      content: {
+        layout: "statement" as const,
+        title: "化学方程式与分段函数",
+        bullets: ["反应：$2\\text{H}_2 + \\text{O}_2 \\xrightarrow{\\text{点燃}} 2\\text{H}_2\\text{O}$"],
+        visual: { kind: "formula" as const, tex: "f(x) = \\begin{cases} x^2, & x \\ge 0 \\\\ -x, & x < 0 \\end{cases}", caption: "分段函数定义" },
+        terms: [],
+      },
+      notes: "先引导观察 $v = f\\lambda$ 与 $\\lambda = v/f$ 的变形。",
+      sources: [1],
+      unverified: [],
+      pageType: "concept" as const,
+    };
+    const complexPlan = planSlide(complexFormulaSlide, { theme: "classic", language: "zh" });
+    expect(complexPlan.degraded).toContain("formula-approx");
+    const formulaImg = complexPlan.items.find((i) => i.kind === "image" && i.slot === "visual");
+    expect(formulaImg?.kind).toBe("image");
+    if (formulaImg?.kind === "image") {
+      expect(formulaImg.fallback.paras[0]!.runs[0]!.text).toBe("f(x) = { x², x ≥ 0; -x, x < 0 }");
+    }
+    // Speaker notes run plain() on teacher notes (no raw $v = f\lambda$) while keeping explicit raw LaTeX reference line
+    expect(complexPlan.notes.split("\n")[0]).toBe("先引导观察 v = fλ 与 λ = v/f 的变形。");
+    expect(complexPlan.notes).toContain("公式原文（LaTeX）：f(x) = \\begin{cases}");
+
+    // Headless export without snapshotter falls back gracefully to text box; export with snapshotter embeds PNG
+    const headlessPptx = await exportPptx({ title: "Headless", theme: "classic", language: "zh", slides: [complexFormulaSlide] });
+    const headlessZip = await JSZip.loadAsync(headlessPptx.data);
+    expect(Object.keys(headlessZip.files).filter((n) => n.startsWith("ppt/media/") && !headlessZip.files[n]!.dir)).toEqual([]);
+    expect(await headlessZip.file("ppt/slides/slide1.xml")!.async("string")).toContain("f(x) = { x², x ≥ 0; -x, x &lt; 0 }");
+
+    const png1px = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+    const snappedPptx = await exportPptx({ title: "Snapped", theme: "classic", language: "zh", slides: [complexFormulaSlide] }, { chartImage: async () => png1px });
+    const snappedZip = await JSZip.loadAsync(snappedPptx.data);
+    expect(Object.keys(snappedZip.files).some((n) => n.startsWith("ppt/media/") && !snappedZip.files[n]!.dir)).toBe(true);
+  });
+
+  it("applies plain() to chart series names, function labels, and fallback text, and localizes auto-appended notes headers by language", () => {
+    const mathChart = planSlide(
+      {
+        content: {
+          layout: "chart",
+          title: "Speed comparison",
+          chart: {
+            kind: "chart",
+            type: "bar",
+            xLabel: "Medium",
+            yLabel: "Speed $v$ / (m/s)",
+            categories: ["Air $20^\\circ\\text{C}$", "Water"],
+            series: [{ name: "Wave speed $v = f\\lambda$", data: [340, 1480] }],
+          },
+          takeaways: ["Water is faster"],
+          source: "",
+        },
+        notes: "Check $v = f\\lambda$ units.",
+        sources: [],
+        unverified: [],
+      },
+      { theme: "classic", language: "en" },
+    );
+    const chartItem = mathChart.items.find((i) => i.kind === "chart");
+    expect(chartItem?.kind === "chart" && chartItem.series[0]!.name).toBe("Wave speed v = fλ");
+    expect(chartItem?.kind === "chart" && chartItem.series[0]!.labels[0]).toBe("Air 20°C");
+    expect(mathChart.notes).toContain("Check v = fλ units.");
+    expect(mathChart.notes).toContain("[Interactions — differences from HTML deck]");
+    expect(mathChart.notes).not.toContain("【互动");
+
+    const zhQuiz = planSlide(
+      {
+        content: {
+          layout: "quiz",
+          question: "频率翻倍时波长如何变化？",
+          options: [
+            { text: "减半", misconception: "" },
+            { text: "加倍", misconception: "误以为成正比" },
+            { text: "不变", misconception: "忽略波速公式" },
+          ],
+          answer: 0,
+          explain: "波速不变时 $\\lambda = v/f$。",
+          poll: true,
+        },
+        notes: "先提问公式 $v = f\\lambda$。",
+        sources: [],
+        unverified: [],
+      },
+      { theme: "classic", language: "zh" },
+    );
+    expect(zhQuiz.notes).toContain("先提问公式 v = fλ。");
+    expect(zhQuiz.notes).toContain("【答案 · 只在讲稿里】");
+    expect(zhQuiz.notes).not.toContain("Answer：");
+    expect(zhQuiz.notes).not.toContain("Hinge poll:");
   });
 });
 

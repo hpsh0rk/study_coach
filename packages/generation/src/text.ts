@@ -7,11 +7,20 @@ export function sentencesOf(text: string): string[] {
     .filter((s) => s.length >= 20 && s.length <= 260);
 }
 
-/** First `max` words without trailing punctuation (CJK: max × 1.7 characters). */
+const DANGLING_EN_WORD = /\b(?:a|an|the|of|to|in|on|at|by|for|with|from|into|about|between|through|without|under|over|and|or|but|as|than|that|which|is|are|was|were|be)$/i;
+
+/** First `max` words without trailing punctuation or dangling function words (CJK: max × 1.7 characters). */
 export function clip(text: string, max: number): string {
   const s = text.replace(/[.!?。！？;；,，:：]+$/, "").trim();
-  if (/[\u3400-\u9fff]/.test(s)) return s.slice(0, Math.floor(max * 1.7));
-  return s.split(/\s+/).slice(0, max).join(" ").replace(/[,;:]$/, "");
+  if (/[\u3400-\u9fff]/.test(s)) {
+    const cut = s.slice(0, Math.floor(max * 1.7)).replace(/[的与和或及在于向从跟对,，；：、]+$/, "");
+    return cut || s.slice(0, Math.max(1, Math.floor(max * 1.7)));
+  }
+  const words = s.split(/\s+/).slice(0, max);
+  while (words.length > 2 && DANGLING_EN_WORD.test(words[words.length - 1]!.replace(/[,;:]$/, ""))) {
+    words.pop();
+  }
+  return words.join(" ").replace(/[,;:]$/, "");
 }
 
 const TERMS_ZH: Record<string, string> = {

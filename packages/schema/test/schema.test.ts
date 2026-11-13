@@ -52,4 +52,15 @@ describe("countWords", () => {
     expect(countWords("speed in km/h, v = d/t")).toBe(7);
     expect(countWords("波长和频率")).toBe(3);
   });
+
+  it("counts inline $...$ LaTeX by compact rendered tokens rather than macro names", () => {
+    expect(countWords("$1\\,\\mathrm{N} = 1\\,\\mathrm{kg\\cdot m/s^2}$")).toBeLessThanOrEqual(5);
+    expect(countWords("$2\\text{H}_2 + \\text{O}_2 \\xrightarrow{\\text{点燃}} 2\\text{H}_2\\text{O}$")).toBeLessThanOrEqual(6);
+    expect(countWords("合力 $\\vec{F}_{\\text{合}} = m\\vec{a}$")).toBeLessThanOrEqual(5);
+  });
+
+  it("does not swallow whitespace-free multi-slash equations as URLs", () => {
+    expect(countWords("$a=F/m=5\\text{m/s}^2$")).toBeGreaterThanOrEqual(4);
+    expect(countWords("a=F/m=5m/s²")).toBeGreaterThanOrEqual(4);
+  });
 });

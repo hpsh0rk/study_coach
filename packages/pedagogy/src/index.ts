@@ -276,11 +276,12 @@ export function checkOutline(outline: Outline, params: LessonParams): Violation[
   const loops = [...new Set(outline.slides.map((s) => s.loop).filter((loop) => loop > 0))].sort((a, b) => a - b);
   for (const loop of loops) {
     const slides = outline.slides.filter((s) => s.loop === loop);
-    const instruction = slides.some((s) => PAGE_TYPES[s.pageType].mode === "lecture");
+    const lectureCount = slides.filter((s) => PAGE_TYPES[s.pageType].mode === "lecture").length;
+    const instruction = lectureCount > 0;
     const learnerAction = slides.some((s) => PAGE_TYPES[s.pageType].mode === "practice");
     if (!instruction || !learnerAction) {
       v.push({
-        level: "warning",
+        level: !learnerAction && lectureCount >= 3 ? "error" : "warning",
         code: "loop-balance",
         message: `学习环 ${loop} 需要讲解和学生活动 · learning loop ${loop} needs both instruction and learner action`,
         slideId: slides[0]?.id,

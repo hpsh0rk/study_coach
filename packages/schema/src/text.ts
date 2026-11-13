@@ -1,16 +1,42 @@
 const CJK = /[\u3400-\u9fff\uf900-\ufaff\u3000-\u303f\uff00-\uffef]/g;
 
-/** Links and slash paths (a textbook's URL footer): not words a student reads, so budgets ignore them. */
-const URLISH = /\bhttps?:\/\/\S+|\bwww\.\S+|\S*[A-Za-z0-9]\.[a-z]{2,}\/\S*|\S+\/\S+\/\S+/g;
+/** Links and multi-segment lowercase URL path footers: not words a student reads, so budgets ignore them. */
+const URLISH = /\bhttps?:\/\/\S+|\bwww\.\S+|\b[A-Za-z0-9][A-Za-z0-9-]*\.[a-z]{2,}\/\S*|(?:^|(?<=\s))[a-z0-9_-]{2,}(?:\/[a-z0-9_.-]{2,}){2,}[)]?(?=\s|$)/g;
+
+const GREEK_MACRO =
+  /\\(?:alpha|beta|gamma|delta|epsilon|varepsilon|zeta|eta|theta|vartheta|iota|kappa|lambda|mu|nu|xi|pi|rho|sigma|tau|upsilon|phi|varphi|chi|psi|omega|Gamma|Delta|Theta|Lambda|Xi|Pi|Sigma|Upsilon|Phi|Psi|Omega)\b/g;
+
+function compactMath(tex: string): string {
+  let s = tex.replace(/\\x(?:right|left)arrow(?:\[([^\]]*)\])?\s*\{([^{}]*)\}/g, " $1 $2 ");
+  for (let i = 0; i < 4 && /\\[dt]?frac\s*\{/.test(s); i++) {
+    s = s.replace(/\\[dt]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, "$1/$2");
+  }
+  const unwrapRe =
+    /\\(?:mathrm|textrm|textbf|textit|textsf|texttt|mathbf|mathit|mathsf|mathtt|mathcal|mathbb|boldsymbol|operatorname|text|mbox|vec|overrightarrow|overline|underline|hat|bar|tilde|dot|ddot|sqrt)\s*\{([^{}]*)\}/g;
+  for (let i = 0; i < 4 && unwrapRe.test(s); i++) {
+    unwrapRe.lastIndex = 0;
+    s = s.replace(unwrapRe, "$1");
+  }
+  return s
+    .replace(/\\cdot\b/g, ".")
+    .replace(GREEK_MACRO, "α")
+    .replace(/\\[,!]/g, "")
+    .replace(/\\(?:begin|end)\s*\{[^{}]*\}/g, " ")
+    .replace(/\\[A-Za-z]+|\\[^A-Za-z0-9]/g, " ")
+    .replace(/~/g, " ")
+    .replace(/[{}^_]/g, "");
+}
 
 /**
  * Word-equivalents for mixed Chinese/English text: Latin words count 1 each, and
- * 1.7 CJK characters count as one word (pedagogy-rules §4). URLs do not count.
+ * 1.7 CJK characters count as one word (pedagogy-rules §4). URLs do not count, and
+ * inline `$...$` LaTeX is measured by its compact rendered tokens rather than macro names.
  */
 export function countWords(text: string): number {
-  const plain = text.replace(URLISH, " ");
+  const mathExpanded = text.replace(/\$\$?([^$]+)\$\$?/g, (_, tex: string) => compactMath(tex));
+  const plain = mathExpanded.replace(URLISH, " ");
   const cjk = (plain.match(CJK) ?? []).length;
-  const latin = plain.replace(CJK, " ").match(/[A-Za-z0-9][A-Za-z0-9'’\-.]*/g)?.length ?? 0;
+  const latin = plain.replace(CJK, " ").match(/[A-Za-z0-9\u0370-\u03ff][A-Za-z0-9\u0370-\u03ff'’\-.]*/g)?.length ?? 0;
   return Math.round(latin + cjk / 1.7);
 }
 

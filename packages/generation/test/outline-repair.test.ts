@@ -156,4 +156,43 @@ describe("source-page check (待核实, never silent)", () => {
     expect(out[1]!.sourcePages).toEqual([5]);
     expect(out[1]!.sourceIssue).toEqual({ kind: "out-of-range", cited: [300], suggested: [5] });
   });
+
+  it("repairs learning loops with 3+ lecture slides and zero learner activity by inserting a check slide", () => {
+    const loop3Draft = {
+      objectives: ["Describe EM waves and ultrasound"],
+      slides: [
+        { pageType: "cover" as const, title: "Waves", purpose: "", keyPoints: [], visual: "none" as const, minutes: 0.5, sourcePages: [], loop: 0 },
+        { pageType: "concept" as const, title: "EM spectrum", purpose: "", keyPoints: ["Radio to gamma"], visual: "flow" as const, minutes: 2.5, sourcePages: [4], loop: 1 },
+        { pageType: "concept" as const, title: "Sound production", purpose: "", keyPoints: ["Loudspeaker cone"], visual: "none" as const, minutes: 2.5, sourcePages: [5], loop: 1 },
+        { pageType: "concept" as const, title: "Ultrasound echo ranging", purpose: "", keyPoints: ["Echo timing"], visual: "flow" as const, minutes: 2.5, sourcePages: [6], loop: 1 },
+        { pageType: "summary" as const, title: "Summary", purpose: "", keyPoints: [], visual: "none" as const, minutes: 2.5, sourcePages: [], loop: 0 },
+        { pageType: "exit" as const, title: "Exit", purpose: "", keyPoints: [], visual: "none" as const, minutes: 3, sourcePages: [], loop: 0 },
+      ],
+    };
+    const out = normalizeOutline(loop3Draft, { validPages: [4, 5, 6], simAvailable: false, pages });
+    expect(out.slides.filter((s) => s.loop === 1).some((s) => s.pageType === "check")).toBe(true);
+    expect(checkOutline(out, DEFAULT_PARAMS).filter((v) => v.code === "loop-balance")).toEqual([]);
+  });
+
+  it("handles cross-language lessons (English textbook + Chinese outline) without misleading mismatch flags while catching clear cross-language shifts", () => {
+    const enPages = [
+      { no: 1, text: "Wave speed equals frequency multiplied by wavelength in a uniform medium. Frequency is measured in hertz." },
+      { no: 2, text: "Sound intensity and decibel scale measure acoustic power per unit area in air. Ultrasound echo ranging." },
+    ];
+    // Correctly cited Chinese slide on English textbook does not emit a false mismatch even if it includes incidental Latin units
+    const [ok] = checkSourcePages(
+      [spec("zh1", "concept", 3, { title: "波速等于频率乘以波长", keyPoints: ["同介质波速恒定", "频率单位 hertz 与波长 meter"], sourcePages: [1] })],
+      [1, 2],
+      enPages,
+    );
+    expect(ok!.sourceIssue).toBeUndefined();
+
+    // Clearly shifted Chinese slide citing p.2 when all wave-speed/frequency/wavelength concepts are on p.1 is flagged
+    const [shifted] = checkSourcePages(
+      [spec("zh2", "concept", 3, { title: "波速等于频率乘以波长", keyPoints: ["同介质波速恒定", "频率决定周期"], sourcePages: [2] })],
+      [1, 2],
+      enPages,
+    );
+    expect(shifted!.sourceIssue).toEqual({ kind: "mismatch", cited: [2], suggested: [1] });
+  });
 });

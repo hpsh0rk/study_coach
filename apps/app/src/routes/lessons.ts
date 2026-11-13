@@ -47,6 +47,90 @@ import { chapterTree, labelsFor, resolveScope, selectionPages, slideSourcePages 
 
 const AnswerMode = z.enum(["hidden", "shown"]);
 
+const GenerateSlideBody = z
+  .object({
+    regenerate: z.boolean().default(false),
+    instruction: z.string().max(2000).optional(),
+  })
+  .default({ regenerate: false });
+
+async function generateSlideForVersion(
+  c: { env: Env; json: (data: unknown, status?: number) => Response },
+  u: AppBindings["Variables"]["user"],
+  lesson: LessonRow,
+  v: VersionRow,
+  specId: string,
+  body: z.infer<typeof GenerateSlideBody>,
+) {
+  const outline = confirmedOutline(v);
+  const spec = outline.slides.find((s) => s.id === specId);
+  if (!spec) throw new HttpError(404, "NOT_FOUND", new SpecNotFoundError(specId).message);
+  const instruction = body.instruction?.trim().slice(0, 200) || undefined;
+  const regenerate = body.regenerate || !!instruction;
+  const d = db(c.env);
+  const existing = (await d.select().from(slides).where(and(eq(slides.outlineVersionId, v.id), eq(slides.specId, specId))).limit(1))[0];
+  if (existing && !regenerate) return c.json({ slide: slideFromRow(existing), reused: true });
+  if (!existing) {
+    await carryOverSlides(c.env, v);
+    const carried = (await d.select().from(slides).where(and(eq(slides.outlineVersionId, v.id), eq(slides.specId, specId))).limit(1))[0];
+    if (carried && !regenerate) return c.json({ slide: slideFromRow(carried), reused: true });
+  }
+  await assertModelAllowance(c.env, u);
+  const lock = and(eq(slideLocks.outlineVersionId, v.id), eq(slideLocks.specId, specId));
+  const now = Date.now();
+  const locked = await d
+    .insert(slideLocks)
+    .values({ outlineVersionId: v.id, specId, until: now + DRAFT_LOCK_MS })
+    .onConflictDoUpdate({ target: [slideLocks.outlineVersionId, slideLocks.specId], set: { until: now + DRAFT_LOCK_MS }, setWhere: lt(slideLocks.until, now) })
+    .returning({ until: slideLocks.until });
+  if (!locked.length) throw new HttpError(409, "SLIDE_IN_PROGRESS", "这一页正在另一个窗口里生成，请稍候 · This slide is already being generated");
+  try {
+    const done = regenerate ? undefined : (await d.select().from(slides).where(and(eq(slides.outlineVersionId, v.id), eq(slides.specId, specId))).limit(1))[0];
+    if (done) return c.json({ slide: slideFromRow(done), reused: true });
+    const params = versionParams(v);
+    const worked = workedSpecFor(outline, specId);
+    const workedRow = worked ? (await d.select({ content: slides.content }).from(slides).where(and(eq(slides.outlineVersionId, v.id), eq(slides.specId, worked))).limit(1))[0] : undefined;
+    const workedContent = workedRow ? SlideContent.parse(JSON.parse(workedRow.content)) : undefined;
+    const res = await writeSlide(makeAi(c.env, u.orgId), outline, specId, {
+      lessonTitle: lesson.title,
+      params,
+      pages: await slideSourcePages(c.env, lesson.documentId, spec.sourcePages, versionScope(v).ranges),
+      workedProblem: workedContent?.layout === "steps" ? workedContent.problem : undefined,
+      ...(instruction ? { instruction } : {}),
+      ctx: { orgId: u.orgId, userId: u.id, lessonId: lesson.id },
+    }).catch((e: unknown) => {
+      if (e instanceof SlideInvalidError) throw new HttpError(502, "SLIDE_INVALID", "这一页没能生成合格的内容，请点“重新生成” · The slide could not be written within its budgets; regenerate it", e.problems.slice(0, 10));
+      throw e;
+    });
+    const current = (await d.select().from(slides).where(and(eq(slides.outlineVersionId, v.id), eq(slides.specId, specId))).limit(1))[0];
+    const row = {
+      id: newId("sl"),
+      lessonId: lesson.id,
+      outlineVersionId: v.id,
+      specId,
+      specHash: await slideKey(spec, params),
+      layout: spec.layout,
+      pageType: spec.pageType,
+      minutes: spec.minutes,
+      content: JSON.stringify(res.content),
+      notes: res.notes,
+      sources: JSON.stringify(res.sources),
+      warnings: JSON.stringify(res.warnings),
+      unverified: JSON.stringify(res.unverified),
+      providerId: res.providerId,
+      prevContent: current?.content ?? null,
+      prevNotes: current?.notes ?? null,
+      updatedAt: Date.now(),
+    };
+    const { id: _id, ...update } = row;
+    await d.insert(slides).values(row).onConflictDoUpdate({ target: [slides.outlineVersionId, slides.specId], set: update });
+    const saved = (await d.select().from(slides).where(and(eq(slides.outlineVersionId, v.id), eq(slides.specId, specId))).limit(1))[0]!;
+    return c.json({ slide: slideFromRow(saved), reused: false });
+  } finally {
+    await d.delete(slideLocks).where(lock);
+  }
+}
+
 /** Deepest selected chapters in reading order become the planner's sections. */
 function sectionsOf(tree: ChapterNode[], scope: LessonScope): PlannerSection[] {
   return leafSections(tree, scope.chapterIds).map((c) => ({ title: c.title, pageStart: c.pageStart, pageEnd: c.pageEnd }));
@@ -226,79 +310,23 @@ export const lessonRoutes = new Hono<AppBindings>()
   })
   /**
    * Idempotent: returns the existing slide, else reuses an identical spec's slide from another
-   * version, else calls the model. `regenerate: true` always calls the model and keeps the old
-   * content for one level of undo.
+   * version, else calls the model. `regenerate: true` (or a non-empty `instruction`) calls the
+   * model and keeps the old content for one level of undo.
    */
   .post("/:id/outline-versions/:vid/slides/:specId/generate", async (c) => {
     const u = c.get("user");
     const lesson = await ownedLesson(c.env, u, c.req.param("id"));
     const v = await versionOf(c.env, lesson.id, c.req.param("vid"));
-    const outline = confirmedOutline(v);
-    const body = await parseJson(c, z.object({ regenerate: z.boolean().default(false) }).default({ regenerate: false }));
-    const specId = c.req.param("specId");
-    const spec = outline.slides.find((s) => s.id === specId);
-    if (!spec) throw new HttpError(404, "NOT_FOUND", new SpecNotFoundError(specId).message);
-    const d = db(c.env);
-    const existing = (await d.select().from(slides).where(and(eq(slides.outlineVersionId, v.id), eq(slides.specId, specId))).limit(1))[0];
-    if (existing && !body.regenerate) return c.json({ slide: slideFromRow(existing), reused: true });
-    if (!existing) {
-      await carryOverSlides(c.env, v);
-      const carried = (await d.select().from(slides).where(and(eq(slides.outlineVersionId, v.id), eq(slides.specId, specId))).limit(1))[0];
-      if (carried && !body.regenerate) return c.json({ slide: slideFromRow(carried), reused: true });
-    }
-    await assertModelAllowance(c.env, u);
-    const lock = and(eq(slideLocks.outlineVersionId, v.id), eq(slideLocks.specId, specId));
-    const now = Date.now();
-    const locked = await d
-      .insert(slideLocks)
-      .values({ outlineVersionId: v.id, specId, until: now + DRAFT_LOCK_MS })
-      .onConflictDoUpdate({ target: [slideLocks.outlineVersionId, slideLocks.specId], set: { until: now + DRAFT_LOCK_MS }, setWhere: lt(slideLocks.until, now) })
-      .returning({ until: slideLocks.until });
-    if (!locked.length) throw new HttpError(409, "SLIDE_IN_PROGRESS", "这一页正在另一个窗口里生成，请稍候 · This slide is already being generated");
-    try {
-      const done = body.regenerate ? undefined : (await d.select().from(slides).where(and(eq(slides.outlineVersionId, v.id), eq(slides.specId, specId))).limit(1))[0];
-      if (done) return c.json({ slide: slideFromRow(done), reused: true });
-      const params = versionParams(v);
-      const worked = workedSpecFor(outline, specId);
-      const workedRow = worked ? (await d.select({ content: slides.content }).from(slides).where(and(eq(slides.outlineVersionId, v.id), eq(slides.specId, worked))).limit(1))[0] : undefined;
-      const workedContent = workedRow ? SlideContent.parse(JSON.parse(workedRow.content)) : undefined;
-      const res = await writeSlide(makeAi(c.env, u.orgId), outline, specId, {
-        lessonTitle: lesson.title,
-        params,
-        pages: await slideSourcePages(c.env, lesson.documentId, spec.sourcePages, versionScope(v).ranges),
-        workedProblem: workedContent?.layout === "steps" ? workedContent.problem : undefined,
-        ctx: { orgId: u.orgId, userId: u.id, lessonId: lesson.id },
-      }).catch((e: unknown) => {
-        if (e instanceof SlideInvalidError) throw new HttpError(502, "SLIDE_INVALID", "这一页没能生成合格的内容，请点“重新生成” · The slide could not be written within its budgets; regenerate it", e.problems.slice(0, 10));
-        throw e;
-      });
-      const current = (await d.select().from(slides).where(and(eq(slides.outlineVersionId, v.id), eq(slides.specId, specId))).limit(1))[0];
-      const row = {
-        id: newId("sl"),
-        lessonId: lesson.id,
-        outlineVersionId: v.id,
-        specId,
-        specHash: await slideKey(spec, params),
-        layout: spec.layout,
-        pageType: spec.pageType,
-        minutes: spec.minutes,
-        content: JSON.stringify(res.content),
-        notes: res.notes,
-        sources: JSON.stringify(res.sources),
-        warnings: JSON.stringify(res.warnings),
-        unverified: JSON.stringify(res.unverified),
-        providerId: res.providerId,
-        prevContent: current?.content ?? null,
-        prevNotes: current?.notes ?? null,
-        updatedAt: Date.now(),
-      };
-      const { id: _id, ...update } = row;
-      await d.insert(slides).values(row).onConflictDoUpdate({ target: [slides.outlineVersionId, slides.specId], set: update });
-      const saved = (await d.select().from(slides).where(and(eq(slides.outlineVersionId, v.id), eq(slides.specId, specId))).limit(1))[0]!;
-      return c.json({ slide: slideFromRow(saved), reused: false });
-    } finally {
-      await d.delete(slideLocks).where(lock);
-    }
+    const body = await parseJson(c, GenerateSlideBody);
+    return generateSlideForVersion(c, u, lesson, v, c.req.param("specId"), body);
+  })
+  .post("/:id/slides/:specId/generate", async (c) => {
+    const u = c.get("user");
+    const lesson = await ownedLesson(c.env, u, c.req.param("id"));
+    const v = await latestConfirmed(c.env, lesson.id);
+    if (!v) throw new HttpError(409, "OUTLINE_NOT_CONFIRMED", "Confirm the outline before generating slides · 请先确认大纲再生成");
+    const body = await parseJson(c, GenerateSlideBody);
+    return generateSlideForVersion(c, u, lesson, v, c.req.param("specId"), body);
   })
   /** Slot-form edit: content must match the slide's layout and hard budgets; the old content is kept for undo. */
   .patch("/:id/slides/:slideId", async (c) => {

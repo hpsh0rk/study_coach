@@ -1,4 +1,4 @@
-import type { Slide, ThemeId } from "@kj/schema";
+import type { Slide, TeachingLanguage, ThemeId } from "@kj/schema";
 import { overflowingSlots, PALETTES, planSlide, type ImageItem, type SlidePlan } from "./plan.ts";
 import { writePptx } from "./write.ts";
 
@@ -15,9 +15,20 @@ export const PPTX_FONT = "PingFang SC";
 export const FONT_NOTE =
   "字体：PingFang SC（苹方，macOS 自带，Mac 上的 WPS / Keynote / PowerPoint 直接显示）。文件里没有嵌入字体；在 Windows 上会自动换成微软雅黑等中文黑体，行宽可能略有变化。· Font: PingFang SC, built into macOS; not embedded. Windows substitutes a similar CJK sans.";
 
+function fontNoteFor(language?: TeachingLanguage): string {
+  if (language === "zh") {
+    return "字体：PingFang SC（苹方，macOS 自带，Mac 上的 WPS / Keynote / PowerPoint 直接显示）。文件里没有嵌入字体；在 Windows 上会自动换成微软雅黑等中文黑体，行宽可能略有变化。";
+  }
+  if (language === "en") {
+    return "Font: PingFang SC, built into macOS; not embedded. Windows substitutes a similar CJK sans.";
+  }
+  return FONT_NOTE;
+}
+
 export interface PptxDeck {
   title: string;
   theme: ThemeId;
+  language?: TeachingLanguage;
   pageLabels?: Record<number, string>;
   slides: Pick<Slide, "content" | "notes" | "sources" | "unverified" | "pageType">[];
 }
@@ -33,8 +44,8 @@ export interface PptxExport {
 }
 
 export function planDeck(deck: PptxDeck): SlidePlan[] {
-  const plans = deck.slides.map((s) => planSlide(s, { theme: deck.theme, pageLabels: deck.pageLabels ?? {} }));
-  if (plans[0]) plans[0].notes = [plans[0].notes, FONT_NOTE].filter(Boolean).join("\n\n");
+  const plans = deck.slides.map((s) => planSlide(s, { theme: deck.theme, pageLabels: deck.pageLabels ?? {}, language: deck.language }));
+  if (plans[0]) plans[0].notes = [plans[0].notes, fontNoteFor(deck.language)].filter(Boolean).join("\n\n");
   return plans;
 }
 
