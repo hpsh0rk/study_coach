@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { labelOf } from "@kj/textbook";
 import { checkOutline, densityOf, outlineTiming, PAGE_TYPES, planBudget, TIME_TOLERANCE } from "@kj/pedagogy";
-import { PAGE_TYPE_IDS, type Outline, type PageType, type SlideSpec, type TeachingLanguage, type VisualKind } from "@kj/schema";
+import { PAGE_TYPE_IDS, type LessonSource, type Outline, type PageType, type SlideSpec, type SyllabusLessonSource, type TeachingLanguage, type VisualKind } from "@kj/schema";
 import { layoutForPageType, LAYOUTS, PAGE_TYPE_VISUALS } from "@kj/templates";
-import { ApiError } from "../../api.ts";
+import { ApiError, lessonSourcesOf } from "../../api.ts";
 import { RichText } from "../../components/RichText.tsx";
 import { UnverifiedBadge } from "../../components/Unverified.tsx";
 import { lessonApi, type LessonView, type VersionView } from "../../lessonApi.ts";
@@ -14,12 +14,134 @@ import { Stepper, StepIntro, type StepKey } from "./Stepper.tsx";
 import { UNSAVED_MESSAGE, useUnsavedGuard } from "./unsaved.ts";
 
 const VISUAL_LABEL: Record<VisualKind, string> = { none: "无 None", chart: "图表 Chart", function: "函数图 Plot", flow: "流程 Flow", formula: "公式 Formula", sim: "模拟实验 Sim", table: "表格 Table" };
-/** On layouts that always show a visual, "none" renders the 图示待补 placeholder. */
 const visualLabel = (v: VisualKind, spec: SlideSpec) => (v === "none" && LAYOUTS[spec.layout].visual === "required" ? "图示待补 Visual to add" : VISUAL_LABEL[v]);
 const cleanedOutline = (outline: Outline, language: TeachingLanguage = "en+zh"): Outline => ({
   ...outline,
   slides: outline.slides.map((s) => ({ ...s, title: s.title.trim() || (language === "en" ? "Untitled" : "未命名页面"), keyPoints: s.keyPoints.map((k) => k.trim()).filter(Boolean) })),
 });
+
+const COVERAGE_STOPWORDS = new Set([
+  "the",
+  "and",
+  "for",
+  "with",
+  "from",
+  "between",
+  "into",
+  "that",
+  "this",
+  "using",
+  "state",
+  "describe",
+  "explain",
+  "recall",
+  "identify",
+  "understand",
+  "know",
+  "how",
+  "what",
+  "when",
+  "where",
+]);
+
+function keyTokensOf(text: string): string[] {
+  const lower = text.toLowerCase();
+  const latin = (lower.match(/[a-z]{4,}/g) ?? [])
+    .filter((w) => !COVERAGE_STOPWORDS.has(w))
+    .map((w) => w.replace(/(?:ing|ed|es|s)$/, ""));
+  const cjkRuns = lower.match(/[\u3400-\u9fff]{2,}/g) ?? [];
+  const cjkPairs: string[] = [];
+  for (const run of cjkRuns) {
+    for (let i = 0; i + 1 < run.length; i++) cjkPairs.push(run.slice(i, i + 2));
+  }
+  return [...new Set([...latin, ...cjkPairs])];
+}
+
+export interface SyllabusCoverageItem {
+  item: string;
+  covered: boolean;
+  slides: number[];
+}
+
+/** Deterministic syllabus checklist coverage against outline objectives, slides, and notCovered. */
+export function evaluateSyllabusCoverage(sources: LessonSource[], outline: Outline): SyllabusCoverageItem[] {
+  const rawItems: string[] = [];
+  for (const s of sources) {
+    if (s.kind !== "syllabus") continue;
+    const syl = s as SyllabusLessonSource;
+    if (syl.items?.length) rawItems.push(...syl.items);
+    else if (syl.text.trim()) {
+      rawItems.push(
+        ...syl.text
+          .split(/\r?\n/)
+          .map((l) => l.replace(/^\s*(?:[-*•☐☑✓]|\d+[.)])\s*/, "").trim())
+          .filter(Boolean),
+      );
+    }
+  }
+  const items = [...new Set(rawItems)];
+  if (!items.length) return [];
+
+  const notCoveredTokens = outline.notCovered.map((nc) => ({ raw: nc.toLowerCase(), tokens: new Set(keyTokensOf(nc)) }));
+  const slideTokenSets = outline.slides.map((s) => new Set(keyTokensOf(`${s.title} ${s.purpose} ${s.keyPoints.join(" ")}`)));
+  const objectiveTokens = new Set(keyTokensOf(outline.objectives.join(" ")));
+
+  return items.map((item) => {
+    const tokens = keyTokensOf(item);
+    const explicitlyOmitted = notCoveredTokens.some((nc) => {
+      if (nc.raw.includes(item.toLowerCase()) || item.toLowerCase().includes(nc.raw)) return true;
+      if (!tokens.length) return false;
+      const overlap = tokens.filter((t) => nc.tokens.has(t)).length;
+      return overlap / tokens.length >= 0.6;
+    });
+    if (explicitlyOmitted) return { item, covered: false, slides: [] };
+
+    if (!tokens.length) return { item, covered: outline.slides.length > 0, slides: [] };
+    const minHits = tokens.length <= 2 ? 1 : Math.max(2, Math.ceil(tokens.length * 0.4));
+    const matchedSlides: number[] = [];
+    slideTokenSets.forEach((set, idx) => {
+      const hits = tokens.filter((t) => set.has(t)).length;
+      if (hits >= minHits) matchedSlides.push(idx + 1);
+    });
+    const objHits = tokens.filter((t) => objectiveTokens.has(t)).length;
+    const covered = matchedSlides.length > 0 || objHits >= minHits;
+    return { item, covered, slides: matchedSlides };
+  });
+}
+
+export function SyllabusCoverageCard({ sources, outline }: { sources: LessonSource[]; outline: Outline }) {
+  const items = evaluateSyllabusCoverage(sources, outline);
+  if (!items.length) return null;
+  const coveredCount = items.filter((i) => i.covered).length;
+  const allCovered = coveredCount === items.length;
+  return (
+    <div className={`alert ${allCovered ? "success" : "warn"}`} data-testid="syllabus-coverage" style={{ marginTop: 10 }}>
+      <div className="row between wrap">
+        <b>
+          📋 考纲覆盖核对 Syllabus coverage: {coveredCount} / {items.length} 已覆盖
+        </b>
+        <span className="small">{allCovered ? "✓ 所有考纲条目均已落入大纲" : "⚠ 部分考纲条目尚未覆盖，可补充或调整页面要点"}</span>
+      </div>
+      <ul style={{ margin: "8px 0 0", paddingLeft: 18 }}>
+        {items.map((entry, idx) => (
+          <li key={idx} data-testid="syllabus-coverage-item" data-covered={entry.covered ? "true" : "false"}>
+            {entry.covered ? "✓" : "⚠"} {entry.item}{" "}
+            {entry.slides.length > 0 && <span className="muted small">（第 {entry.slides.join(", ")} 页）</span>}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function formatSourceCitations(sourcePages: number[], labels: Map<number, string>): string {
+  if (!sourcePages.length) return "教材 p.—";
+  const parts = sourcePages.map((p) => {
+    const lbl = labelOf(labels, p);
+    return lbl.includes(" p.") ? lbl : `p.${lbl}`;
+  });
+  return `教材 ${parts.join(", ")}`;
+}
 
 function TimeBudget({ outline, minutes }: { outline: Outline; minutes: number }) {
   const t = outlineTiming(outline, { minutes });
@@ -129,7 +251,7 @@ function Row({
               </select>
             </label>
           ) : null}
-          <span>教材 p.{spec.sourcePages.map((p) => labelOf(labels, p)).join(", ") || "—"}</span>
+          <span>{formatSourceCitations(spec.sourcePages, labels)}</span>
           {d.reasons.length > 0 && <span className={`density-reason ${d.level}`}>{d.reasons[0]}</span>}
         </div>
       </div>
@@ -155,7 +277,6 @@ function Row({
 
 const clampMinutes = (n: number) => Math.max(0.5, Math.min(15, n));
 
-/** Keeps what the teacher types ("1", "12", "") while typing; clamps to 0.5–15 only when the field loses focus. */
 function MinutesInput({ value, disabled, onChange }: { value: number; disabled: boolean; onChange: (minutes: number) => void }) {
   const [text, setText] = useState(String(value));
   const [focused, setFocused] = useState(false);
@@ -201,6 +322,7 @@ export function OutlineStep({ view, reached, onChanged }: { view: LessonView; re
   const [draftingSince, setDraftingSince] = useState<number | null>(view.drafting?.startedAt ?? null);
   const draftAbortRef = useRef<AbortController | null>(null);
   const params = version?.params ?? view.lesson.params;
+  const activeSources = version?.scope.sources ?? lessonSourcesOf(view);
   const readOnly = !!version?.confirmedAt;
   const labels = useMemo(() => new Map(Object.entries(view.pageLabels).map(([k, v]) => [Number(k), v])), [view.pageLabels]);
   useUnsavedGuard(dirty);
@@ -412,6 +534,7 @@ export function OutlineStep({ view, reached, onChanged }: { view: LessonView; re
           </div>
         </div>
         <TimeBudget outline={outline} minutes={params.minutes} />
+        <SyllabusCoverageCard sources={activeSources} outline={outline} />
         {outline.notCovered.length > 0 && (
           <div className="alert warn not-covered" data-testid="not-covered">
             <b>本节课没有覆盖 · Not covered:</b> {outline.notCovered.join("；")}
@@ -453,7 +576,18 @@ export function OutlineStep({ view, reached, onChanged }: { view: LessonView; re
             onAdd={() => {
               const arr = [...slides];
               const defaultTitle = params.language === "en" ? "Practice questions" : params.language === "zh" ? "随堂练习" : "随堂练习 · Practice questions";
-              arr.splice(i + 1, 0, { id: `new${Date.now().toString(36)}`, pageType: "practice", layout: "questions", title: defaultTitle, purpose: "", keyPoints: [], visual: "none", minutes: PAGE_TYPES.practice.minutes, sourcePages: s.sourcePages, loop: s.loop });
+              arr.splice(i + 1, 0, {
+                id: `new${Date.now().toString(36)}`,
+                pageType: "practice",
+                layout: "questions",
+                title: defaultTitle,
+                purpose: "",
+                keyPoints: [],
+                visual: "none",
+                minutes: PAGE_TYPES.practice.minutes,
+                sourcePages: s.sourcePages,
+                loop: s.loop,
+              });
               update(arr);
             }}
           />

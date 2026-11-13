@@ -1,6 +1,6 @@
-import type { ChapterNode, PageKind, PageRange, PageText } from "@kj/schema";
+import { decodeSourcePage, SOURCE_STRIDE, type ChapterNode, type PageKind, type PageRange, type PageText } from "@kj/schema";
 import type { PageFlag } from "@kj/textbook";
-import { api } from "../api.ts";
+import { activeLessonPdfSources, api, ApiError } from "../api.ts";
 
 export interface DocumentRow {
   id: string;
@@ -41,6 +41,8 @@ export interface TextbookPage {
   text: string;
   label: string | null;
   parser: string;
+  documentId?: string;
+  documentTitle?: string;
 }
 
 export interface PastedPage {
@@ -78,11 +80,38 @@ export const documentApi = {
       pageParsers: Record<number, string>;
       pageFlags: Record<number, PageFlag[]>;
       pageKinds: Record<number, PageKind>;
+      importedRanges?: PageRange[];
       externalParser: ExternalParserInfo | null;
       visionParser: VisionParserInfo | null;
       readers: ReaderNotes;
     }>(`/api/documents/${id}`),
-  page: (id: string, no: number) => api<TextbookPage>(`/api/documents/${id}/pages/${no}`),
+  page: async (id: string, no: number, opts?: { exactDocument?: boolean }): Promise<TextbookPage> => {
+    const pdfSources = activeLessonPdfSources(id);
+    if (!opts?.exactDocument && no > SOURCE_STRIDE && pdfSources.length > 0) {
+      const { pdfIndex, pageNo } = decodeSourcePage(no);
+      const target = pdfSources[pdfIndex];
+      if (target) {
+        const res = await api<TextbookPage>(`/api/documents/${target.documentId}/pages/${pageNo}`);
+        return { ...res, documentId: target.documentId, documentTitle: target.title };
+      }
+    }
+    try {
+      const res = await api<TextbookPage>(`/api/documents/${id}/pages/${no}`);
+      const hit = pdfSources.find((s) => s.documentId === id);
+      return { ...res, documentId: id, ...(hit?.title ? { documentTitle: hit.title } : {}) };
+    } catch (err) {
+      if (!opts?.exactDocument && err instanceof ApiError && err.status === 404 && pdfSources.length > 1) {
+        for (const src of pdfSources) {
+          if (src.documentId === id) continue;
+          try {
+            const fallback = await api<TextbookPage>(`/api/documents/${src.documentId}/pages/${no}`);
+            return { ...fallback, documentId: src.documentId, documentTitle: src.title };
+          } catch {}
+        }
+      }
+      throw err;
+    }
+  },
   paste: (id: string, start: number, end: number, text: string) => api<{ pages: PastedPage[] }>(`/api/documents/${id}/pages/paste`, { body: { start, end, text } }),
   parse: (id: string, pages: number[], reason: "auto" | "refine", ocr: boolean) =>
     api<{ reused: PastedPage[]; job: { id: string; pages: number[] } | null }>(`/api/documents/${id}/parse`, { body: { pages, reason, ocr } }),

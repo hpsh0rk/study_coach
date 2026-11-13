@@ -1,6 +1,8 @@
-import { useEffect, useId, useRef } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { isVisionParser, MINERU_AGENT_PARSER, MINERU_PARSER, PASTE_PARSER, PDFJS_PARSER } from "@kj/textbook";
-import type { TextbookPage } from "./api.ts";
+import type { PdfSourceRole } from "@kj/schema";
+import { activeLessonPdfSources, ApiError } from "../api.ts";
+import { documentApi, type TextbookPage } from "./api.ts";
 
 const ORIGIN: Record<string, string> = {
   [PASTE_PARSER]: "这一页的文字由老师粘贴 · Text pasted by the teacher",
@@ -8,12 +10,44 @@ const ORIGIN: Record<string, string> = {
   [MINERU_PARSER]: "浏览器读不全这一页，文字由外部解析服务（MinerU）重新识别 · Re-read by the external parser (MinerU)",
 };
 
-/** A cited textbook page, opened from a slide's source chip. */
-export function SourcePage({ page, onClose }: { page: TextbookPage; onClose: () => void }) {
+const ROLE_BADGE: Record<PdfSourceRole, string> = {
+  textbook: "教材",
+  past_paper: "真题",
+  workbook: "练习册",
+};
+
+export interface SourceDocOption {
+  documentId: string;
+  title: string;
+  role?: PdfSourceRole;
+}
+
+/** A cited textbook page, opened from a slide's source chip, with multi-PDF document switcher when multiple PDFs are attached. */
+export function SourcePage({
+  page,
+  sources,
+  onClose,
+}: {
+  page: TextbookPage;
+  sources?: SourceDocOption[];
+  onClose: () => void;
+}) {
   const titleId = useId();
   const closeRef = useRef<HTMLButtonElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
+  const docOptions = sources && sources.length > 0 ? sources : activeLessonPdfSources(page.documentId);
+  const [currentPage, setCurrentPage] = useState<TextbookPage>(page);
+  const [activeDocId, setActiveDocId] = useState<string>(page.documentId ?? docOptions[0]?.documentId ?? "");
+  const [switchError, setSwitchError] = useState("");
+  const [loadingDoc, setLoadingDoc] = useState(false);
+
+  useEffect(() => {
+    setCurrentPage(page);
+    setActiveDocId(page.documentId ?? docOptions[0]?.documentId ?? "");
+    setSwitchError("");
+  }, [page]);
+
   useEffect(() => {
     onCloseRef.current = onClose;
   }, [onClose]);
@@ -49,12 +83,35 @@ export function SourcePage({ page, onClose }: { page: TextbookPage; onClose: () 
     };
   }, []);
 
+  async function switchDoc(doc: SourceDocOption) {
+    if (doc.documentId === activeDocId && !switchError) return;
+    setActiveDocId(doc.documentId);
+    setSwitchError("");
+    setLoadingDoc(true);
+    try {
+      const next = await documentApi.page(doc.documentId, currentPage.no, { exactDocument: true });
+      setCurrentPage({ ...next, documentId: doc.documentId, documentTitle: doc.title });
+    } catch (err) {
+      const notFound = err instanceof ApiError && err.status === 404;
+      setSwitchError(
+        notFound
+          ? `“${doc.title}”中没有第 ${currentPage.no} 页（或尚未导入该页）· Page ${currentPage.no} is not in "${doc.title}"`
+          : (err as Error).message,
+      );
+    } finally {
+      setLoadingDoc(false);
+    }
+  }
+
   const origin =
-    page.parser === PDFJS_PARSER
+    currentPage.parser === PDFJS_PARSER
       ? null
-      : isVisionParser(page.parser)
+      : isVisionParser(currentPage.parser)
         ? "浏览器读不全这一页，文字由看图模型从页面图片识别，公式和数字请对照原书核对 · Read from the page image by a vision model: check the numbers"
-        : (ORIGIN[page.parser] ?? `文字来源 Text from: ${page.parser}`);
+        : (ORIGIN[currentPage.parser] ?? `文字来源 Text from: ${currentPage.parser}`);
+
+  const activeDocTitle = currentPage.documentTitle ?? docOptions.find((d) => d.documentId === activeDocId)?.title;
+
   return (
     <div className="modal" onClick={onClose}>
       <div
@@ -66,17 +123,46 @@ export function SourcePage({ page, onClose }: { page: TextbookPage; onClose: () 
         onClick={(e) => e.stopPropagation()}
       >
         <div className="row between">
-          <h2 id={titleId}>教材第 {page.label ?? page.no} 页 · Source page</h2>
+          <h2 id={titleId}>
+            {activeDocTitle ? `${activeDocTitle} · ` : "教材"}第 {currentPage.label ?? currentPage.no} 页 · Source page
+          </h2>
           <button ref={closeRef} type="button" className="btn small ghost" onClick={onClose}>
             关闭 Close
           </button>
         </div>
-        {origin && (
-          <p className="muted small" data-testid="source-origin">
-            {origin}
-          </p>
+        {docOptions.length > 1 && (
+          <div className="tabs" role="tablist" aria-label="切换来源文档 Switch source PDF" data-testid="source-doc-switcher" style={{ marginBottom: 10 }}>
+            {docOptions.map((doc) => (
+              <button
+                key={doc.documentId}
+                type="button"
+                role="tab"
+                aria-selected={doc.documentId === activeDocId}
+                className={doc.documentId === activeDocId ? "active" : ""}
+                disabled={loadingDoc}
+                data-testid={`source-doc-tab-${doc.documentId}`}
+                onClick={() => void switchDoc(doc)}
+              >
+                {doc.role ? `[${ROLE_BADGE[doc.role]}] ` : ""}
+                {doc.title}
+              </button>
+            ))}
+          </div>
         )}
-        <pre className="source-text">{page.text}</pre>
+        {switchError ? (
+          <div className="alert warn" data-testid="source-doc-missing">
+            {switchError}
+          </div>
+        ) : (
+          <>
+            {origin && (
+              <p className="muted small" data-testid="source-origin">
+                {origin}
+              </p>
+            )}
+            <pre className="source-text">{currentPage.text}</pre>
+          </>
+        )}
       </div>
     </div>
   );

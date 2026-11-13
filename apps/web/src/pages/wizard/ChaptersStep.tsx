@@ -11,6 +11,7 @@ import {
   normalizeRanges,
   PASTE_PARSER,
   PDFJS_PARSER,
+  pageFacts,
   pageForLabel,
   pagesInRanges,
   rangesForChapters,
@@ -20,21 +21,29 @@ import {
   type PageFlag,
 } from "@kj/textbook";
 import { OUTLINE_SOURCE_CHARS, scopeAdvice } from "@kj/pedagogy";
-import type { ChapterNode, PageKind, PageRange } from "@kj/schema";
-import { ApiError } from "../../api.ts";
+import { DEFAULT_PARAMS, type ChapterNode, type LessonSource, type PageKind, type PageRange, type PdfLessonSource, type PdfSourceRole } from "@kj/schema";
+import { ApiError, lessonSourcesOf, multisourceLessonApi } from "../../api.ts";
 import { lessonApi, type LessonView, type UnitPreview } from "../../lessonApi.ts";
 import { documentApi, type DocumentRow, type ExternalParserInfo, type PastedPage, type ReaderNotes, type VisionParserInfo } from "../../textbook/api.ts";
 import { parseExternally, pdfCutter, rememberedFile, rememberFile, type ExternalOutcome } from "../../textbook/external.ts";
-import { pageRenderer } from "../../textbook/pdf.ts";
+import { pageRenderer, parsePdf } from "../../textbook/pdf.ts";
 import { readWithVision } from "../../textbook/vision.ts";
-import { sha256Hex, type IngestOutcome } from "../../textbook/ingest.ts";
+import { fileProblem, ingestPdf, sha256Hex, type IngestOutcome } from "../../textbook/ingest.ts";
 import { Stepper, StepIntro, type StepKey } from "./Stepper.tsx";
+
+const DURATION_CHOICES = [40, 45, 60, 90] as const;
+
+const ROLE_LABELS: Record<PdfSourceRole, string> = {
+  past_paper: "真题卷 Past paper",
+  workbook: "练习册 Workbook",
+  textbook: "补充教材 Textbook",
+};
 
 /**
  * "112-118, 120" → ranges of page indexes. Numbers are the book's printed page labels when the
  * PDF has them (what teachers read in the table of contents). Returns null when invalid.
  */
-function parseRanges(text: string, pageCount: number, labels: Map<number, string> = new Map()): PageRange[] | null {
+export function parseRanges(text: string, pageCount: number, labels: Map<number, string> = new Map()): PageRange[] | null {
   const parts = text.split(/[,，;；\s]+/).filter(Boolean);
   const out: PageRange[] = [];
   for (const p of parts) {
@@ -73,16 +82,19 @@ function VolumeMeter({ estimated, lessonMinutes, dropped }: { estimated: number;
   );
 }
 
-const runsOf = (pages: number[]): PageRange[] => normalizeRanges(pages.map((p) => ({ start: p, end: p })), Math.max(1, ...pages));
+const runsOf = (pages: number[]): PageRange[] => (pages.length ? normalizeRanges(pages.map((p) => ({ start: p, end: p })), Math.max(1, ...pages)) : []);
 export const fmtPages = (pages: number[], labels: Map<number, string>) => fmtRanges(runsOf(pages), labels);
 
 /** What the outline will and will not read from the selected pages. */
-function selectionStats(selected: number[], pageWords: number[], pageChars: number[]) {
-  const empty = selected.filter((p) => isEmptyPage(pageWords[p - 1] ?? 0));
-  const withText = selected.filter((p) => !isEmptyPage(pageWords[p - 1] ?? 0));
+function selectionStats(selected: number[], pageWords: number[], pageChars: number[], importedSet?: ReadonlySet<number>) {
+  const imported = importedSet ? selected.filter((p) => importedSet.has(p)) : selected;
+  const missing = importedSet ? selected.filter((p) => !importedSet.has(p)) : [];
+  const empty = imported.filter((p) => isEmptyPage(pageWords[p - 1] ?? 0));
+  const withText = imported.filter((p) => !isEmptyPage(pageWords[p - 1] ?? 0));
   return {
     words: withText.reduce((n, p) => n + (pageWords[p - 1] ?? 0), 0),
     empty,
+    missing,
     unread: sourceCut(
       withText.map((no) => ({ no, chars: pageChars[no - 1] ?? 0 })),
       OUTLINE_SOURCE_CHARS,
@@ -131,6 +143,7 @@ export function ChapterBadges({
   pageKinds,
   pageFlags,
   labels,
+  importedSet,
 }: {
   chapter: ChapterNode;
   pageWords: number[];
@@ -138,18 +151,25 @@ export function ChapterBadges({
   pageKinds: Record<number, PageKind>;
   pageFlags: Record<number, PageFlag[]>;
   labels: Map<number, string>;
+  importedSet?: ReadonlySet<number>;
 }) {
-  const nos = pagesInRanges([{ start: chapter.pageStart, end: chapter.pageEnd }]);
+  const allNos = pagesInRanges([{ start: chapter.pageStart, end: chapter.pageEnd }]);
+  const nos = importedSet ? allNos.filter((p) => importedSet.has(p)) : allNos;
+  const unimported = importedSet ? allNos.length - nos.length : 0;
   const unfixed = (p: number) => isMustFix(pageKinds[p]) && (pageParsers[p] ?? PDFJS_PARSER) === PDFJS_PARSER;
   const empty = nos.filter((p) => isEmptyPage(pageWords[p - 1] ?? 0)).length;
   const lossy = nos.filter((p) => unfixed(p) && !isEmptyPage(pageWords[p - 1] ?? 0));
   const pasted = nos.filter((p) => pageParsers[p] === PASTE_PARSER && !isEmptyPage(pageWords[p - 1] ?? 0)).length;
   const external = nos.filter((p) => isExternalParser(pageParsers[p]) && !isEmptyPage(pageWords[p - 1] ?? 0)).length;
   const vision = nos.filter((p) => isVisionParser(pageParsers[p]) && !isEmptyPage(pageWords[p - 1] ?? 0)).length;
-  // Links and e-mails are common in textbook footers; only instruction-like text is worth a badge here.
   const flagged = nos.filter((p) => pageFlags[p]?.includes("instruction"));
   return (
     <>
+      {unimported > 0 && (
+        <span className="badge note" data-testid="chapter-unimported" title="这些页尚未从原 PDF 导入，勾选后可按需补传 · Pages not imported yet">
+          {unimported} 页未导入
+        </span>
+      )}
       {pageWords.length > 0 && empty > 0 && (
         <span className="badge warn" data-testid="chapter-empty" title="这些页没有文字层，可能是扫描图 · No text layer">
           {empty} 页无文字
@@ -187,9 +207,33 @@ export function ChapterBadges({
   );
 }
 
-/** Books whose must-fix pages were already sent automatically in this tab (once per book, even if the step remounts). */
-const autoSent = new Set<string>();
+/** Per-document pages whose must-fix content was already sent automatically in this tab. */
+const autoSentByDoc = new Map<string, Set<number>>();
 const AUTO_LIMIT = 300;
+const SMALL_BOOK_AUTO_MAX = 120;
+
+/**
+ * Computes which must-fix pages should be auto-re-read:
+ * - When pages are selected, strictly `selectedPages ∩ unfixedPages` (never burning daily quota on unselected chapters!).
+ * - When nothing is selected yet, only small self-contained PDFs (`<= 120` pages) auto-run; large textbooks wait for a selection.
+ */
+export function autoParseTargets(opts: {
+  pageCount: number;
+  selectedPages: number[];
+  unfixedPages: number[];
+  alreadySent: ReadonlySet<number>;
+}): number[] {
+  const { pageCount, selectedPages, unfixedPages, alreadySent } = opts;
+  if (!unfixedPages.length) return [];
+  if (selectedPages.length > 0) {
+    const sel = new Set(selectedPages);
+    return unfixedPages.filter((p) => sel.has(p) && !alreadySent.has(p)).slice(0, AUTO_LIMIT);
+  }
+  if (pageCount > 0 && pageCount <= SMALL_BOOK_AUTO_MAX) {
+    return unfixedPages.filter((p) => !alreadySent.has(p)).slice(0, AUTO_LIMIT);
+  }
+  return [];
+}
 
 type ParseRun = { kind: "running"; done: number; total: number } | ({ kind: "done" } & ExternalOutcome) | { kind: "error"; message: string };
 
@@ -198,7 +242,6 @@ const VIA = {
   vision: { who: "看图模型", running: "正在识别页面图片", en: "the vision model", check: "，读出的公式和数字请对照原书核对" },
 } as const;
 
-/** Progress and outcome of re-reading pages: `external` (MinerU) or `vision` (the provider's vision model). Test ids carry the prefix. */
 function ParseStatus({ run, via, next }: { run: ParseRun; via: keyof typeof VIA; next?: string | null }) {
   const v = VIA[via];
   if (run.kind === "running")
@@ -225,7 +268,8 @@ function ParseStatus({ run, via, next }: { run: ParseRun; via: keyof typeof VIA;
       {v.who}读好了 {read} 页{read > 0 && v.check}
       {blank > 0 && `；${blank} 页还是没有文字（可能是空白页或图片），要讲的话可以粘贴`}
       {run.missed.length > 0 && `；${run.missed.length} 页没读出来，选到这些页时可以粘贴文字补上`}
-      {why && `（${why}）`}。· Re-read {read} page(s) with {v.en}{run.missed.length > 0 && `; ${run.missed.length} not read`}.
+      {why && `（${why}）`}。· Re-read {read} page(s) with {v.en}
+      {run.missed.length > 0 && `; ${run.missed.length} not read`}.
       {run.missed.length > 0 && next && (
         <div className="small" data-testid={`${via}-next`}>
           {next}
@@ -237,13 +281,25 @@ function ParseStatus({ run, via, next }: { run: ParseRun; via: keyof typeof VIA;
 
 const REUSED: Partial<Record<IngestOutcome, string>> = {
   ready: "这份 PDF 之前上传过，直接用了上次读好的文字，没有重新解析 · Already uploaded: reused without parsing again",
-  resumed: "上次没有传完，这次只补传了缺的页 · Finished the interrupted upload; only the missing pages were sent",
+  resumed: "已按需补传所选页面 · Uploaded the missing pages",
   restored: "已恢复之前删除的这份教材 · Restored the PDF you deleted earlier",
 };
 
+interface ExtraPdfDraft {
+  id: string;
+  documentId: string;
+  title: string;
+  pageCount: number;
+  role: PdfSourceRole;
+  rangeText: string;
+  ranges: PageRange[];
+  words: number;
+}
+
 export function ChaptersStep({ documentId, lesson, reached }: { documentId: string; lesson?: LessonView; reached: StepKey }) {
   const nav = useNavigate();
-  const reused = REUSED[(useLocation().state as { textbook?: IngestOutcome } | null)?.textbook ?? "new"];
+  const locState = useLocation().state as { textbook?: IngestOutcome; initialRanges?: PageRange[] } | null;
+  const reused = REUSED[locState?.textbook ?? "new"];
   const [doc, setDoc] = useState<DocumentRow | null>(null);
   const [tree, setTree] = useState<ChapterNode[]>([]);
   const [labels, setLabels] = useState<Map<number, string>>(new Map());
@@ -252,6 +308,7 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
   const [pageParsers, setPageParsers] = useState<Record<number, string>>({});
   const [pageFlags, setPageFlags] = useState<Record<number, PageFlag[]>>({});
   const [pageKinds, setPageKinds] = useState<Record<number, PageKind>>({});
+  const [importedRanges, setImportedRanges] = useState<PageRange[] | null>(null);
   const [external, setExternal] = useState<ExternalParserInfo | null>(null);
   const [extRun, setExtRun] = useState<ParseRun | null>(null);
   const [vision, setVision] = useState<VisionParserInfo | null>(null);
@@ -259,13 +316,81 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
   const [notes, setNotes] = useState<ReaderNotes>({ external: null, vision: null });
   const pickFor = useRef<((file: File) => void) | null>(null);
   const filePicker = useRef<HTMLInputElement>(null);
+  const extraFilePicker = useRef<HTMLInputElement>(null);
   const [pasting, setPasting] = useState<PageRange | null>(null);
   const [preview, setPreview] = useState<{ start: string; end: string } | null>(null);
   const [picked, setPicked] = useState<Set<string>>(new Set(lesson?.lesson.scope.chapterIds ?? []));
   const [rangeText, setRangeText] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [targetMinutes, setTargetMinutes] = useState<number>(lesson?.lesson.params.minutes ?? 40);
+  const [importingMissing, setImportingMissing] = useState(false);
+
+  // Extra PDF sources state:
+  const [allDocs, setAllDocs] = useState<DocumentRow[]>([]);
+  const [extraSources, setExtraSources] = useState<ExtraPdfDraft[]>([]);
+  const [addingExtra, setAddingExtra] = useState(false);
+  const [extraDocId, setExtraDocId] = useState("");
+  const [extraRole, setExtraRole] = useState<PdfSourceRole>("past_paper");
+  const [extraRangeInput, setExtraRangeInput] = useState("");
+  const [extraUploading, setExtraUploading] = useState(false);
+
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (lesson) setTargetMinutes(lesson.lesson.params.minutes);
+  }, [lesson?.lesson.params.minutes]);
+
+  useEffect(() => {
+    documentApi
+      .list()
+      .then((r) => setAllDocs(r.documents.filter((d) => d.pagesReceived > 0)))
+      .catch(() => undefined);
+  }, [documentId]);
+
+  // Hydrate existing secondary PDF sources when editing a lesson:
+  useEffect(() => {
+    if (!lesson) return;
+    const pdfs = lessonSourcesOf(lesson).filter((s): s is PdfLessonSource => s.kind === "pdf");
+    if (pdfs.length <= 1) {
+      setExtraSources([]);
+      return;
+    }
+    let alive = true;
+    void Promise.all(
+      pdfs.slice(1).map(async (s) => {
+        try {
+          const info = await documentApi.get(s.documentId);
+          const lbl = new Map(Object.entries(info.pageLabels).map(([k, v]) => [Number(k), v]));
+          const w = pagesInRanges(s.ranges).reduce((sum, no) => sum + (info.pageWords[no - 1] ?? 0), 0);
+          return {
+            id: s.id,
+            documentId: s.documentId,
+            title: s.title || info.document.title,
+            pageCount: info.document.pageCount,
+            role: s.role,
+            rangeText: fmtRanges(s.ranges, lbl),
+            ranges: s.ranges,
+            words: w,
+          } satisfies ExtraPdfDraft;
+        } catch {
+          return {
+            id: s.id,
+            documentId: s.documentId,
+            title: s.title,
+            pageCount: Math.max(1, ...s.ranges.map((r) => r.end)),
+            role: s.role,
+            rangeText: fmtRanges(s.ranges, new Map()),
+            ranges: s.ranges,
+            words: 0,
+          } satisfies ExtraPdfDraft;
+        }
+      }),
+    ).then((loaded) => alive && setExtraSources(loaded));
+    return () => {
+      alive = false;
+    };
+  }, [lesson?.lesson.id]);
 
   useEffect(() => {
     documentApi
@@ -280,42 +405,55 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
         setPageParsers(r.pageParsers);
         setPageFlags(r.pageFlags);
         setPageKinds(r.pageKinds);
+        setImportedRanges(r.importedRanges ?? [{ start: 1, end: r.document.pageCount }]);
         setExternal(r.externalParser);
         setVision(r.visionParser);
         setNotes(r.readers);
         setCollapsed(new Set(r.chapters.filter((c) => c.level >= 2 && r.chapters.some((k) => k.parentId === c.id)).map((c) => c.id)));
-        if (lesson && !lesson.lesson.scope.chapterIds.length) setRangeText(fmtRanges(lesson.lesson.scope.ranges, map));
+        if (lesson && !lesson.lesson.scope.chapterIds.length) {
+          setRangeText(fmtRanges(lesson.lesson.scope.ranges, map));
+        } else if (!lesson && locState?.initialRanges?.length) {
+          setRangeText(fmtRanges(locState.initialRanges, map));
+        }
       })
       .catch((e) => setError((e as Error).message));
   }, [documentId, lesson]);
 
   const pageCount = doc?.pageCount ?? 0;
+  const importedSet = useMemo(() => {
+    if (!doc || !importedRanges) return undefined;
+    if (doc.pagesReceived >= doc.pageCount) return undefined;
+    return new Set(pagesInRanges(importedRanges));
+  }, [doc, importedRanges]);
+
   const extra = useMemo(() => parseRanges(rangeText, pageCount || 1, labels), [rangeText, pageCount, labels]);
   const ranges = useMemo(() => normalizeRanges([...rangesForChapters(tree, [...picked], pageCount || 1), ...(extra ?? [])], pageCount || 1), [tree, picked, extra, pageCount]);
-  const pages = countPages(ranges);
-  const lessonMinutes = lesson?.lesson.params.minutes ?? 40;
-  const stats = useMemo(() => selectionStats(pagesInRanges(ranges), pageWords, pageChars), [ranges, pageWords, pageChars]);
-  const advice = scopeAdvice(stats.words, lessonMinutes, stats.unread.length);
+  const primaryPages = countPages(ranges);
+  const extraPagesCount = extraSources.reduce((sum, s) => sum + countPages(s.ranges), 0);
+  const pages = primaryPages + extraPagesCount;
+  const selectedNos = useMemo(() => pagesInRanges(ranges), [ranges]);
+  const stats = useMemo(() => selectionStats(selectedNos, pageWords, pageChars, importedSet), [selectedNos, pageWords, pageChars, importedSet]);
+  const totalWords = stats.words + extraSources.reduce((sum, s) => sum + s.words, 0);
+  const advice = scopeAdvice(totalWords, targetMinutes, stats.unread.length);
   const emptyRuns = runsOf(stats.empty);
+  const missingRuns = runsOf(stats.missing);
   const pagesOf = (c: ChapterNode) => pagesInRanges([{ start: c.pageStart, end: c.pageEnd }]);
 
-  // Must-fix pages whose pdf.js text is still the only text: scans, garbled fonts, formulas drawn as outlines.
-  const unfixed = (p: number) => isMustFix(pageKinds[p]) && (pageParsers[p] ?? PDFJS_PARSER) === PDFJS_PARSER;
+  const unfixed = (p: number) => (!importedSet || importedSet.has(p)) && isMustFix(pageKinds[p]) && (pageParsers[p] ?? PDFJS_PARSER) === PDFJS_PARSER;
   const bookLossy = MUST_FIX_KINDS.flatMap((kind) => {
     const count = Object.entries(pageKinds).filter(([no, k]) => k === kind && unfixed(Number(no))).length;
     return count ? [{ kind, count }] : [];
   });
-  const lossyRuns = runsOf(pagesInRanges(ranges).filter((p) => unfixed(p) && !isEmptyPage(pageWords[p - 1] ?? 0)));
-  const visionRuns = runsOf(pagesInRanges(ranges).filter((p) => isVisionParser(pageParsers[p]) && !isEmptyPage(pageWords[p - 1] ?? 0)));
+  const lossyRuns = runsOf(selectedNos.filter((p) => unfixed(p) && !isEmptyPage(pageWords[p - 1] ?? 0)));
+  const visionRuns = runsOf(selectedNos.filter((p) => (!importedSet || importedSet.has(p)) && isVisionParser(pageParsers[p]) && !isEmptyPage(pageWords[p - 1] ?? 0)));
   const reading = extRun?.kind === "running" || visRun?.kind === "running";
-  // "精修本章": pages the text layer read but not well (formula-heavy, tables), plus must-fix ones still unread.
-  const refinable = (c: ChapterNode) => pagesOf(c).filter((p) => unfixed(p) || (REFINE_KINDS.includes(pageKinds[p]!) && (pageParsers[p] ?? PDFJS_PARSER) === PDFJS_PARSER));
+  const refinable = (c: ChapterNode) =>
+    pagesOf(c).filter((p) => (!importedSet || importedSet.has(p)) && (unfixed(p) || (REFINE_KINDS.includes(pageKinds[p]!) && (pageParsers[p] ?? PDFJS_PARSER) === PDFJS_PARSER)));
   const unfixedPages = Object.keys(pageKinds)
     .map(Number)
     .filter(unfixed)
     .sort((a, b) => a - b);
 
-  /** New facts for re-read pages (paste or external parser); functional updates, as a parser run outlives renders. */
   function applyFacts(rows: PastedPage[]) {
     setPageWords((w) => rows.reduce((n, r) => ((n[r.no - 1] = r.words), n), [...w]));
     setPageChars((ch) => rows.reduce((n, r) => ((n[r.no - 1] = r.chars), n), [...ch]));
@@ -344,11 +482,11 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
       nos.map((no) => ({ no, kind: pageKinds[no] })),
       external,
       {
-        create: (pages, ocr) => documentApi.parse(documentId, pages, reason, ocr),
+        create: (pgs, ocr) => documentApi.parse(documentId, pgs, reason, ocr),
         upload: async (job, pdf) => void (await documentApi.parseUpload(documentId, job, pdf)),
         poll: (job) => documentApi.parsePoll(documentId, job),
         result: (job) => documentApi.parseResult(documentId, job),
-        save: async (job, pages) => (await documentApi.parseSave(documentId, job, pages)).pages,
+        save: async (job, pgs) => (await documentApi.parseSave(documentId, job, pgs)).pages,
         cut: pdfCutter(file),
         sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
       },
@@ -359,14 +497,15 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
     if (out.missed.length) await runVision(out.missed, reason, file);
   }
 
-  /** The fallback: page images through the provider's vision model, one page at a time. */
   async function runVision(nos: number[], reason: "auto" | "refine", file: Blob) {
     if (!vision || !nos.length) return;
     setVisRun({ kind: "running", done: 0, total: nos.length });
     const renderer = pageRenderer(file);
     try {
-      const out = await readWithVision(nos, { render: (no) => renderer.render(no), read: (no, image) => documentApi.parseImage(documentId, no, image, reason) }, (done, total) =>
-        setVisRun({ kind: "running", done, total }),
+      const out = await readWithVision(
+        nos,
+        { render: (no) => renderer.render(no), read: (no, image) => documentApi.parseImage(documentId, no, image, reason) },
+        (done, total) => setVisRun({ kind: "running", done, total }),
       );
       applyFacts(out.saved);
       setVisRun({ kind: "done", ...out });
@@ -375,13 +514,16 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
     }
   }
 
-  /** The book's file: kept from the upload in this tab, or picked again (checked against the stored hash). */
-  function withFile(then: (file: Blob) => void) {
+  function withFile(then: (file: Blob) => void, onMismatch?: (msg: string) => void) {
     const kept = rememberedFile(documentId);
     if (kept) return then(kept);
     pickFor.current = async (file) => {
       if (doc?.fileSha256 && (await sha256Hex(await file.arrayBuffer())) !== doc.fileSha256) {
-        return (external ? setExtRun : setVisRun)({ kind: "error", message: "选的不是这本教材的 PDF，请选上传时的同一个文件 · That is not the same PDF" });
+        const msg = "选的不是这本教材的 PDF，请选上传时的同一个文件 · That is not the same PDF";
+        if (onMismatch) return onMismatch(msg);
+        if (external) return setExtRun({ kind: "error", message: msg });
+        if (vision) return setVisRun({ kind: "error", message: msg });
+        return setError(msg);
       }
       rememberFile(documentId, file);
       then(file);
@@ -389,21 +531,68 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
     filePicker.current?.click();
   }
 
-  // Right after an upload in this tab, must-fix pages are re-read without asking: by the external parser when it is
-  // on (the vision model then takes what it missed), else by the vision model when one is configured.
+  async function importMissingSelected(file: Blob) {
+    if (!doc || !stats.missing.length) return;
+    setImportingMissing(true);
+    setError("");
+    try {
+      const parsed = await parsePdf(await file.arrayBuffer(), doc.title, { pageNumbers: stats.missing });
+      const batchSize = 40;
+      let latestReceived = doc.pagesReceived;
+      for (let i = 0; i < parsed.pages.length; i += batchSize) {
+        const res = await documentApi.putPages(documentId, parsed.pages.slice(i, i + batchSize));
+        latestReceived = res.received;
+      }
+      setDoc((prev) => (prev ? { ...prev, pagesReceived: latestReceived } : prev));
+      setImportedRanges((prev) =>
+        normalizeRanges([...(prev ?? []), ...parsed.pages.map((p) => ({ start: p.no, end: p.no }))], doc.pageCount),
+      );
+      setPageWords((w) => {
+        const next = [...w];
+        for (const p of parsed.pages) next[p.no - 1] = pageFacts(p.text).words;
+        return next;
+      });
+      setPageChars((ch) => {
+        const next = [...ch];
+        for (const p of parsed.pages) next[p.no - 1] = p.text.length;
+        return next;
+      });
+      setPageKinds((ks) => {
+        const next = { ...ks };
+        for (const p of parsed.pages) if (p.kind && p.kind !== "text" && p.kind !== "blank") next[p.no] = p.kind;
+        return next;
+      });
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : (e as Error).message);
+    } finally {
+      setImportingMissing(false);
+    }
+  }
+
+  // Strictly restrict auto-parsing to selectedPages ∩ unfixedPages on large books so daily quota is never burned on p.1..300.
   useEffect(() => {
     const file = rememberedFile(documentId);
-    if ((!external && !vision) || !file || autoSent.has(documentId) || !unfixedPages.length) return;
-    autoSent.add(documentId);
-    const nos = unfixedPages.slice(0, AUTO_LIMIT);
-    void (external ? runExternal(nos, "auto", file) : runVision(nos, "auto", file));
-  }, [external, vision, documentId, unfixedPages.length]);
+    if ((!external && !vision) || !file || reading || !doc) return;
+    let sentSet = autoSentByDoc.get(documentId);
+    if (!sentSet) {
+      sentSet = new Set<number>();
+      autoSentByDoc.set(documentId, sentSet);
+    }
+    const targets = autoParseTargets({
+      pageCount: doc.pageCount,
+      selectedPages: selectedNos,
+      unfixedPages,
+      alreadySent: sentSet,
+    });
+    if (!targets.length) return;
+    for (const no of targets) sentSet.add(no);
+    void (external ? runExternal(targets, "auto", file) : runVision(targets, "auto", file));
+  }, [external, vision, documentId, doc?.pageCount, selectedNos.join(","), unfixedPages.length]);
 
-  // First line of the first and last typed page, so teachers can check the numbers match their book.
   useEffect(() => {
     const first = extra?.[0]?.start;
     const last = extra?.[extra.length - 1]?.end;
-    if (!first || !last) return setPreview(null);
+    if (!first || !last || (importedSet && (!importedSet.has(first) || !importedSet.has(last)))) return setPreview(null);
     let live = true;
     const firstLine = (t: string) => t.split("\n").find((l) => l.trim().length > 3)?.slice(0, 80) ?? "";
     void Promise.all([documentApi.page(documentId, first), documentApi.page(documentId, last)])
@@ -412,7 +601,7 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
     return () => {
       live = false;
     };
-  }, [extra, documentId]);
+  }, [extra, documentId, importedSet]);
 
   function toggle(id: string) {
     const ids = subtreeIds(tree, id);
@@ -425,6 +614,66 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
     setPicked(next);
   }
 
+  async function handleExtraPdfUpload(file: File) {
+    const problem = fileProblem(file);
+    if (problem) return setError(problem);
+    setExtraUploading(true);
+    setError("");
+    try {
+      const { id } = await ingestPdf(file, {
+        hash: sha256Hex,
+        lookup: documentApi.lookup,
+        parse: (data, title, onProgress, opts) => parsePdf(data, title, { onProgress, ...opts }),
+        create: documentApi.create,
+        putPages: documentApi.putPages,
+        restore: documentApi.restore,
+        confirmRestore: () => true,
+      });
+      rememberFile(id, file);
+      const list = (await documentApi.list()).documents.filter((d) => d.pagesReceived > 0);
+      setAllDocs(list);
+      setExtraDocId(id);
+      const createdDoc = list.find((d) => d.id === id);
+      if (createdDoc) setExtraRangeInput(`1-${Math.min(10, createdDoc.pageCount)}`);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : (e as Error).message);
+    } finally {
+      setExtraUploading(false);
+    }
+  }
+
+  async function confirmAddExtraPdf() {
+    if (!extraDocId) return setError("请选择一份补充 PDF · Choose a PDF to attach");
+    setError("");
+    try {
+      const info = await documentApi.get(extraDocId);
+      const lbl = new Map(Object.entries(info.pageLabels).map(([k, v]) => [Number(k), v]));
+      const parsed = parseRanges(extraRangeInput, info.document.pageCount, lbl);
+      if (!parsed || !parsed.length) {
+        return setError(`请输入有效的页码范围（1–${info.document.pageCount}），例如 1-6 · Enter a valid page range`);
+      }
+      const w = pagesInRanges(parsed).reduce((sum, no) => sum + (info.pageWords[no - 1] ?? 0), 0);
+      setExtraSources((prev) => [
+        ...prev,
+        {
+          id: `src_${Date.now().toString(36)}_${prev.length + 1}`,
+          documentId: extraDocId,
+          title: info.document.title,
+          pageCount: info.document.pageCount,
+          role: extraRole,
+          rangeText: fmtRanges(parsed, lbl),
+          ranges: parsed,
+          words: w,
+        },
+      ]);
+      setAddingExtra(false);
+      setExtraDocId("");
+      setExtraRangeInput("");
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : (e as Error).message);
+    }
+  }
+
   const visible = tree.filter((c) => {
     let p = c.parentId;
     while (p) {
@@ -434,19 +683,63 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
     return true;
   });
 
-  // A selection far below one lesson (under 30 %) needs a second, explicit click, like an over-long outline.
-  const thin = pages > 0 && stats.unread.length === 0 && advice.estimatedMinutes < lessonMinutes * 0.3;
+  const thin = pages > 0 && stats.missing.length === 0 && stats.unread.length === 0 && advice.estimatedMinutes < targetMinutes * 0.3;
   const [thinAck, setThinAck] = useState(false);
 
   async function next() {
     if (extra === null) return setError("页码格式不对，例如 3-8, 12 · Page ranges look wrong, e.g. 3-8, 12");
-    if (!pages) return setError("请至少选择一个章节或输入页码 · Choose at least one chapter or page range");
+    if (!primaryPages) return setError("请至少在主教材中选择一个章节或输入页码 · Choose at least one chapter or page range");
+    if (stats.missing.length > 0) {
+      return setError("所选范围包含尚未导入的页，请先点击上方“从原 PDF 补传所选页” · Import the selected missing pages first");
+    }
     if (thin && !thinAck) return setThinAck(true);
     setBusy(true);
     setError("");
     try {
       const chapterIds = [...picked];
-      const view = lesson ? await lessonApi.patch(lesson.lesson.id, { chapterIds, ranges: extra }) : await lessonApi.create(documentId, chapterIds, extra);
+      const baseParams = lesson?.lesson.params ?? DEFAULT_PARAMS;
+      const nextParams = { ...baseParams, minutes: targetMinutes };
+      const existingNonPdf = lesson ? lessonSourcesOf(lesson).filter((s) => s.kind !== "pdf") : [];
+      const hasMultiSources = extraSources.length > 0 || existingNonPdf.length > 0 || (lesson ? lessonSourcesOf(lesson).length > 0 : false);
+      const sourcesPayload: LessonSource[] | undefined = hasMultiSources
+        ? [
+            {
+              id: "src_primary",
+              kind: "pdf",
+              documentId,
+              title: doc?.title || "主教材",
+              ...(chapterIds.length ? { chapterIds } : {}),
+              ranges,
+              role: "textbook",
+            },
+            ...extraSources.map(
+              (s): PdfLessonSource => ({
+                id: s.id,
+                kind: "pdf",
+                documentId: s.documentId,
+                title: s.title,
+                ranges: s.ranges,
+                role: s.role,
+              }),
+            ),
+            ...existingNonPdf,
+          ]
+        : undefined;
+
+      const view = lesson
+        ? await multisourceLessonApi.patch<LessonView>(lesson.lesson.id, {
+            chapterIds,
+            ranges: extra,
+            params: nextParams,
+            ...(sourcesPayload ? { sources: sourcesPayload } : {}),
+          })
+        : await multisourceLessonApi.create<LessonView>({
+            documentId,
+            chapterIds,
+            ranges: extra,
+            params: nextParams,
+            ...(sourcesPayload ? { sources: sourcesPayload } : {}),
+          });
       nav(`/lessons/${view.lesson.id}/settings`);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : (e as Error).message);
@@ -454,14 +747,20 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
     }
   }
 
-  // `count` undefined: the server picks the fewest lessons that each fit the lesson length.
   const [unitPlan, setUnitPlan] = useState<{ count?: number; preview: UnitPreview } | null>(null);
-  const selection = JSON.stringify([[...picked].sort(), extra]);
+  const selection = JSON.stringify([[...picked].sort(), extra, targetMinutes, extraSources.map((s) => [s.documentId, s.ranges])]);
   useEffect(() => {
     setUnitPlan(null);
     setThinAck(false);
   }, [selection]);
-  const unitRequest = (count?: number) => ({ documentId, chapterIds: [...picked], ranges: extra ?? [], count, lessonId: lesson?.lesson.id, params: lesson?.lesson.params });
+  const unitRequest = (count?: number) => ({
+    documentId,
+    chapterIds: [...picked],
+    ranges: extra ?? [],
+    count,
+    lessonId: lesson?.lesson.id,
+    params: { ...(lesson?.lesson.params ?? DEFAULT_PARAMS), minutes: targetMinutes },
+  });
   async function previewUnit(count?: number) {
     if (extra === null) return;
     setBusy(true);
@@ -487,6 +786,8 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
     }
   }
 
+  const candidateExtraDocs = allDocs.filter((d) => d.id !== documentId);
+
   return (
     <div className="wizard">
       <Stepper current="chapters" reached={reached} lessonId={lesson?.lesson.id} />
@@ -498,15 +799,22 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
       )}
       {doc && (
         <div className="card">
-          <div className="row between">
+          <div className="row between wrap">
             <div>
               <h2>📘 {doc.title}</h2>
               <p className="muted small">
-                共 {doc.pageCount} 页 · {tree.length ? `${tree.length} 个书签章节 bookmarks` : "这个 PDF 没有书签目录，请直接输入页码 · No bookmarks: enter page ranges"}
+                {doc.pagesReceived < doc.pageCount ? `已导入 ${doc.pagesReceived} / ${doc.pageCount} 页 · ` : `共 ${doc.pageCount} 页 · `}
+                {tree.length ? `${tree.length} 个书签章节 bookmarks` : "这个 PDF 没有书签目录，请直接输入页码 · No bookmarks: enter page ranges"}
               </p>
             </div>
             <div className="selection-pill" data-testid="selection">
-              已选 <b>{pages}</b> 页 pages {ranges.length > 0 && <span className="muted small">（p. {fmtRanges(ranges, labels)}）</span>}
+              已选 <b>{pages}</b> 页 pages{" "}
+              {ranges.length > 0 && (
+                <span className="muted small">
+                  （主教材 p. {fmtRanges(ranges, labels)}
+                  {extraSources.length > 0 ? ` ＋ ${extraSources.length} 份补充 PDF` : ""}）
+                </span>
+              )}
               {pages > 0 && (
                 <div className="muted small" data-testid="scope-estimate">
                   按字数估计约需 {advice.estimatedMinutes} 分钟 · about {advice.estimatedMinutes} min to teach
@@ -514,16 +822,39 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
               )}
             </div>
           </div>
+
+          <div className="row wrap" data-testid="chapters-minutes" style={{ marginBottom: 10 }}>
+            <span className="muted small">目标课时 Duration:</span>
+            {DURATION_CHOICES.map((m) => (
+              <button
+                key={m}
+                type="button"
+                className={`btn small ${targetMinutes === m ? "primary" : "ghost"}`}
+                data-testid={`chapters-minutes-${m}`}
+                onClick={() => setTargetMinutes(m)}
+              >
+                {m} 分钟
+              </button>
+            ))}
+          </div>
+
           {bookLossy.length > 0 && (
             <div className="alert info" data-testid="must-fix-summary" data-count={bookLossy.reduce((n, k) => n + k.count, 0)}>
-              这本书有 {bookLossy.reduce((n, k) => n + k.count, 0)} 页可能没读全：{bookLossy.map((k) => `${LOSSY[k.kind]} ${k.count} 页`).join(" · ")}。浏览器只能读出文字层，扫描图和画成图形的公式读不到。
+              这本书已导入部分有 {bookLossy.reduce((n, k) => n + k.count, 0)} 页可能没读全：{bookLossy.map((k) => `${LOSSY[k.kind]} ${k.count} 页`).join(" · ")}。浏览器只能读出文字层，扫描图和画成图形的公式读不到。
               {external ? (
                 !reading && (
                   <span>
                     {" "}
-                    可以用外部解析服务重新读这些页（只发送这几页），或选到这些页时粘贴文字补上。
-                    <button className="btn small" onClick={() => withFile((f) => void runExternal(unfixedPages.slice(0, AUTO_LIMIT), "auto", f))} data-testid="external-run">
-                      用外部解析服务读这 {Math.min(AUTO_LIMIT, unfixedPages.length)} 页
+                    可以用外部解析服务重新读这些页（只发送所选页），或选到这些页时粘贴文字补上。
+                    <button
+                      className="btn small"
+                      onClick={() => {
+                        const target = selectedNos.length ? selectedNos.filter(unfixed) : unfixedPages;
+                        withFile((f) => void runExternal((target.length ? target : unfixedPages).slice(0, AUTO_LIMIT), "auto", f));
+                      }}
+                      data-testid="external-run"
+                    >
+                      用外部解析服务读这 {Math.min(AUTO_LIMIT, (selectedNos.length ? selectedNos.filter(unfixed) : unfixedPages).length || unfixedPages.length)} 页
                     </button>
                   </span>
                 )
@@ -533,8 +864,15 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
                   {!reading && (
                     <span>
                       可以用看图模型（{vision.model}）识别这些页的图片（读出的数字要核对），或选到这些页时粘贴文字补上。
-                      <button className="btn small" onClick={() => withFile((f) => void runVision(unfixedPages.slice(0, AUTO_LIMIT), "auto", f))} data-testid="vision-run">
-                        用看图模型读这 {Math.min(AUTO_LIMIT, unfixedPages.length)} 页
+                      <button
+                        className="btn small"
+                        onClick={() => {
+                          const target = selectedNos.length ? selectedNos.filter(unfixed) : unfixedPages;
+                          withFile((f) => void runVision((target.length ? target : unfixedPages).slice(0, AUTO_LIMIT), "auto", f));
+                        }}
+                        data-testid="vision-run"
+                      >
+                        用看图模型读这 {Math.min(AUTO_LIMIT, (selectedNos.length ? selectedNos.filter(unfixed) : unfixedPages).length || unfixedPages.length)} 页
                       </button>
                     </span>
                   )}
@@ -576,16 +914,33 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
               还没选内容：勾选下面的章节，或在下方输入页码。· Nothing selected yet: tick chapters below or type page ranges.
             </div>
           ) : (
-            <VolumeMeter estimated={advice.estimatedMinutes} lessonMinutes={lessonMinutes} dropped={stats.unread.length > 0} />
+            <VolumeMeter estimated={advice.estimatedMinutes} lessonMinutes={targetMinutes} dropped={stats.unread.length > 0} />
           )}
+
+          {stats.missing.length > 0 && (
+            <div className="alert warn row between wrap" data-testid="missing-pages-alert">
+              <span>
+                第 {fmtRanges(missingRuns, labels)} 页（共 {stats.missing.length} 页）尚未从原 PDF 导入。点击右侧按钮即可按需解析补传这几页。·{" "}
+                {stats.missing.length} selected page(s) have not been imported yet.
+              </span>
+              <button
+                type="button"
+                className="btn small primary"
+                disabled={importingMissing}
+                data-testid="import-missing-pages"
+                onClick={() => withFile((f) => void importMissingSelected(f), setError)}
+              >
+                {importingMissing ? "正在补传… Importing" : `从原 PDF 补传这 ${stats.missing.length} 页`}
+              </button>
+            </div>
+          )}
+
           {pages > 0 && stats.empty.length > 0 && (
             <div className="alert warn" data-testid="empty-pages">
-              {stats.empty.length === pages ? (
+              {stats.empty.length === primaryPages && extraPagesCount === 0 ? (
                 <>所选的页都没有可读的文字（可能是扫描图），没法据此起草大纲。请把这些页的文字粘贴进来，或换别的章节。</>
               ) : (
-                <>
-                  第 {fmtRanges(emptyRuns, labels)} 页没有可读的文字（可能是扫描图），起草大纲时会跳过这些页。如果这些页要讲，请把文字粘贴进来。
-                </>
+                <>第 {fmtRanges(emptyRuns, labels)} 页没有可读的文字（可能是扫描图），起草大纲时会跳过这些页。如果这些页要讲，请把文字粘贴进来。</>
               )}{" "}
               · Pages without text (scans) are skipped; paste their text to include them.
               <div className="row wrap">
@@ -625,17 +980,17 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
           {pages > 0 && advice.tooMuch && (
             <div className="alert warn split-hint" data-testid="split-hint">
               <span>
-              {stats.unread.length > 0 ? (
-                <>
-                  内容超出一份大纲能读的量：第 {fmtRanges(runsOf(stats.unread), labels)} 页读不进去，大纲不会覆盖这些页。建议拆成 {advice.lessons} 课时，或少选几节。· Pages beyond what one outline can read are left out: split the
-                  selection.
-                </>
-              ) : (
-                <>
-                  内容偏多：按 {lessonMinutes} 分钟一节，大约需要 {advice.lessons} 节课。可以整单元规划成 {advice.lessons} 节课（按章节切分，每节课单独确认大纲），或只选前面几节；放不下的内容会列在大纲顶部的“未覆盖”里。· About {advice.lessons} lessons of {lessonMinutes} min:
-                  consider splitting the selection.
-                </>
-              )}
+                {stats.unread.length > 0 ? (
+                  <>
+                    内容超出一份大纲能读的量：第 {fmtRanges(runsOf(stats.unread), labels)} 页读不进去，大纲不会覆盖这些页。建议拆成 {advice.lessons} 课时，或少选几节。· Pages beyond what one outline can read are left out: split the
+                    selection.
+                  </>
+                ) : (
+                  <>
+                    内容偏多：按 {targetMinutes} 分钟一节，大约需要 {advice.lessons} 节课。可以整单元规划成 {advice.lessons} 节课（按章节切分，每节课单独确认大纲），或只选前面几节；放不下的内容会列在大纲顶部的“未覆盖”里。· About {advice.lessons} lessons of{" "}
+                    {targetMinutes} min: consider splitting the selection.
+                  </>
+                )}
               </span>
               <button className="btn small" disabled={busy || extra === null} onClick={() => previewUnit()} data-testid="plan-unit">
                 整单元规划：先看怎么拆 Preview a unit plan
@@ -698,7 +1053,7 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
                       <span className="muted small">
                         p.{labelOf(labels, c.pageStart)}–{labelOf(labels, c.pageEnd)} · {c.pageEnd - c.pageStart + 1} 页
                       </span>
-                      <ChapterBadges chapter={c} pageWords={pageWords} pageParsers={pageParsers} pageKinds={pageKinds} pageFlags={pageFlags} labels={labels} />
+                      <ChapterBadges chapter={c} pageWords={pageWords} pageParsers={pageParsers} pageKinds={pageKinds} pageFlags={pageFlags} labels={labels} importedSet={importedSet} />
                     </label>
                     {external && !reading && refinable(c).some((p) => REFINE_KINDS.includes(pageKinds[p]!)) && (
                       <button
@@ -727,17 +1082,134 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
           )}
         </div>
       )}
+
+      {/* Multi-PDF attachment panel */}
+      <div className="card" data-testid="extra-sources-panel">
+        <div className="row between wrap">
+          <div>
+            <h3>📎 补充备课 PDF（真题卷 / 练习册 / 第二教材，可选）</h3>
+            <p className="muted small">可同时关联多份 PDF 的指定页段，大纲和练习页会自动融合并按虚拟页码精确标注来源 · Attach past papers or workbooks</p>
+          </div>
+          {!addingExtra && (
+            <button type="button" className="btn small" onClick={() => setAddingExtra(true)} data-testid="add-extra-pdf">
+              ＋ 添加补充 PDF Add PDF
+            </button>
+          )}
+        </div>
+
+        {extraSources.length > 0 && (
+          <ul className="doc-list" style={{ marginTop: 10 }}>
+            {extraSources.map((src, idx) => (
+              <li key={src.id} className="doc-item" data-testid="extra-source-item">
+                <span>
+                  <span className="badge">{ROLE_LABELS[src.role]}</span> <b>{src.title}</b>{" "}
+                  <span className="muted small">p. {src.rangeText}</span>
+                </span>
+                <button
+                  type="button"
+                  className="btn small ghost danger-text"
+                  data-testid={`remove-extra-pdf-${idx}`}
+                  onClick={() => setExtraSources((prev) => prev.filter((x) => x.id !== src.id))}
+                >
+                  移除 ✕
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {addingExtra && (
+          <div className="form-grid" style={{ marginTop: 12 }}>
+            <label className="span2">
+              选择已上传 PDF（或上传新文件）· PDF document
+              <div className="row">
+                <select
+                  value={extraDocId}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    setExtraDocId(id);
+                    const pickedDoc = candidateExtraDocs.find((d) => d.id === id);
+                    if (pickedDoc && !extraRangeInput) setExtraRangeInput(`1-${Math.min(10, pickedDoc.pageCount)}`);
+                  }}
+                  data-testid="extra-pdf-select"
+                  style={{ flex: 1 }}
+                >
+                  <option value="">— 选择 PDF —</option>
+                  {candidateExtraDocs.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.title}（{d.pageCount} 页）
+                    </option>
+                  ))}
+                </select>
+                <input
+                  ref={extraFilePicker}
+                  type="file"
+                  accept="application/pdf,.pdf"
+                  hidden
+                  data-testid="extra-pdf-file-input"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) void handleExtraPdfUpload(f);
+                    e.target.value = "";
+                  }}
+                />
+                <button
+                  type="button"
+                  className="btn small"
+                  disabled={extraUploading}
+                  onClick={() => extraFilePicker.current?.click()}
+                  data-testid="extra-pdf-upload-btn"
+                >
+                  {extraUploading ? "上传中…" : "上传新 PDF"}
+                </button>
+              </div>
+            </label>
+            <label>
+              用途 Role
+              <select value={extraRole} onChange={(e) => setExtraRole(e.target.value as PdfSourceRole)} data-testid="extra-pdf-role">
+                <option value="past_paper">真题卷 Past paper</option>
+                <option value="workbook">练习册 Workbook</option>
+                <option value="textbook">补充教材 Textbook</option>
+              </select>
+            </label>
+            <label>
+              选用页码 Page ranges
+              <input
+                value={extraRangeInput}
+                onChange={(e) => setExtraRangeInput(e.target.value)}
+                placeholder="例如 1-6"
+                data-testid="extra-pdf-ranges"
+              />
+            </label>
+            <div className="form-actions" style={{ gap: 8 }}>
+              <button type="button" className="btn small ghost" onClick={() => setAddingExtra(false)}>
+                取消 Cancel
+              </button>
+              <button
+                type="button"
+                className="btn small primary"
+                disabled={!extraDocId || !extraRangeInput.trim() || extraUploading}
+                onClick={() => void confirmAddExtraPdf()}
+                data-testid="confirm-extra-pdf"
+              >
+                关联这份 PDF Attach
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
       {error && <div className="alert error">{error}</div>}
       {thin && thinAck && (
         <div className="alert warn" role="alert" data-testid="thin-warning">
-          只选了约 {advice.estimatedMinutes} 分钟的内容，一节课是 {lessonMinutes} 分钟：大纲会用很多练习和讨论来填满。可以再勾选几节，或者确定就这么多。· About {advice.estimatedMinutes} of {lessonMinutes} min — add more, or continue anyway.
+          只选了约 {advice.estimatedMinutes} 分钟的内容，一节课是 {targetMinutes} 分钟：大纲会用很多练习和讨论来填满。可以再勾选几节，或者确定就这么多。· About {advice.estimatedMinutes} of {targetMinutes} min — add more, or continue anyway.
         </div>
       )}
       <div className="wizard-actions">
         <button className="btn ghost" onClick={() => nav(lesson ? "/" : "/new")}>
           ← 返回 Back
         </button>
-        <button className="btn primary" disabled={busy || !pages} onClick={next} data-testid="chapters-next">
+        <button className="btn primary" disabled={busy || !primaryPages} onClick={next} data-testid="chapters-next">
           {thin && thinAck ? "仍然继续 Continue anyway →" : "下一步：课时设置 Next →"}
         </button>
       </div>

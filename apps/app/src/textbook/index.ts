@@ -3,8 +3,8 @@
  * textbook's pages, chapters and labels. It knows nothing about lessons.
  */
 import { and, asc, between, count, desc, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
-import { chapterRunsOf, isEmptyPage, MIN_PAGE_WORDS, missingRanges, MUST_FIX_KINDS, PDFJS_PARSER, type PageFlag, normalizeRanges, pagesInRanges, rangesForChapters, sourceCut, topSections, type ChapterRun } from "@kj/textbook";
-import type { ChapterNode, LessonScope, PageKind, PageRange, PageText } from "@kj/schema";
+import { chapterRunsOf, countPages, isEmptyPage, MIN_PAGE_WORDS, missingRanges, MUST_FIX_KINDS, PDFJS_PARSER, type PageFlag, normalizeRanges, pagesInRanges, rangesForChapters, sourceCut, topSections, type ChapterRun } from "@kj/textbook";
+import { decodeSourcePage, encodeSourcePage, shortSourceTitle, SOURCE_STRIDE, type ChapterNode, type LessonScope, type PageKind, type PageRange, type PageText, type PdfLessonSource } from "@kj/schema";
 import { db } from "../db/index.ts";
 import type { Env, SessionUser } from "../env.ts";
 import { HttpError } from "../http.ts";
@@ -109,6 +109,8 @@ export interface PageMeta {
   flags: Record<number, PageFlag[]>;
   /** Only pages whose kind is neither `text` nor `blank` (must-fix and refine kinds). */
   kinds: Record<number, PageKind>;
+  /** Contiguous ranges of pages already uploaded to D1 (`[{ start: 1, end: pageCount }]` when complete). */
+  importedRanges: PageRange[];
 }
 
 /** Per-page facts for the chapters step, without page text. */
@@ -117,7 +119,16 @@ export async function pageMeta(env: Env, doc: Pick<TextbookRow, "id" | "pageCoun
     .select({ no: pages.no, words: pages.words, chars: pages.chars, label: pages.label, parser: pages.parser, flags: pages.flags, kind: pages.kind })
     .from(pages)
     .where(eq(pages.documentId, doc.id));
-  const meta: PageMeta = { labels: {}, words: new Array<number>(doc.pageCount).fill(0), chars: new Array<number>(doc.pageCount).fill(0), parsers: {}, flags: {}, kinds: {} };
+  const importedRanges =
+    rows.length === 0
+      ? []
+      : rows.length >= doc.pageCount
+        ? [{ start: 1, end: doc.pageCount }]
+        : normalizeRanges(
+            rows.map((p) => ({ start: p.no, end: p.no })),
+            doc.pageCount,
+          );
+  const meta: PageMeta = { labels: {}, words: new Array<number>(doc.pageCount).fill(0), chars: new Array<number>(doc.pageCount).fill(0), parsers: {}, flags: {}, kinds: {}, importedRanges };
   for (const p of rows) {
     meta.words[p.no - 1] = p.words;
     meta.chars[p.no - 1] = p.chars;
@@ -224,6 +235,115 @@ export async function chapterRuns(env: Env, documentId: string, scope: Pick<Less
   return chapterRunsOf(tree, scope, words);
 }
 
+/** Multi-PDF selection pages: `ord = 0` keeps raw `no`, `ord = k >= 1` maps to `k * 100_000 + no`. */
+export async function multiSelectionPages(env: Env, pdfSources: Pick<PdfLessonSource, "documentId" | "title" | "ranges">[]): Promise<PageText[]> {
+  if (!pdfSources.length) return [];
+  const groups = await Promise.all(pdfSources.map((src) => selectionPages(env, src.documentId, src.ranges)));
+  return groups.flatMap((list, idx) => {
+    const prefix = idx === 0 ? "" : shortSourceTitle(pdfSources[idx]!.title);
+    return list.map((p) => ({
+      no: encodeSourcePage(idx, p.no),
+      text: p.text,
+      ...(idx === 0 ? (p.label ? { label: p.label } : {}) : { label: `${prefix} p.${p.label ?? p.no}` }),
+    }));
+  });
+}
+
+/** Multi-PDF slide source pages: resolves cited virtual page numbers across attached PDFs (or full selection when uncited). */
+export async function multiSlideSourcePages(
+  env: Env,
+  pdfSources: Pick<PdfLessonSource, "documentId" | "title" | "ranges">[],
+  cited: number[],
+): Promise<PageText[]> {
+  if (pdfSources.length <= 1) {
+    const first = pdfSources[0];
+    return first ? slideSourcePages(env, first.documentId, cited, first.ranges) : [];
+  }
+  if (!cited.length) return multiSelectionPages(env, pdfSources);
+  const bySource = new Map<number, number[]>();
+  for (const v of [...new Set(cited)]) {
+    const { pdfIndex, pageNo } = decodeSourcePage(v);
+    if (pdfIndex < 0 || pdfIndex >= pdfSources.length) continue;
+    const allowed = new Set(pagesInRanges(pdfSources[pdfIndex]!.ranges));
+    if (!allowed.has(pageNo)) continue;
+    const arr = bySource.get(pdfIndex) ?? [];
+    arr.push(pageNo);
+    bySource.set(pdfIndex, arr);
+  }
+  const groups = await Promise.all(
+    [...bySource.entries()].map(async ([idx, nos]) => {
+      const src = pdfSources[idx]!;
+      const rows = await pageTexts(env, src.documentId, nos.sort((a, b) => a - b));
+      const prefix = idx === 0 ? "" : shortSourceTitle(src.title);
+      return rows.map((p) => ({
+        no: encodeSourcePage(idx, p.no),
+        text: p.text,
+        ...(idx === 0 ? (p.label ? { label: p.label } : {}) : { label: `${prefix} p.${p.label ?? p.no}` }),
+      }));
+    }),
+  );
+  return groups.flat().sort((a, b) => a.no - b.no);
+}
+
+/** Multi-PDF scope word/empty/unread stats across all attached PDFs. */
+export async function multiScopeStats(
+  env: Env,
+  pdfSources: Pick<PdfLessonSource, "documentId" | "ranges">[],
+  opts: { sourceBudget: number },
+): Promise<ScopeStats> {
+  if (pdfSources.length <= 1) {
+    const first = pdfSources[0];
+    return first ? scopeStats(env, first.documentId, first.ranges, opts) : { words: 0, emptyPages: [], unreadPages: [] };
+  }
+  const perSource = await Promise.all(
+    pdfSources.map(async (src, idx) => {
+      if (!src.ranges.length) return [];
+      const inRanges = or(...src.ranges.map((r) => and(gte(pages.no, r.start), lte(pages.no, r.end))));
+      const rows = await db(env)
+        .select({ no: pages.no, words: pages.words, chars: pages.chars })
+        .from(pages)
+        .where(and(eq(pages.documentId, src.documentId), inRanges))
+        .orderBy(asc(pages.no));
+      return rows.map((r) => ({ no: encodeSourcePage(idx, r.no), words: r.words, chars: r.chars }));
+    }),
+  );
+  const all = perSource.flat();
+  const withText = all.filter((r) => !isEmptyPage(r.words));
+  return {
+    words: withText.reduce((n, r) => n + r.words, 0),
+    emptyPages: all.filter((r) => isEmptyPage(r.words)).map((r) => r.no),
+    unreadPages: sourceCut(withText, opts.sourceBudget).omitted,
+  };
+}
+
+/** Multi-PDF page labels: primary PDF keeps printed labels; secondary PDFs map virtual pages to `"${shortTitle} p.N"`. */
+export async function multiLabelsFor(
+  env: Env,
+  pdfSources: Pick<PdfLessonSource, "documentId" | "title" | "ranges">[],
+  citedVirtualPages: number[],
+  opts: { includeRanges?: boolean } = { includeRanges: true },
+): Promise<Record<number, string>> {
+  if (!pdfSources.length) return {};
+  const includeRanges = opts.includeRanges ?? true;
+  const primaryCited = citedVirtualPages.filter((v) => v <= SOURCE_STRIDE);
+  const out: Record<number, string> = await labelsFor(env, pdfSources[0]!.documentId, {
+    ...(includeRanges ? { ranges: pdfSources[0]!.ranges } : {}),
+    pages: primaryCited,
+  });
+  for (let idx = 1; idx < pdfSources.length; idx++) {
+    const src = pdfSources[idx]!;
+    const citedForIdx = citedVirtualPages.filter((v) => decodeSourcePage(v).pdfIndex === idx).map((v) => decodeSourcePage(v).pageNo);
+    const wantedPages = includeRanges ? [...new Set([...pagesInRanges(src.ranges), ...citedForIdx])] : [...new Set(citedForIdx)];
+    if (!wantedPages.length) continue;
+    const rawLabels = await labelsFor(env, src.documentId, { ...(includeRanges ? { ranges: src.ranges } : {}), pages: citedForIdx });
+    const short = shortSourceTitle(src.title);
+    for (const pageNo of wantedPages) {
+      out[encodeSourcePage(idx, pageNo)] = `${short} p.${rawLabels[pageNo] ?? pageNo}`;
+    }
+  }
+  return out;
+}
+
 /**
  * A selection of chapters and page ranges checked against the textbook: known chapter ids, merged ranges
  * and a title from the topmost picked chapters. `existing`: re-scoping a lesson that already uses the
@@ -236,16 +356,46 @@ export async function resolveScope(
   chapterIds: string[],
   ranges: PageRange[],
   existing = false,
-): Promise<{ scope: { chapterIds: string[]; ranges: PageRange[] }; title: string }> {
+): Promise<{ scope: { chapterIds: string[]; ranges: PageRange[] }; title: string; docTitle: string }> {
   const doc = await ownedTextbook(env, user, documentId, { archived: existing });
-  if (doc.pagesReceived < doc.pageCount) throw new HttpError(409, "DOCUMENT_INCOMPLETE", "The PDF is still uploading · PDF 还在上传");
+  if (doc.pagesReceived === 0) throw new HttpError(409, "DOCUMENT_INCOMPLETE", "The PDF is still uploading · PDF 还在上传");
   const tree = await chapterTree(env, doc.id);
   const known = new Set(tree.map((c) => c.id));
   const ids = chapterIds.filter((id) => known.has(id));
   const fromChapters = ids.length ? rangesForChapters(tree, ids, doc.pageCount) : [];
   const merged = normalizeRanges([...fromChapters, ...ranges], doc.pageCount);
   if (!merged.length) throw new HttpError(400, "EMPTY_SCOPE", "Choose at least one chapter or page range · 请至少选择一个章节或页码范围");
+  if (doc.pagesReceived < doc.pageCount) {
+    const leavesWithWords = tree.filter((c) => c.words > 0 && !tree.some((k) => k.parentId === c.id));
+    if (leavesWithWords.length > 0) {
+      const presentRows = await db(env).select({ no: pages.no }).from(pages).where(eq(pages.documentId, doc.id));
+      const presentSet = new Set(presentRows.map((r) => r.no));
+      const midFlightFullUpload = leavesWithWords.some((ch) => {
+        for (let p = ch.pageStart; p <= ch.pageEnd; p++) if (presentSet.has(p)) return false;
+        return true;
+      });
+      if (midFlightFullUpload) throw new HttpError(409, "DOCUMENT_INCOMPLETE", "The PDF is still uploading · PDF 还在上传");
+      let haveInMerged = 0;
+      for (const r of merged) for (let p = r.start; p <= r.end; p++) if (presentSet.has(p)) haveInMerged++;
+      if (haveInMerged < countPages(merged)) {
+        throw new HttpError(409, "DOCUMENT_INCOMPLETE", "所选页码尚未导入完整，请先补传这些页 · Selected pages are not imported yet");
+      }
+    } else {
+      let haveInMerged = 0;
+      for (let i = 0; i < merged.length; i += 45) {
+        const chunk = merged.slice(i, i + 45);
+        const [cnt] = await db(env)
+          .select({ n: count() })
+          .from(pages)
+          .where(and(eq(pages.documentId, doc.id), or(...chunk.map((r) => between(pages.no, r.start, r.end)))));
+        haveInMerged += cnt?.n ?? 0;
+      }
+      if (haveInMerged < countPages(merged)) {
+        throw new HttpError(409, "DOCUMENT_INCOMPLETE", "所选页码尚未导入完整，请先补传这些页 · Selected pages are not imported yet");
+      }
+    }
+  }
   const picked = topSections(tree, ids);
   const title = picked.length ? picked.map((c) => c.title).join(" · ") : `${doc.title} pp. ${merged.map((r) => `${r.start}–${r.end}`).join(", ")}`;
-  return { scope: { chapterIds: ids, ranges: merged }, title: title.slice(0, 200) };
+  return { scope: { chapterIds: ids, ranges: merged }, title: title.slice(0, 200), docTitle: doc.title };
 }

@@ -12,7 +12,7 @@ import { createParseJob, externalNote, externalParserInfo, jobResult, pollJob, s
 import { parserSettingsOf } from "../textbook/parsers/settings.ts";
 import { MAX_IMAGE_CHARS, readPageImage, visionNote, visionParserInfo } from "../textbook/parsers/vision.ts";
 
-export const MAX_PAGES = 600;
+export const MAX_PAGES = 2500;
 export { PAGE_BATCH };
 
 const Sha256 = z.string().regex(/^[0-9a-f]{64}$/, "sha256 hex");
@@ -88,6 +88,7 @@ export const documentRoutes = new Hono<AppBindings>()
       pageParsers: meta.parsers,
       pageFlags: meta.flags,
       pageKinds: meta.kinds,
+      importedRanges: meta.importedRanges,
       externalParser,
       visionParser: visionParserInfo(settings, visionModel),
       /** Why each reader is unavailable (plain Chinese for the teacher), null when it can run. */

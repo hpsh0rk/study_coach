@@ -4,12 +4,12 @@ import { z } from "zod";
 import { checkSourcePages, draftOutline, problemsOf, slideKey, SlideInvalidError, SpecNotFoundError, workedSpecFor, writeSlide, type PlannerSection } from "@kj/generation";
 import { leafSections } from "@kj/textbook";
 import { outlineTiming } from "@kj/pedagogy";
-import { DEFAULT_PARAMS, LessonParams, newId, Outline, PageRange, sha256Hex, SlideContent, ThemeId, type ChapterNode, type LessonScope } from "@kj/schema";
+import { DEFAULT_PARAMS, LessonParams, LessonSource, newId, Outline, PageRange, sha256Hex, SlideContent, ThemeId, type ChapterNode, type LessonScope } from "@kj/schema";
 import { layoutForPageType, SLOT_SCHEMAS } from "@kj/templates";
 import { describeIssue, slotIssues, widgetIssues } from "@kj/templates/issues";
-import { assertModelAllowance, makeAi } from "../ai.ts";
+import { assertModelAllowance, makeAi, visionModelOf } from "../ai.ts";
 import { auditLog, lessons, outlineVersions, shareLinks, slideLocks, slides } from "../db/schema.ts";
-import type { AppBindings, Env } from "../env.ts";
+import type { AppBindings, Env, SessionUser } from "../env.ts";
 import { HttpError, parseJson } from "../http.ts";
 import { requireUser } from "../auth/session.ts";
 import { db } from "../db/index.ts";
@@ -20,15 +20,18 @@ import {
   confirmedOutline,
   citedPages,
   deckExport,
+  effectiveSourcesForVersion,
   flaggedSlides,
   latestConfirmed,
   latestVersion,
   lessonList,
+  lessonSources,
   lessonView,
   lessonParams,
   lessonScope,
   outlineOf,
   ownedLesson,
+  pdfSourcesOf,
   shareableVersion,
   shareToken,
   shareView,
@@ -43,7 +46,8 @@ import {
   type SlideRow,
   type VersionRow,
 } from "../store.ts";
-import { chapterTree, labelsFor, resolveScope, selectionPages, slideSourcePages } from "../textbook/index.ts";
+import { chapterTree, multiLabelsFor, multiSelectionPages, multiSlideSourcePages, resolveScope } from "../textbook/index.ts";
+import { MAX_IMAGE_CHARS, transcribeSyllabusImage } from "../textbook/parsers/vision.ts";
 
 const AnswerMode = z.enum(["hidden", "shown"]);
 
@@ -88,13 +92,15 @@ async function generateSlideForVersion(
     const done = regenerate ? undefined : (await d.select().from(slides).where(and(eq(slides.outlineVersionId, v.id), eq(slides.specId, specId))).limit(1))[0];
     if (done) return c.json({ slide: slideFromRow(done), reused: true });
     const params = versionParams(v);
+    const vScope = versionScope(v);
+    const pdfSources = pdfSourcesOf(effectiveSourcesForVersion(lesson, v), lesson.documentId, vScope);
     const worked = workedSpecFor(outline, specId);
     const workedRow = worked ? (await d.select({ content: slides.content }).from(slides).where(and(eq(slides.outlineVersionId, v.id), eq(slides.specId, worked))).limit(1))[0] : undefined;
     const workedContent = workedRow ? SlideContent.parse(JSON.parse(workedRow.content)) : undefined;
     const res = await writeSlide(makeAi(c.env, u.orgId), outline, specId, {
       lessonTitle: lesson.title,
       params,
-      pages: await slideSourcePages(c.env, lesson.documentId, spec.sourcePages, versionScope(v).ranges),
+      pages: await multiSlideSourcePages(c.env, pdfSources, spec.sourcePages),
       workedProblem: workedContent?.layout === "steps" ? workedContent.problem : undefined,
       ...(instruction ? { instruction } : {}),
       ctx: { orgId: u.orgId, userId: u.id, lessonId: lesson.id },
@@ -158,7 +164,9 @@ async function recheckSources(env: Env, lesson: LessonRow, v: VersionRow, outlin
   const before = new Map(outlineOf(v).slides.map((s) => [s.id, s]));
   const same = (a: number[], b: number[]) => a.length === b.length && a.every((p, i) => p === b[i]);
   const changed = outline.slides.some((s) => !before.has(s.id) || !same(before.get(s.id)!.sourcePages, s.sourcePages));
-  const pageTexts = changed ? await selectionPages(env, lesson.documentId, versionScope(v).ranges) : [];
+  const vScope = versionScope(v);
+  const pdfSources = pdfSourcesOf(effectiveSourcesForVersion(lesson, v), lesson.documentId, vScope);
+  const pageTexts = changed ? await multiSelectionPages(env, pdfSources) : [];
   const checked = changed ? checkSourcePages(outline.slides.map((s) => ({ ...s, sourceIssue: undefined })), pageTexts.map((p) => p.no), pageTexts) : outline.slides;
   return {
     ...outline,
@@ -193,36 +201,168 @@ async function ownedSlide(env: Env, lessonId: string, slideId: string): Promise<
   return row;
 }
 
+async function normalizeSourcesForLesson(
+  env: Env,
+  user: SessionUser,
+  primaryFallback: { documentId: string; chapterIds: string[]; ranges: PageRange[] },
+  rawSources: LessonSource[],
+  existing: boolean,
+): Promise<{ documentId: string; scope: { chapterIds: string[]; ranges: PageRange[] }; title: string; sources: LessonSource[] }> {
+  const normalized: LessonSource[] = [];
+  let firstPdfResolved: Awaited<ReturnType<typeof resolveScope>> | null = null;
+  let firstPdfId = "";
+
+  for (const s of rawSources) {
+    if (s.kind === "pdf") {
+      const resolved = await resolveScope(env, user, s.documentId, s.chapterIds ?? [], s.ranges, existing);
+      if (!firstPdfResolved) {
+        firstPdfResolved = resolved;
+        firstPdfId = s.documentId;
+      }
+      normalized.push({
+        ...s,
+        title: (s.title || resolved.docTitle).slice(0, 300),
+        ...(resolved.scope.chapterIds.length ? { chapterIds: resolved.scope.chapterIds } : {}),
+        ranges: resolved.scope.ranges,
+      });
+    } else {
+      normalized.push(s);
+    }
+  }
+
+  if (!firstPdfResolved) {
+    const resolved = await resolveScope(env, user, primaryFallback.documentId, primaryFallback.chapterIds, primaryFallback.ranges, existing);
+    firstPdfResolved = resolved;
+    firstPdfId = primaryFallback.documentId;
+    normalized.unshift({
+      id: "src_primary",
+      kind: "pdf",
+      documentId: primaryFallback.documentId,
+      title: resolved.docTitle.slice(0, 300),
+      ...(resolved.scope.chapterIds.length ? { chapterIds: resolved.scope.chapterIds } : {}),
+      ranges: resolved.scope.ranges,
+      role: "textbook",
+    });
+  }
+
+  return {
+    documentId: firstPdfId,
+    scope: firstPdfResolved.scope,
+    title: firstPdfResolved.title,
+    sources: normalized,
+  };
+}
+
+const SyllabusImageBody = z.object({
+  image: z.string().max(MAX_IMAGE_CHARS),
+  title: z.string().trim().max(200).optional(),
+});
+
 export const lessonRoutes = new Hono<AppBindings>()
   .use(requireUser())
   .get("/", async (c) => c.json({ lessons: await lessonList(c.env, c.get("user")) }))
-  .post("/", async (c) => {
-    const body = await parseJson(c, z.object({ documentId: z.string(), chapterIds: z.array(z.string()).max(200).default([]), ranges: z.array(PageRange).max(50).default([]), title: z.string().trim().max(200).optional() }));
+  .post("/syllabus-image", async (c) => {
+    if (Number(c.req.header("content-length") ?? 0) > MAX_IMAGE_CHARS + 1_000) throw new HttpError(413, "TOO_LARGE", "考纲图片太大 · Image too large");
+    const body = await parseJson(c, SyllabusImageBody);
     const u = c.get("user");
-    const { scope, title } = await resolveScope(c.env, u, body.documentId, body.chapterIds, body.ranges);
+    await assertModelAllowance(c.env, u);
+    return c.json(await transcribeSyllabusImage(c.env, u, makeAi(c.env, u.orgId), await visionModelOf(c.env, u.orgId), body));
+  })
+  .post("/:id/syllabus-image", async (c) => {
+    const u = c.get("user");
+    const lesson = await ownedLesson(c.env, u, c.req.param("id"));
+    if (Number(c.req.header("content-length") ?? 0) > MAX_IMAGE_CHARS + 1_000) throw new HttpError(413, "TOO_LARGE", "考纲图片太大 · Image too large");
+    const body = await parseJson(c, SyllabusImageBody);
+    await assertModelAllowance(c.env, u);
+    return c.json(await transcribeSyllabusImage(c.env, u, makeAi(c.env, u.orgId), await visionModelOf(c.env, u.orgId), { ...body, lessonId: lesson.id }));
+  })
+  .post("/", async (c) => {
+    const body = await parseJson(
+      c,
+      z.object({
+        documentId: z.string(),
+        chapterIds: z.array(z.string()).max(200).default([]),
+        ranges: z.array(PageRange).max(50).default([]),
+        sources: z.array(LessonSource).max(12).optional(),
+        params: LessonParams.optional(),
+        title: z.string().trim().max(200).optional(),
+      }),
+    );
+    const u = c.get("user");
+    const resolved = body.sources?.length
+      ? await normalizeSourcesForLesson(c.env, u, { documentId: body.documentId, chapterIds: body.chapterIds, ranges: body.ranges }, body.sources, false)
+      : { ...(await resolveScope(c.env, u, body.documentId, body.chapterIds, body.ranges)), documentId: body.documentId, sources: undefined };
     const id = newId("les");
     await db(c.env)
       .insert(lessons)
-      .values({ id, orgId: u.orgId, ownerId: u.id, documentId: body.documentId, title: body.title || title, scope: JSON.stringify(scope), params: JSON.stringify(DEFAULT_PARAMS) });
+      .values({
+        id,
+        orgId: u.orgId,
+        ownerId: u.id,
+        documentId: resolved.documentId,
+        title: body.title || resolved.title,
+        scope: JSON.stringify(resolved.scope),
+        ...(resolved.sources ? { sourcesJson: JSON.stringify(resolved.sources) } : {}),
+        params: JSON.stringify(body.params ?? DEFAULT_PARAMS),
+      });
     return c.json(await lessonView(c.env, await ownedLesson(c.env, u, id)), 201);
   })
   .get("/:id", async (c) => c.json(await lessonView(c.env, await ownedLesson(c.env, c.get("user"), c.req.param("id")))))
   .patch("/:id", async (c) => {
     const body = await parseJson(
       c,
-      z.object({ title: z.string().trim().min(1).max(200).optional(), params: LessonParams.optional(), theme: ThemeId.optional(), chapterIds: z.array(z.string()).max(200).optional(), ranges: z.array(PageRange).max(50).optional() }),
+      z.object({
+        title: z.string().trim().min(1).max(200).optional(),
+        params: LessonParams.optional(),
+        theme: ThemeId.optional(),
+        chapterIds: z.array(z.string()).max(200).optional(),
+        ranges: z.array(PageRange).max(50).optional(),
+        sources: z.array(LessonSource).max(12).optional(),
+      }),
     );
     const u = c.get("user");
     const lesson = await ownedLesson(c.env, u, c.req.param("id"));
+    const curScope = lessonScope(lesson);
     const patch: Partial<typeof lessons.$inferInsert> = { updatedAt: Date.now() };
     if (body.title) patch.title = body.title;
     if (body.params) patch.params = JSON.stringify(body.params);
     if (body.theme) patch.theme = body.theme;
-    if (body.chapterIds || body.ranges) {
-      const { scope, title } = await resolveScope(c.env, u, lesson.documentId, body.chapterIds ?? [], body.ranges ?? [], true);
-      const unit = lessonScope(lesson).unit;
-      patch.scope = JSON.stringify(unit ? { ...scope, unit } : scope);
+    if (body.sources !== undefined) {
+      const fallback = {
+        documentId: lesson.documentId,
+        chapterIds: body.chapterIds ?? curScope.chapterIds,
+        ranges: body.ranges ?? curScope.ranges,
+      };
+      if (body.sources.length === 0) {
+        patch.sourcesJson = null;
+        if (body.chapterIds || body.ranges) {
+          const { scope, title } = await resolveScope(c.env, u, lesson.documentId, body.chapterIds ?? [], body.ranges ?? [], true);
+          patch.scope = JSON.stringify(curScope.unit ? { ...scope, unit: curScope.unit } : scope);
+          if (!body.title) patch.title = title;
+        }
+      } else {
+        const resolved = await normalizeSourcesForLesson(c.env, u, fallback, body.sources, true);
+        patch.documentId = resolved.documentId;
+        patch.scope = JSON.stringify(curScope.unit ? { ...resolved.scope, unit: curScope.unit } : resolved.scope);
+        patch.sourcesJson = JSON.stringify(resolved.sources);
+        if (!body.title && (body.chapterIds || body.ranges || resolved.documentId !== lesson.documentId)) patch.title = resolved.title;
+      }
+    } else if (body.chapterIds || body.ranges) {
+      const { scope, title, docTitle } = await resolveScope(c.env, u, lesson.documentId, body.chapterIds ?? [], body.ranges ?? [], true);
+      patch.scope = JSON.stringify(curScope.unit ? { ...scope, unit: curScope.unit } : scope);
       if (!body.title) patch.title = title;
+      const existingSources = lessonSources(lesson);
+      if (existingSources.length > 0) {
+        let updatedPrimary = false;
+        const synced = existingSources.map((s) => {
+          if (!updatedPrimary && s.kind === "pdf" && s.documentId === lesson.documentId) {
+            updatedPrimary = true;
+            return { ...s, title: s.title || docTitle, chapterIds: scope.chapterIds, ranges: scope.ranges };
+          }
+          return s;
+        });
+        patch.sourcesJson = JSON.stringify(synced);
+      }
     }
     await db(c.env).update(lessons).set(patch).where(eq(lessons.id, lesson.id));
     return c.json(await lessonView(c.env, await ownedLesson(c.env, u, lesson.id)));
@@ -233,7 +373,9 @@ export const lessonRoutes = new Hono<AppBindings>()
     const u = c.get("user");
     const lesson = await ownedLesson(c.env, u, c.req.param("id"));
     const scope = lessonScope(lesson);
-    const [pageTexts, tree] = await Promise.all([selectionPages(c.env, lesson.documentId, scope.ranges), chapterTree(c.env, lesson.documentId)]);
+    const sources = lessonSources(lesson);
+    const pdfSources = pdfSourcesOf(sources, lesson.documentId, scope);
+    const [pageTexts, tree] = await Promise.all([multiSelectionPages(c.env, pdfSources), chapterTree(c.env, lesson.documentId)]);
     if (!pageTexts.length) {
       throw new HttpError(422, "NO_SOURCE_TEXT", "所选页面都没有可读的文字（可能是扫描图），不能凭空起草。请回到“选章节”，为这些页粘贴文字 · The selected pages have no text; paste it on the chapters step");
     }
@@ -245,6 +387,7 @@ export const lessonRoutes = new Hono<AppBindings>()
       .where(and(eq(lessons.id, lesson.id), or(isNull(lessons.draftingUntil), lt(lessons.draftingUntil, now))))
       .returning({ id: lessons.id });
     if (!locked.length) throw new HttpError(409, "DRAFT_IN_PROGRESS", "这节课的大纲正在生成中，请稍候（通常 30–90 秒）· An outline draft is already running");
+    const snapshotScope = sources.length ? JSON.stringify({ ...scope, sources }) : lesson.scope;
     const run = (async () => {
       try {
         const res = await draftOutline(makeAi(c.env, u.orgId), {
@@ -252,9 +395,10 @@ export const lessonRoutes = new Hono<AppBindings>()
           params: lessonParams(lesson),
           sections: sectionsOf(tree, scope),
           pages: pageTexts,
+          ...(sources.length ? { sources } : {}),
           ctx: { orgId: u.orgId, userId: u.id, lessonId: lesson.id },
         });
-        return { v: await insertVersion(c.env, lesson, res.outline), providerId: res.providerId };
+        return { v: await insertVersion(c.env, lesson, res.outline, { params: lesson.params, scope: snapshotScope }), providerId: res.providerId };
       } finally {
         await db(c.env).update(lessons).set({ draftingUntil: null, updatedAt: Date.now() }).where(eq(lessons.id, lesson.id));
       }
@@ -378,7 +522,8 @@ export const lessonRoutes = new Hono<AppBindings>()
     const includeNotes = c.req.query("audience") !== "student";
     const answers = c.req.query("answers") === "shown" ? "shown" : "hidden";
     const deck = await slidesOf(c.env, v);
-    return c.json(deckExport(lesson, v, deck, { includeNotes, answers, pageLabels: await labelsFor(c.env, lesson.documentId, { pages: citedPages(deck) }) }));
+    const pdfSources = pdfSourcesOf(effectiveSourcesForVersion(lesson, v), lesson.documentId, versionScope(v));
+    return c.json(deckExport(lesson, v, deck, { includeNotes, answers, pageLabels: await multiLabelsFor(c.env, pdfSources, citedPages(deck), { includeRanges: false }) }));
   })
   /**
    * Shares a frozen version. With a link already active this keeps the same URL (on the same

@@ -1,13 +1,28 @@
-import { and, count, desc, eq, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm";
+import { z } from "zod";
+import { and, desc, eq, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import { checkSourceText, slideKey, sourceUnverified, suspiciousContent } from "@kj/generation";
 import { checkOutline, OUTLINE_SOURCE_CHARS, outlineTiming, verifyNumbers } from "@kj/pedagogy";
-import { LessonParams, LessonScope, newId, Outline, SlideContent, type PageType, type Slide, type Unverified } from "@kj/schema";
+import {
+  decodeSourcePage,
+  LessonParams,
+  LessonScope,
+  LessonSource,
+  newId,
+  Outline,
+  shortSourceTitle,
+  SlideContent,
+  SOURCE_STRIDE,
+  type PageType,
+  type PdfLessonSource,
+  type Slide,
+  type Unverified,
+} from "@kj/schema";
 import { seededRandom, withoutAnswers } from "@kj/templates";
 import { db } from "./db/index.ts";
 import { lessons, outlineVersions, shareLinks, slideLocks, slides } from "./db/schema.ts";
 import { secret, type Env, type SessionUser } from "./env.ts";
 import { HttpError } from "./http.ts";
-import { labelsFor, pageTexts, scopeStats, selectionPages } from "./textbook/index.ts";
+import { multiLabelsFor, multiScopeStats, multiSlideSourcePages } from "./textbook/index.ts";
 
 export type LessonRow = typeof lessons.$inferSelect;
 export type VersionRow = typeof outlineVersions.$inferSelect;
@@ -20,23 +35,56 @@ export async function ownedLesson(env: Env, user: SessionUser, id: string, opts:
   return row;
 }
 
-/** Lessons (not deleted) made from a textbook. */
-export async function lessonsUsing(env: Env, documentId: string): Promise<number> {
-  const [used] = await db(env).select({ n: count() }).from(lessons).where(and(eq(lessons.documentId, documentId), isNull(lessons.archivedAt)));
-  return used?.n ?? 0;
+export function parseLessonSources(raw: string | null | undefined): LessonSource[] {
+  if (!raw) return [];
+  try {
+    const parsed = z.array(LessonSource).safeParse(JSON.parse(raw));
+    return parsed.success ? parsed.data : [];
+  } catch {
+    return [];
+  }
 }
 
-/** Lessons made from each textbook: `live` leaves out archived lessons; `all` counts every lesson still pointing at it. */
+export const lessonSources = (l: Pick<LessonRow, "sourcesJson">) => parseLessonSources(l.sourcesJson);
+
+/** Lessons (not deleted) made from a textbook (either primary document_id or secondary PDF in sources_json). */
+export async function lessonsUsing(env: Env, documentId: string): Promise<number> {
+  return (await lessonCountsByDocument(env, [documentId]))[documentId]?.live ?? 0;
+}
+
+/** Lessons made from each textbook: `live` leaves out archived lessons; `all` counts every lesson still pointing at it (including secondary PDFs in sources_json). */
 export async function lessonCountsByDocument(env: Env, documentIds: string[]): Promise<Record<string, { live: number; all: number }>> {
   const out: Record<string, { live: number; all: number }> = {};
   for (const id of documentIds) out[id] = { live: 0, all: 0 };
   if (!documentIds.length) return out;
-  const rows = await db(env)
-    .select({ id: lessons.documentId, live: sql<number>`sum(case when ${lessons.archivedAt} is null then 1 else 0 end)`, all: count() })
+  const wanted = new Set(documentIds);
+  const allSets = new Map<string, Set<string>>(documentIds.map((id) => [id, new Set<string>()]));
+  const liveSets = new Map<string, Set<string>>(documentIds.map((id) => [id, new Set<string>()]));
+
+  const primaryRows = await db(env)
+    .select({ lessonId: lessons.id, documentId: lessons.documentId, archivedAt: lessons.archivedAt })
     .from(lessons)
-    .where(inArray(lessons.documentId, documentIds))
-    .groupBy(lessons.documentId);
-  for (const r of rows) out[r.id] = { live: r.live ?? 0, all: r.all };
+    .where(inArray(lessons.documentId, documentIds));
+  for (const r of primaryRows) {
+    allSets.get(r.documentId)?.add(r.lessonId);
+    if (r.archivedAt === null) liveSets.get(r.documentId)?.add(r.lessonId);
+  }
+
+  const multiRows = await db(env)
+    .select({ lessonId: lessons.id, sourcesJson: lessons.sourcesJson, archivedAt: lessons.archivedAt })
+    .from(lessons)
+    .where(isNotNull(lessons.sourcesJson));
+  for (const r of multiRows) {
+    for (const s of parseLessonSources(r.sourcesJson)) {
+      if (s.kind !== "pdf" || !wanted.has(s.documentId)) continue;
+      allSets.get(s.documentId)?.add(r.lessonId);
+      if (r.archivedAt === null) liveSets.get(s.documentId)?.add(r.lessonId);
+    }
+  }
+
+  for (const id of documentIds) {
+    out[id] = { live: liveSets.get(id)?.size ?? 0, all: allSets.get(id)?.size ?? 0 };
+  }
   return out;
 }
 
@@ -45,6 +93,34 @@ export const lessonScope = (l: LessonRow) => LessonScope.parse(JSON.parse(l.scop
 /** A version's own snapshot: later changes to the lesson settings never affect it. */
 export const versionParams = (v: VersionRow) => LessonParams.parse(JSON.parse(v.params));
 export const versionScope = (v: VersionRow) => LessonScope.parse(JSON.parse(v.scope));
+
+export function effectiveSourcesForVersion(lesson: Pick<LessonRow, "sourcesJson">, version?: VersionRow | null): LessonSource[] {
+  if (version) {
+    const vScope = versionScope(version);
+    if (vScope.sources?.length) return vScope.sources;
+  }
+  return lessonSources(lesson);
+}
+
+export function pdfSourcesOf(
+  sources: LessonSource[],
+  fallbackDocumentId: string,
+  fallbackScope: Pick<LessonScope, "chapterIds" | "ranges">,
+): PdfLessonSource[] {
+  const pdfs = sources.filter((s): s is PdfLessonSource => s.kind === "pdf");
+  if (pdfs.length > 0) return pdfs;
+  return [
+    {
+      id: "src_primary",
+      kind: "pdf",
+      documentId: fallbackDocumentId,
+      title: "",
+      chapterIds: fallbackScope.chapterIds,
+      ranges: fallbackScope.ranges,
+      role: "textbook",
+    },
+  ];
+}
 
 export async function versionOf(env: Env, lessonId: string, versionId: string): Promise<VersionRow> {
   const row = (await db(env).select().from(outlineVersions).where(and(eq(outlineVersions.id, versionId), eq(outlineVersions.lessonId, lessonId))).limit(1))[0];
@@ -89,13 +165,18 @@ export function slideFromRow(r: SlideRow): Slide {
 
 /**
  * Re-runs the 待核实 check for edited content against the slide's cited pages (or the version's whole
- * selection); the outline's source-page flag for the slide stays until the outline itself is fixed.
+ * selection across all attached PDF sources); the outline's source-page flag for the slide stays until the outline itself is fixed.
  */
 export async function unverifiedFor(env: Env, documentId: string, row: SlideRow, content: SlideContent, notes: string): Promise<Unverified[]> {
   const sources = JSON.parse(row.sources) as number[];
-  const version = await versionOf(env, row.lessonId, row.outlineVersionId);
+  const [version, lessonRow] = await Promise.all([
+    versionOf(env, row.lessonId, row.outlineVersionId),
+    db(env).select({ sourcesJson: lessons.sourcesJson }).from(lessons).where(eq(lessons.id, row.lessonId)).limit(1),
+  ]);
+  const vScope = versionScope(version);
+  const pdfSources = pdfSourcesOf(effectiveSourcesForVersion(lessonRow[0] ?? { sourcesJson: null }, version), documentId, vScope);
   const spec = outlineOf(version).slides.find((s) => s.id === row.specId);
-  const list = sources.length ? await pageTexts(env, documentId, sources) : await selectionPages(env, documentId, versionScope(version).ranges);
+  const list = await multiSlideSourcePages(env, pdfSources, sources);
   return [...(spec ? sourceUnverified(spec) : []), ...verifyNumbers(content, checkSourceText(sources, list), { pageType: row.pageType as PageType, notes })].slice(0, 10);
 }
 
@@ -235,6 +316,16 @@ export function deckExport(lesson: LessonRow, version: VersionRow, list: Slide[]
   const answers: AnswerMode = extra.includeNotes ? "shown" : (extra.answers ?? "hidden");
   const params = versionParams(version);
   const scope = versionScope(version);
+  const pdfSources = pdfSourcesOf(effectiveSourcesForVersion(lesson, version), lesson.documentId, scope);
+  const pageLabels: Record<number, string> = { ...extra.pageLabels };
+  if (pdfSources.length > 1) {
+    for (const v of citedPages(list)) {
+      if (v <= SOURCE_STRIDE || pageLabels[v]) continue;
+      const { pdfIndex, pageNo } = decodeSourcePage(v);
+      const src = pdfSources[pdfIndex];
+      if (src) pageLabels[v] = `${shortSourceTitle(src.title)} p.${pageNo}`;
+    }
+  }
   return {
     lesson: {
       id: lesson.id,
@@ -245,7 +336,7 @@ export function deckExport(lesson: LessonRow, version: VersionRow, list: Slide[]
       lessonType: params.lessonType,
       language: params.language,
       pageRanges: scope.ranges.map((r) => [r.start, r.end]),
-      pageLabels: extra.pageLabels,
+      pageLabels,
       answers,
     },
     meta: { outlineVersion: version.version, confirmedAt: version.confirmedAt },
@@ -305,15 +396,17 @@ export async function shareView(env: Env, lessonId: string) {
  */
 export async function lessonView(env: Env, lesson: LessonRow) {
   const scope = lessonScope(lesson);
+  const sources = lessonSources(lesson);
+  const pdfSources = pdfSourcesOf(sources, lesson.documentId, scope);
   const [latest, confirmed, stats, share] = await Promise.all([
     latestVersion(env, lesson.id),
     latestConfirmed(env, lesson.id),
-    scopeStats(env, lesson.documentId, scope.ranges, { sourceBudget: OUTLINE_SOURCE_CHARS }),
+    multiScopeStats(env, pdfSources, { sourceBudget: OUTLINE_SOURCE_CHARS }),
     shareView(env, lesson.id),
   ]);
   const deck = confirmed ? await slidesOf(env, confirmed) : [];
   const outlinePages = [latest, confirmed].flatMap((v) => (v ? outlineOf(v).slides.flatMap((s) => s.sourcePages) : []));
-  const labels = await labelsFor(env, lesson.documentId, { ranges: scope.ranges, pages: [...citedPages(deck), ...outlinePages] });
+  const labels = await multiLabelsFor(env, pdfSources, [...citedPages(deck), ...outlinePages]);
   const drafting = lesson.draftingUntil !== null && lesson.draftingUntil > Date.now();
   return {
     lesson: {
@@ -323,6 +416,7 @@ export async function lessonView(env: Env, lesson: LessonRow) {
       theme: lesson.theme,
       params: lessonParams(lesson),
       scope,
+      sources,
       scopeWords: stats.words,
       emptyPages: stats.emptyPages,
       unreadPages: stats.unreadPages,

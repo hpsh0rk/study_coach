@@ -4,7 +4,8 @@ import { ApiError } from "../api.ts";
 import { documentApi, type LibraryRow } from "../textbook/api.ts";
 
 function status(r: LibraryRow): { text: string; tone: "ready" | "warn" | "parsing" } {
-  if (r.pagesReceived < r.pageCount) return { text: `上传未完成 ${r.pagesReceived} / ${r.pageCount} 页`, tone: "parsing" };
+  if (r.pagesReceived === 0) return { text: `上传未完成 0 / ${r.pageCount} 页`, tone: "parsing" };
+  if (r.pagesReceived < r.pageCount) return { text: `已导入 ${r.pagesReceived} / ${r.pageCount} 页`, tone: "ready" };
   if (r.flaggedPages > 0) return { text: `${r.flaggedPages} 页还没读好`, tone: "warn" };
   return { text: "已读好", tone: "ready" };
 }
@@ -117,7 +118,7 @@ export function TextbooksPage() {
                     <td data-testid="library-lessons">{r.lessons > 0 ? `${r.lessons} 节` : "—"}</td>
                     <td className="muted small">{new Date(r.createdAt).toLocaleString()}</td>
                     <td className="row end">
-                      {!archived && r.pagesReceived === r.pageCount && (
+                      {!archived && r.pagesReceived > 0 && (
                         <button className="btn small" onClick={() => nav(`/new/${r.id}`)} data-testid="library-open" title="查看每页读出来的文字，重新读没读好的页，或选章节备一节新课">
                           查看页面 / 备课
                         </button>
