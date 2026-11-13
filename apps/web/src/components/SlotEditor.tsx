@@ -1,11 +1,12 @@
-import { useContext, useDeferredValue, useMemo, useRef, useState, type ReactNode } from "react";
-import { countWords, SlideContent as SlideContentSchema, type PageType, type SlideContent, type ThemeId, type Unverified, type WidgetSpec } from "@kj/schema";
+import { useContext, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { countWords, SlideContent as SlideContentSchema, type ChartSpec, type PageType, type SlideContent, type ThemeId, type Unverified, type WidgetSpec } from "@kj/schema";
 import { BUDGETS, type ListBudget, type TextBudget } from "@kj/templates";
 import { describeIssue, slotIssues, widgetIssues, type SlotIssue } from "@kj/templates/issues";
 import { resolveEmbed } from "@kj/widgets";
 import { ApiError } from "../api.ts";
+import { formatChartCategories, formatChartSeries, parseChartCategories, parseChartSeries } from "./chartForm.ts";
 import { SlidePreview } from "./SlideView.tsx";
-import { FlagContext, isFlagged, UnverifiedBox } from "./Unverified.tsx";
+import { activeUnverified, FlagContext, isFlagged, UnverifiedBox } from "./Unverified.tsx";
 
 type Obj = Record<string, any>;
 type Path = (string | number)[];
@@ -98,7 +99,7 @@ const VISUAL_LABEL: Record<VisualKind, string> = {
   flow: "流程图 Flow",
   table: "表格 Table",
   function: "函数图像 Function plot",
-  chart: "数据图表 Chart (JSON)",
+  chart: "数据图表 Chart",
   placeholder: "图示待补 Visual to add",
 };
 
@@ -230,8 +231,16 @@ function ItemsField({ def, value, path, issues, onChange }: { def: Extract<Def, 
 }
 
 function JsonField({ value, path, onChange }: { value: unknown; path: Path; onChange: (p: Path, v: unknown) => void }) {
-  const [raw, setRaw] = useState(() => JSON.stringify(value, null, 2));
+  const serialized = useMemo(() => JSON.stringify(value, null, 2), [value]);
+  const [raw, setRaw] = useState(serialized);
   const [bad, setBad] = useState(false);
+  const focusedRef = useRef(false);
+  useEffect(() => {
+    if (!focusedRef.current) {
+      setRaw(serialized);
+      setBad(false);
+    }
+  }, [serialized]);
   return (
     <>
       <textarea
@@ -239,6 +248,12 @@ function JsonField({ value, path, onChange }: { value: unknown; path: Path; onCh
         rows={6}
         value={raw}
         data-slot-path={path.join(".")}
+        onFocus={() => {
+          focusedRef.current = true;
+        }}
+        onBlur={() => {
+          focusedRef.current = false;
+        }}
         onChange={(e) => {
           setRaw(e.target.value);
           try {
@@ -250,6 +265,105 @@ function JsonField({ value, path, onChange }: { value: unknown; path: Path; onCh
         }}
       />
       {bad && <span className="count over">JSON 格式不完整 · incomplete JSON</span>}
+    </>
+  );
+}
+
+function ChartFields({ value, path, issues, onChange }: { value: Obj; path: Path; issues: SlotIssue[]; onChange: (p: Path, v: unknown) => void }) {
+  const at = (k: string) => [...path, k];
+  const chartType = (value.type as ChartSpec["type"]) ?? "bar";
+  const seriesVal = ((value.series as ChartSpec["series"] | undefined) ?? [{ name: "", data: [1, 2] }]);
+  const extCats = useMemo(() => formatChartCategories(value.categories as string[] | undefined), [value.categories]);
+  const extSeries = useMemo(() => formatChartSeries(seriesVal), [seriesVal]);
+  const [catsText, setCatsText] = useState(extCats);
+  const [seriesText, setSeriesText] = useState(extSeries);
+  const catsFocused = useRef(false);
+  const seriesFocused = useRef(false);
+
+  useEffect(() => {
+    if (!catsFocused.current) setCatsText(extCats);
+  }, [extCats]);
+  useEffect(() => {
+    if (!seriesFocused.current) setSeriesText(extSeries);
+  }, [extSeries]);
+
+  return (
+    <>
+      <label className="slot-field inline">
+        <span>图表类型 Chart type</span>
+        <select
+          value={chartType}
+          data-testid="chart-type"
+          onChange={(e) => {
+            const nextType = e.target.value as ChartSpec["type"];
+            onChange(at("type"), nextType);
+          }}
+        >
+          <option value="bar">柱状图 Bar</option>
+          <option value="line">折线图 Line</option>
+          <option value="scatter">散点图 Scatter</option>
+        </select>
+      </label>
+      <div className="row">
+        <label className="slot-field">
+          <span>横轴名称 x label</span>
+          <input value={String(value.xLabel ?? "")} onChange={(e) => onChange(at("xLabel"), e.target.value)} data-slot-path={at("xLabel").join(".")} />
+        </label>
+        <label className="slot-field">
+          <span>纵轴名称 y label</span>
+          <input value={String(value.yLabel ?? "")} onChange={(e) => onChange(at("yLabel"), e.target.value)} data-slot-path={at("yLabel").join(".")} />
+        </label>
+      </div>
+      {chartType !== "scatter" && (
+        <label className="slot-field">
+          <span>横轴分类：用 | 分隔（建议 ≤ 7 项，散点/数值折线可留空）Categories</span>
+          <input
+            value={catsText}
+            placeholder="例如：空气 | 水 | 钢铁"
+            data-testid="chart-categories"
+            onFocus={() => {
+              catsFocused.current = true;
+            }}
+            onBlur={() => {
+              catsFocused.current = false;
+              setCatsText(formatChartCategories(parseChartCategories(catsText)));
+            }}
+            onChange={(e) => {
+              const raw = e.target.value;
+              setCatsText(raw);
+              onChange(at("categories"), parseChartCategories(raw));
+            }}
+          />
+        </label>
+      )}
+      <label className="slot-field">
+        <span>数据系列：每行一组（1–4 组），“名称: 数值 | 数值”（散点写 x, y）Series</span>
+        <textarea
+          rows={Math.max(2, seriesVal.length)}
+          value={seriesText}
+          placeholder={chartType === "scatter" ? "甲车: 0, 0 | 1, 12 | 2, 24" : "声速: 340 | 1480 | 5960"}
+          data-testid="chart-series"
+          onFocus={() => {
+            seriesFocused.current = true;
+          }}
+          onBlur={() => {
+            seriesFocused.current = false;
+            setSeriesText(formatChartSeries(parseChartSeries(seriesText)));
+          }}
+          onChange={(e) => {
+            const raw = e.target.value;
+            setSeriesText(raw);
+            onChange(at("series"), parseChartSeries(raw));
+          }}
+        />
+        <span className={`count ${seriesVal.length > 4 ? "over" : ""}`}>{seriesVal.length} / 4 组</span>
+      </label>
+      <FieldIssues issues={issues} path={at("categories")} />
+      <FieldIssues issues={issues} path={at("series")} />
+      <details className="slot-advanced" data-testid="chart-raw-json-toggle">
+        <summary>高级 JSON · Raw JSON</summary>
+        <JsonField value={value} path={path} onChange={onChange} />
+      </details>
     </>
   );
 }
@@ -363,6 +477,8 @@ function VisualBody({ value, narrow, path, issues, onChange }: { value: Obj; nar
     }
     case "placeholder":
       return <TextField label="需要补什么图（老师上课前自己加）Hint" value={String(value.hint ?? "")} budget={B.placeholder.hint} path={at("hint")} issues={issues} onChange={onChange} />;
+    case "chart":
+      return <ChartFields value={value} path={path} issues={issues} onChange={onChange} />;
     default:
       return <JsonField value={value} path={path} onChange={onChange} />;
   }
@@ -520,6 +636,9 @@ export function SlotEditor({
   content,
   notes,
   unverified = [],
+  dismissedUnverified,
+  onDismissUnverified,
+  onRestoreUnverified,
   pageType,
   theme,
   onSave,
@@ -528,6 +647,9 @@ export function SlotEditor({
   content: SlideContent;
   notes: string;
   unverified?: Unverified[];
+  dismissedUnverified?: ReadonlySet<string>;
+  onDismissUnverified?: (item: Unverified) => void;
+  onRestoreUnverified?: (item: Unverified) => void;
   pageType: PageType;
   theme: ThemeId;
   onSave: (content: SlideContent, notes: string) => Promise<void>;
@@ -544,6 +666,7 @@ export function SlotEditor({
     const parsed = SlideContentSchema.safeParse(deferred);
     return parsed.success ? { content: parsed.data, sources: [], pageType } : null;
   }, [deferred, pageType]);
+  const activeFlags = useMemo(() => activeUnverified(unverified, dismissedUnverified ?? new Set()), [unverified, dismissedUnverified]);
   return (
     <form
       className="slot-editor"
@@ -569,8 +692,8 @@ export function SlotEditor({
         {previewSlide ? <SlidePreview slide={previewSlide} theme={theme} /> : <div className="slide-preview kj-thumb empty">预览暂不可用 · preview unavailable</div>}
         <span className="muted small">实时预览 Live preview</span>
       </div>
-      <UnverifiedBox items={unverified} />
-      <FlagContext.Provider value={unverified.map((u) => u.text)}>{FORM[content.layout].map((d) => render(d, draft, [], issues, change))}</FlagContext.Provider>
+      <UnverifiedBox items={unverified} dismissed={dismissedUnverified} onDismiss={onDismissUnverified} onRestore={onRestoreUnverified} />
+      <FlagContext.Provider value={activeFlags.map((u) => u.text)}>{FORM[content.layout].map((d) => render(d, draft, [], issues, change))}</FlagContext.Provider>
       <label className="slot-field">
         <span>讲稿 Speaker notes</span>
         <textarea rows={5} value={noteDraft} onChange={(e) => setNoteDraft(e.target.value)} />
@@ -585,7 +708,7 @@ export function SlotEditor({
           </ul>
         </div>
       )}
-      <div className="row">
+      <div className="row slot-actions">
         <button className="btn primary" disabled={saving} data-testid="save-slide">
           保存 Save
         </button>

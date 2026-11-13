@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
 import { answerKey, type Position } from "@kj/player";
 import type { Slide, TeachingLanguage, ThemeId } from "@kj/schema";
+import { RichText } from "../components/RichText.tsx";
 import { SlideThumb } from "../components/SlideView.tsx";
 import { lessonApi } from "../lessonApi.ts";
 import { PlayerHost } from "./PlayPages.tsx";
@@ -131,14 +132,18 @@ export function PresenterPage() {
           </div>
           <div className="presenter-notes" data-testid="presenter-notes">
             <h3>讲稿 Speaker notes</h3>
-            <p>{slide.notes || "—"}</p>
+            <p>
+              <RichText text={slide.notes || "—"} />
+            </p>
           </div>
           {keys.length > 0 && (
             <div className="presenter-answers" data-testid="presenter-answers">
               <h3>答案 Answer key</h3>
               <ul>
                 {keys.map((k, i) => (
-                  <li key={i}>{k}</li>
+                  <li key={i}>
+                    <RichText text={k} />
+                  </li>
                 ))}
               </ul>
             </div>

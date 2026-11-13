@@ -102,6 +102,9 @@ export class InkLayer {
 
   private toLogical(e: PointerEvent): [number, number] {
     const r = this.stage.getBoundingClientRect();
+    if (this.frame.closest(".kj-rotated")) {
+      return [((e.clientY - r.top) / (r.height || 1)) * CANVAS.width, ((r.right - e.clientX) / (r.width || 1)) * CANVAS.height];
+    }
     return [((e.clientX - r.left) / (r.width || 1)) * CANVAS.width, ((e.clientY - r.top) / (r.height || 1)) * CANVAS.height];
   }
 
@@ -157,11 +160,10 @@ export class InkLayer {
     if (!ctx) return;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-    const fr = this.frame.getBoundingClientRect();
-    const sr = this.stage.getBoundingClientRect();
-    const sx = (sr.width || w) / CANVAS.width;
-    const sy = (sr.height || h) / CANVAS.height;
-    ctx.setTransform(dpr * sx, 0, 0, dpr * sy, dpr * (sr.left - fr.left), dpr * (sr.top - fr.top));
+    const scale = Math.max(0.01, Math.min((w || CANVAS.width) / CANVAS.width, (h || CANVAS.height) / CANVAS.height));
+    const ox = (w - CANVAS.width * scale) / 2;
+    const oy = (h - CANVAS.height * scale) / 2;
+    ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * ox, dpr * oy);
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.lineWidth = PEN_WIDTH;

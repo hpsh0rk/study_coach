@@ -214,9 +214,21 @@
 }
 .kj-formula {
   text-align: center;
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
 }
 .kj-formula-tex {
-  font-size: 104px;
+  font-size: calc(104px * var(--kj-formula-scale, 1));
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+.kj-formula-tex .katex-display {
+  margin: 0;
+}
+.kj-formula-tex .katex {
+  font-size: 1em;
 }
 .kj-formula-caption {
   font-size: 40px;
@@ -664,6 +676,9 @@
 }
 .kj-poll .kj-option:disabled {
   cursor: default;
+}
+.kj-slide[data-step-now="2"] .kj-tally[data-empty="true"] {
+  visibility: hidden;
 }
 .kj-chip[data-outcome="true"] {
   transition: box-shadow 0.3s;

@@ -1,17 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { PAGE_TYPES } from "@kj/pedagogy";
-import type { Slide, SlideSpec } from "@kj/schema";
+import type { Slide, SlideSpec, ThemeId, Unverified } from "@kj/schema";
+import { THEMES } from "@kj/templates/render";
 import { ApiError } from "../../api.ts";
+import { RichText } from "../../components/RichText.tsx";
 import { SlotEditor } from "../../components/SlotEditor.tsx";
 import { SlidePreview, SlideThumb } from "../../components/SlideView.tsx";
-import { UnverifiedBadge, UnverifiedBox } from "../../components/Unverified.tsx";
+import {
+  activeUnverified,
+  loadDismissedUnverified,
+  saveDismissedUnverified,
+  UnverifiedBadge,
+  UnverifiedBox,
+  unverifiedItemKey,
+} from "../../components/Unverified.tsx";
 import { lessonApi, type AnswerMode, type FlaggedSlide, type LessonView, type ShareView } from "../../lessonApi.ts";
 import { documentApi, type TextbookPage } from "../../textbook/api.ts";
 import { SourcePage } from "../../textbook/SourcePage.tsx";
 import { downloadOfflineHtml } from "../../offline/exportDeck.ts";
 import { downloadPptx } from "../../offline/exportPptx.ts";
-import { generateMissingSlides, generateSlideWithLock } from "./slideGeneration.ts";
+import { generateMissingSlides, generateSlideWithLock, MAX_REGENERATE_INSTRUCTION, postGenerateSlide } from "./slideGeneration.ts";
 import { Stepper, StepIntro, type StepKey } from "./Stepper.tsx";
 
 /**
@@ -162,15 +171,68 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
   const [editing, setEditing] = useState(false);
   const [exporting, setExporting] = useState("");
   const [exportError, setExportError] = useState("");
-  const theme = view.lesson.theme;
+  const [theme, setTheme] = useState<ThemeId>(view.lesson.theme);
+  const [showRegenHint, setShowRegenHint] = useState(false);
+  const [regenHint, setRegenHint] = useState("");
+  const [dismissedMap, setDismissedMap] = useState<Record<string, string[]>>(() => {
+    const init: Record<string, string[]> = {};
+    for (const s of view.slides) {
+      const saved = loadDismissedUnverified(typeof window !== "undefined" ? window.localStorage : null, view.lesson.id, s.id);
+      if (saved.size) init[s.id] = [...saved];
+    }
+    return init;
+  });
+  const batchAbortRef = useRef<AbortController | null>(null);
   const language = (confirmed?.params ?? view.lesson.params).language;
+
+  useEffect(() => {
+    setTheme(view.lesson.theme);
+  }, [view.lesson.theme]);
+
+  useEffect(() => () => batchAbortRef.current?.abort(), []);
+
+  const dismissedSetFor = useCallback(
+    (slideId: string) => {
+      const cached = dismissedMap[slideId];
+      if (cached) return new Set(cached);
+      return loadDismissedUnverified(typeof window !== "undefined" ? window.localStorage : null, view.lesson.id, slideId);
+    },
+    [dismissedMap, view.lesson.id],
+  );
+
+  const toggleDismissed = useCallback(
+    (slideId: string, item: Unverified, hide: boolean) => {
+      setDismissedMap((prev) => {
+        const nextSet = new Set(prev[slideId] ?? [...loadDismissedUnverified(window.localStorage, view.lesson.id, slideId)]);
+        const key = unverifiedItemKey(item);
+        if (hide) nextSet.add(key);
+        else nextSet.delete(key);
+        saveDismissedUnverified(window.localStorage, view.lesson.id, slideId, nextSet);
+        return { ...prev, [slideId]: [...nextSet] };
+      });
+    },
+    [view.lesson.id],
+  );
+
+  async function pickTheme(nextTheme: ThemeId) {
+    if (nextTheme === theme) return;
+    const prevTheme = theme;
+    setTheme(nextTheme);
+    try {
+      await lessonApi.patch(view.lesson.id, { theme: nextTheme });
+    } catch (e) {
+      setTheme(prevTheme);
+      setExportError((e as Error).message);
+    }
+  }
 
   const labels = view.pageLabels;
   const generateOne = useCallback(
-    async (specId: string, regenerate = false) => {
+    async (specId: string, regenerate = false, instruction?: string, signal?: AbortSignal) => {
       if (!confirmed) return { ok: false, rateLimited: false };
       return generateSlideWithLock(specId, regenerate, {
-        request: async (id, regen) => (await lessonApi.generate(view.lesson.id, confirmed.id, id, regen)).slide,
+        signal,
+        request: (id, regen, reqSignal) => postGenerateSlide(view.lesson.id, confirmed.id, id, regen, regen ? instruction : undefined, reqSignal),
         onStart: (id) => {
           setRunning((r) => new Set(r).add(id));
           setFailed(({ [id]: _drop, ...rest }) => rest);
@@ -189,8 +251,20 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
   );
 
   async function generateAll() {
+    batchAbortRef.current?.abort();
+    const ac = new AbortController();
+    batchAbortRef.current = ac;
     const existing = new Set(specs.filter((s) => slides[s.id]).map((s) => s.id));
-    await generateMissingSlides(specs, existing, (specId) => generateOne(specId));
+    try {
+      await generateMissingSlides(specs, existing, (specId) => generateOne(specId, false, undefined, ac.signal), { signal: ac.signal });
+    } finally {
+      if (batchAbortRef.current === ac) batchAbortRef.current = null;
+    }
+  }
+
+  function stopGeneration() {
+    batchAbortRef.current?.abort();
+    batchAbortRef.current = null;
   }
 
   // Arriving from "confirm outline" (?generate=1) starts generation; a reload or a later visit does not.
@@ -241,6 +315,20 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
           </div>
         </div>
         <div className="gen-actions">
+          <div className="theme-switch" role="group" aria-label="幻灯片主题 Theme" data-testid="theme-switcher">
+            {THEMES.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                className={theme === t.id ? "active" : ""}
+                aria-pressed={theme === t.id}
+                data-testid={`theme-${t.id}`}
+                onClick={() => void pickTheme(t.id)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
           {!all ? (
             <button className="btn primary" disabled={running.size > 0} onClick={generateAll} data-testid="generate-all">
               {running.size ? "生成中… Generating" : done ? `继续生成剩下 ${specs.length - done} 页 Continue` : "生成全部幻灯片 Generate all"}
@@ -248,6 +336,11 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
           ) : (
             <button className="btn primary" onClick={() => nav(`/play/${view.lesson.id}`)} data-testid="present">
               ▶ 放映 Present
+            </button>
+          )}
+          {running.size > 0 && (
+            <button type="button" className="btn ghost" onClick={stopGeneration} data-testid="stop-generate">
+              停止生成 Stop
             </button>
           )}
           {!all && (
@@ -340,6 +433,7 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
                 onClick={() => {
                   setSelected(s.id);
                   setEditing(false);
+                  setShowRegenHint(false);
                 }}
                 data-testid="thumb"
               >
@@ -355,7 +449,7 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
                     {i + 1}. {PAGE_TYPES[s.pageType].label.zh} · {s.minutes} 分钟
                   </span>
                   <span className="thumb-title">{s.title}</span>
-                  {slide && <UnverifiedBadge count={slide.unverified?.length ?? 0} />}
+                  {slide && <UnverifiedBadge count={activeUnverified(slide.unverified, dismissedSetFor(slide.id)).length} />}
                 </div>
               </li>
             );
@@ -367,7 +461,7 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
               <b>
                 {specs.indexOf(sel) + 1}. {sel.title}
               </b>
-              <div className="row">
+              <div className="row wrap">
                 {selSlide && !editing && (
                   <button className="btn small ghost" onClick={() => setEditing(true)} data-testid="edit-slide">
                     编辑 Edit
@@ -378,17 +472,60 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
                     撤销 Undo
                   </button>
                 )}
-                <button className="btn small ghost" disabled={running.has(sel.id) || editing} onClick={() => generateOne(sel.id, !!selSlide)} data-testid="regenerate">
+                {selSlide && !editing && (
+                  <button
+                    type="button"
+                    className={`btn small ghost ${showRegenHint ? "active" : ""}`}
+                    disabled={running.has(sel.id)}
+                    aria-expanded={showRegenHint}
+                    onClick={() => setShowRegenHint((v) => !v)}
+                    data-testid="toggle-regen-hint"
+                    title="输入一句修改要求后再重新生成 · Optional hint for regeneration"
+                  >
+                    微调要求 Hint
+                  </button>
+                )}
+                <button
+                  className="btn small ghost"
+                  disabled={running.has(sel.id) || editing}
+                  onClick={async () => {
+                    const hint = selSlide ? regenHint : undefined;
+                    const res = await generateOne(sel.id, !!selSlide, hint);
+                    if (res.ok) setShowRegenHint(false);
+                  }}
+                  data-testid="regenerate"
+                >
                   {selSlide ? "重新生成 Regenerate" : "生成这一页 Generate"}
                 </button>
               </div>
             </div>
+            {selSlide && !editing && showRegenHint && (
+              <div className="regen-hint-row">
+                <input
+                  value={regenHint}
+                  maxLength={MAX_REGENERATE_INSTRUCTION}
+                  placeholder="可选微调指令：例如“换一组数字”或“改成概念辨析题” · Optional hint (≤200 chars)"
+                  aria-label="重新生成微调指令 Regeneration hint"
+                  data-testid="regenerate-instruction"
+                  onChange={(e) => setRegenHint(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !running.has(sel.id)) {
+                      e.preventDefault();
+                      void generateOne(sel.id, true, regenHint).then((r) => r.ok && setShowRegenHint(false));
+                    }
+                  }}
+                />
+              </div>
+            )}
             {selSlide && editing ? (
               <SlotEditor
                 key={selSlide.id}
                 content={selSlide.content}
                 notes={selSlide.notes}
                 unverified={selSlide.unverified}
+                dismissedUnverified={dismissedSetFor(selSlide.id)}
+                onDismissUnverified={(item) => toggleDismissed(selSlide.id, item, true)}
+                onRestoreUnverified={(item) => toggleDismissed(selSlide.id, item, false)}
                 pageType={selSlide.pageType}
                 theme={theme}
                 onCancel={() => setEditing(false)}
@@ -400,9 +537,18 @@ export function GenerateStep({ view, reached }: { view: LessonView; reached: Ste
             ) : selSlide ? (
               <>
                 <SlidePreview slide={selSlide} theme={theme} onSourceClick={openSource} pageLabels={labels} language={language} />
-                <UnverifiedBox items={selSlide.unverified ?? []} sources={selSlide.sources} onSourceClick={openSource} />
+                <UnverifiedBox
+                  items={selSlide.unverified ?? []}
+                  sources={selSlide.sources}
+                  onSourceClick={openSource}
+                  dismissed={dismissedSetFor(selSlide.id)}
+                  onDismiss={(item) => toggleDismissed(selSlide.id, item, true)}
+                  onRestore={(item) => toggleDismissed(selSlide.id, item, false)}
+                />
                 <h3>讲稿 Speaker notes</h3>
-                <p className="notes">{selSlide.notes || "—"}</p>
+                <p className="notes">
+                  <RichText text={selSlide.notes || "—"} />
+                </p>
                 {selSlide.warnings.length > 0 && (
                   <details className="muted small">
                     <summary>检查提示 {selSlide.warnings.length} 条 · checks</summary>

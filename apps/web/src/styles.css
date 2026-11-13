@@ -1309,7 +1309,7 @@ label.check-row input {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  max-height: 70vh;
+  max-height: calc(100vh - 110px);
   overflow: auto;
   padding-right: 4px;
 }
@@ -1398,9 +1398,64 @@ label.check-row input {
   font-size: 12px;
 }
 .slot-preview {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--card);
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+.slot-preview .slide-preview {
+  max-width: min(100%, 380px);
+  margin: 0 auto;
+}
+.slot-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  background: var(--card);
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.theme-switch {
+  display: inline-flex;
+  gap: 2px;
+  background: #e2e8f0;
+  padding: 3px;
+  border-radius: 10px;
+}
+.theme-switch button {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  border: 0;
+  background: transparent;
+  color: #334155;
+  padding: 5px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.theme-switch button.active {
+  background: #fff;
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+.btn.small.ghost.active {
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+.regen-hint-row {
+  display: flex;
+  gap: 8px;
+}
+.regen-hint-row input {
+  flex: 1;
+  font-size: 13px;
+  padding: 7px 10px;
 }
 .slot-preview .slide-preview.empty {
   display: grid;
@@ -1467,6 +1522,23 @@ label.check-row input {
 }
 .unverified-kind {
   font-weight: 600;
+}
+.unverified-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.unverified-dismissed {
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px dashed var(--line);
+}
+.unverified-ignored-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
 }
 .badge-unverified {
   display: inline-block;
@@ -1586,4 +1658,90 @@ label.inline-check {
 }
 label.inline-check input {
   width: auto;
+}
+
+@media (max-width: 768px) {
+  .stack > .row.between,
+  .card > .row.between,
+  .outline-head > .row.between {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .card {
+    padding: 14px;
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  .tabs {
+    max-width: 100%;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    -webkit-overflow-scrolling: touch;
+  }
+  .tabs button {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    padding: 6px 10px;
+    font-size: 13px;
+  }
+  .table,
+  .library-table {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .objectives {
+    max-width: 100%;
+  }
+  .outline-row {
+    flex-wrap: wrap;
+    padding: 10px 12px;
+  }
+  .outline-row .row-top {
+    flex-wrap: wrap;
+  }
+  .outline-row .row-top select {
+    width: auto;
+    max-width: 100%;
+    flex: 1 1 150px;
+  }
+  .outline-row .row-title {
+    flex: 1 1 100%;
+    order: 2;
+  }
+  .row-actions {
+    flex-direction: row;
+    width: 100%;
+    justify-content: flex-end;
+  }
+  .wizard-actions {
+    flex-wrap: wrap;
+  }
+  .stepper .step > a,
+  .stepper .step > span {
+    padding: 8px 6px;
+    justify-content: center;
+  }
+  .stepper .step-text {
+    font-size: 11px;
+  }
+  .presenter {
+    overflow-y: auto;
+  }
+  .presenter-grid {
+    grid-template-columns: 1fr;
+    flex: none;
+    overflow: visible;
+  }
+  .presenter-current {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    min-height: 180px;
+  }
+  .presenter-side {
+    overflow: visible;
+  }
 }

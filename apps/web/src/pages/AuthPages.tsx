@@ -21,7 +21,7 @@ export function LoginPage() {
       const me = await refresh();
       nav(me?.mustChangePassword ? "/change-password" : (params.get("next") ?? "/"));
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Login failed");
+      setError(err instanceof ApiError ? err.message : "登录失败，请检查网络连接 · Login failed");
     } finally {
       setBusy(false);
     }
@@ -33,7 +33,7 @@ export function LoginPage() {
         <div className="auth-brand">
           <span className="brand-mark big">〰</span>
           <h1>AI 课件工坊</h1>
-          <p className="muted">Courseware workshop for bilingual teachers</p>
+          <p className="muted">面向老师的课堂课件工坊 · Courseware workshop</p>
         </div>
         <label>
           用户名 Username
@@ -72,15 +72,15 @@ export function ChangePasswordPage() {
       await refresh();
       nav("/");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed");
+      setError(err instanceof ApiError ? err.message : "修改密码失败 · Password change failed");
     }
   }
 
   return (
     <div className="auth-page">
       <form className="card auth-card" onSubmit={submit}>
-        <h1>设置新密码</h1>
-        <p className="muted">{me.mustChangePassword ? "首次登录请修改管理员给你的初始密码。Please replace your initial password." : "Change your password."}</p>
+        <h1>设置新密码 · Set new password</h1>
+        <p className="muted">{me.mustChangePassword ? "首次登录请修改管理员给你的初始密码。Please replace your initial password." : "修改登录密码 · Change your password."}</p>
         <label>
           当前密码 Current password
           <input name="current" type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} required />
