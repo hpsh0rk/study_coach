@@ -21,6 +21,9 @@ export default defineConfig({
     { name: "admin", testMatch: /[\\/]admin\.spec\.ts$/, dependencies: ["textbook"], use: authenticated },
     { name: "walkthrough", testMatch: /[\\/]walkthrough-ux\.spec\.ts$/, dependencies: ["admin"], use: authenticated },
     { name: "bundle", testMatch: /[\\/]bundle-offline\.spec\.ts$/, dependencies: ["walkthrough"], use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 720 } } },
+    { name: "multisource", testMatch: /[\\/]multisource-pdf\.spec\.ts$/, dependencies: ["bundle"], use: authenticated },
+    { name: "handout", testMatch: /[\\/]handout-export\.spec\.ts$/, dependencies: ["multisource"], use: authenticated },
+    { name: "figures", testMatch: /[\\/]textbook-figures\.spec\.ts$/, dependencies: ["handout"], use: authenticated },
   ],
   webServer: {
     command: "bash scripts/e2e-server.sh",

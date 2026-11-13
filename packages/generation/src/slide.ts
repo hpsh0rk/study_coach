@@ -1,16 +1,17 @@
 import { z } from "zod";
 import { jsonSchemaOf, type AiLayer, type CallContext } from "@kj/ai";
 import { PAGE_TYPES, verifyNumbers } from "@kj/pedagogy";
-import { LAYOUT_IDS, SlideContent, type GlossaryEntry, type LayoutId, type LessonParams, type Outline, type PageText, type SlideSpec, type Unverified } from "@kj/schema";
+import { LAYOUT_IDS, SlideContent, type FigureCatalogEntry, type GlossaryEntry, type LayoutId, type LessonParams, type Outline, type PageText, type SlideSpec, type Unverified } from "@kj/schema";
 import { BUDGETS, LAYOUTS, SLOT_SCHEMAS } from "@kj/templates";
 import { slotIssues, widgetIssues } from "@kj/templates/issues";
 import { findEmbed } from "@kj/widgets";
 import { applyGlossary, clipToBudgets, healChartFocus, problemsOf, sanitizeWidgets, trimExcessHighlights, truncateLists } from "./checks.ts";
 import { optionsOf, type PipelineOptions } from "./options.ts";
+import { formatFigureCatalogEntry } from "./outline.ts";
 import { neutralizeSource, SOURCE_RULE, suspiciousContent } from "./safety.ts";
 import { stubSlide } from "./slide-stub.ts";
 
-export const SLIDE_PROMPT_VERSION = "slide.write@10";
+export const SLIDE_PROMPT_VERSION = "slide.write@11";
 /** Source characters the writer sees for one slide. */
 export const SLIDE_SOURCE_CHARS = 12_000;
 
@@ -19,6 +20,8 @@ export interface WriteInput {
   params: LessonParams;
   /** Pages of the lesson's selection; the writer picks the spec's source pages from them. */
   pages: PageText[];
+  /** Extracted textbook/lesson figures available to this lesson. */
+  figures?: FigureCatalogEntry[];
   ctx: CallContext;
   /** Problem of the preceding worked example, so faded/practice pages stay isomorphic to it. */
   workedProblem?: string;
@@ -86,7 +89,8 @@ export class SlideInvalidError extends Error {
   }
 }
 
-const invalidSlots = (c: SlideContent) => [...slotIssues(c), ...widgetIssues(c)].map((i) => `${i.path.join(".")}: ${i.message}`);
+const invalidSlots = (c: SlideContent, knownAssetIds?: ReadonlySet<string>) =>
+  [...slotIssues(c), ...widgetIssues(c, knownAssetIds ? { knownAssetIds } : undefined)].map((i) => `${i.path.join(".")}: ${i.message}`);
 
 export class SpecNotFoundError extends Error {
   constructor(specId: string) {
@@ -199,17 +203,37 @@ const WIDGET_RULES = [
   '- chart: {"kind":"chart","type":"bar|line|scatter","xLabel":"...","yLabel":"... / unit","categories":[...],"series":[{"name":"...","data":[...]}],"focus":0} — ≤ 4 series, ≤ 7 categories, real values from the source only; optional "focus" is a 0-based series index (< series.length), omit it when there is only 1 series.',
   '- flow: {"kind":"flow","steps":["...", "..."]} — 2–5 sequential process or causal steps (A → B → C), at most 4 words each; never use standalone conjunctions like "或" or "or" as a step box.',
   '- table: {"kind":"table","columns":["Quantity","Unit"],"rows":[["wavelength","λ / m"]],"caption":"..."} — every row has one cell per column; cells are 1–2 words or a number with unit, taken from the source.',
+  '- figure: {"kind":"figure","assetId":"med_...","caption":"Fig 16.8: ..."} — embeds a real extracted textbook diagram; ONLY use an exact `assetId` listed in Available textbook figures on this slide (never invent an assetId).',
   '- placeholder: {"kind":"placeholder","hint":"Photo of a ripple tank"} — "图示待补": only when the point needs a picture no widget above can draw.',
 ].join("\n");
 
+/** Figures relevant to a slide: figures on its `sourcePages` plus any direct lesson-level figures (`pageNo === undefined`). */
+function figuresForSpec(spec: SlideSpec, allFigures: FigureCatalogEntry[] | undefined): FigureCatalogEntry[] {
+  if (!allFigures?.length) return [];
+  const cited = new Set(spec.sourcePages);
+  const matched = allFigures.filter((f) => f.pageNo === undefined || cited.has(f.pageNo));
+  return matched.length > 0 ? matched : spec.visual === "figure" ? allFigures : [];
+}
+
 /** Which visual the writer must produce: the outline's choice, a "图示待补" placeholder for "none", or the writer's own pick. */
-export function visualRuleFor(spec: SlideSpec, planning: PipelineOptions["visualPlanning"]): string {
+export function visualRuleFor(spec: SlideSpec, planning: PipelineOptions["visualPlanning"], slideFigures: FigureCatalogEntry[] = []): string {
   const slotName = spec.layout === "statement" ? "visual" : spec.layout === "chart" ? "chart" : "";
   if (!slotName) return "";
-  const allowed = spec.layout === "statement" ? "formula, function, chart, flow or table" : "chart, function or table";
+  const hasFigs = slideFigures.length > 0;
+  const allowed =
+    spec.layout === "statement"
+      ? `formula, function, chart, flow${hasFigs ? ", table or figure" : " or table"}`
+      : `chart, function${hasFigs ? ", table or figure" : " or table"}`;
   if (planning === "writer") return `Choose the ${slotName} kind (${allowed}) that best explains this point; use placeholder only if none of them can show it honestly.`;
   if (spec.visual === "none") return `The ${slotName} slot must be {"kind":"placeholder","hint":"..."}: in the hint, name the diagram or photo the teacher should add (at most ${BUDGETS.placeholder.hint.max} words).`;
-  const kind = spec.layout === "chart" && !["chart", "function", "table"].includes(spec.visual) ? "chart" : spec.visual === "sim" ? "formula" : spec.visual;
+  if (spec.visual === "figure" && !hasFigs) {
+    const fallbackKind = spec.layout === "chart" ? "chart" : "formula";
+    return `No extracted textbook figure is available for this slide; use kind "${fallbackKind}" or {"kind":"placeholder","hint":"..."} instead of "figure".`;
+  }
+  const kind = spec.layout === "chart" && !["chart", "function", "table", "figure"].includes(spec.visual) ? "chart" : spec.visual === "sim" ? "formula" : spec.visual;
+  if (kind === "figure") {
+    return `The ${slotName} must be of kind "figure" using one exact assetId from Available textbook figures (${slideFigures.map((f) => f.assetId).join(", ")}) with a concise caption (≤ 120 chars).`;
+  }
   return `The ${slotName} must be of kind "${kind}".${kind === "table" ? ` ${spec.layout === "statement" ? "Exactly 2 columns" : "2–3 columns"}, at most 4 rows, 1–2 words per cell.` : ""}`;
 }
 
@@ -228,12 +252,15 @@ function glossaryText(glossary: GlossaryEntry[]): string {
 const PROBLEM_PAGE_TYPES = new Set(["worked", "faded", "practice", "check", "exit", "retrieval"]);
 const PROBLEM_SLIDE_LAYOUTS = new Set(["steps", "quiz", "questions"]);
 const RED_EMPHASIS_FOCUS_RE = /红(?:色|字)|标红|加粗|\bred[\s-]*(?:bold|font|text|highlight)\b|\bbold\s+red\b/i;
+const FIGURE_FOCUS_RE =
+  /书本.*图|原书.*图|教材.*图|课本.*图|书上.*图|多用.*原图|直接用.*图|\b(?:textbook|book|coursebook|source)\s+(?:figures?|images?|diagrams?|illustrations?|pictures?)\b/i;
 
 export function buildMessages(spec: SlideSpec, input: WriteInput, outline: Outline, problems?: string[]) {
   const o = optionsOf(input.options);
   const pages = sourcePagesFor(spec, input);
+  const slideFigures = figuresForSpec(spec, input.figures);
   const sim = spec.layout === "experiment" ? findEmbed(`${spec.title} ${spec.keyPoints.join(" ")} ${pages.map((p) => p.text).join(" ")}`) : undefined;
-  const visualRule = visualRuleFor(spec, o.visualPlanning);
+  const visualRule = visualRuleFor(spec, o.visualPlanning, slideFigures);
   const languageRule =
     input.params.language === "zh"
       ? 'Screen text and speaker `notes` in pure Simplified Chinese. On statement slides, `terms` must use Simplified Chinese term names in `term` (with `zh: ""`), never English words unless teaching an explicit English symbol.'
@@ -255,6 +282,7 @@ export function buildMessages(spec: SlideSpec, input: WriteInput, outline: Outli
       : "Stay faithful to the slide plan; do not invent numbers.";
   const trimmedInstruction = input.instruction?.trim().slice(0, 200);
   const wantsRedEmphasis = RED_EMPHASIS_FOCUS_RE.test(input.params.focus ?? "") || RED_EMPHASIS_FOCUS_RE.test(trimmedInstruction ?? "");
+  const wantsFigures = FIGURE_FOCUS_RE.test(input.params.focus ?? "") || FIGURE_FOCUS_RE.test(trimmedInstruction ?? "");
   const system = [
     `You write the on-screen content of ONE slide of a lesson (student level: ${input.params.level}). ${languageRule}`,
     `Layout "${spec.layout}" (${LAYOUTS[spec.layout].label.en}); page type ${spec.pageType} (${def.label.en}), about ${spec.minutes} minutes.`,
@@ -262,6 +290,9 @@ export function buildMessages(spec: SlideSpec, input: WriteInput, outline: Outli
     "Rules: one teaching point; assertion-style title; short phrases, not paragraphs; no teacher talk or clichés on screen (no 'In this lesson', 'Let's', 'dive into', 'crucial'); use $...$ for inline math; use ==key term or rule== sparingly for red-bold key-phrase emphasis on core takeaways (at most 1–2 short phrases, ≤ 25% of slide words; never highlight whole sentences or slide titles). Do not repeat what the neighbouring slides cover.",
     wantsRedEmphasis
       ? "Teacher emphasis preference: highlight the core physical law, definition or key takeaway on explanatory/summary slides with ==...== (renders as bold red text), keeping highlights selective (≤ 25% of slide words)."
+      : "",
+    slideFigures.length > 0 && (wantsFigures || spec.visual === "figure") && (spec.layout === "statement" || spec.layout === "chart")
+      ? "Textbook figure preference: when an Available textbook figure below matches this slide's concept or diagram, embed it as {\"kind\":\"figure\",\"assetId\":\"...\",\"caption\":\"...\"} using its exact assetId."
       : "",
     `${sourceRule} Always write non-empty speaker \`notes\` (60–150 words) covering explanation, a question to ask, expected answer or misconception, and timing.`,
     glossaryText(outline.glossary),
@@ -292,6 +323,9 @@ export function buildMessages(spec: SlideSpec, input: WriteInput, outline: Outli
     `Lesson: ${input.lessonTitle}. Objectives: ${outline.objectives.join("; ")}`,
     neighbours(spec, outline) ? `Context: ${neighbours(spec, outline)}` : "",
     `Slide plan: ${JSON.stringify({ title: spec.title, purpose: spec.purpose, keyPoints: spec.keyPoints, ...(o.visualPlanning === "outline" && LAYOUTS[spec.layout].visual === "required" ? { visual: spec.visual } : {}), layout: spec.layout })}`,
+    slideFigures.length > 0 && (spec.layout === "statement" || spec.layout === "chart")
+      ? `Available textbook figures on cited pages:\n${slideFigures.slice(0, 20).map((f) => `- ${formatFigureCatalogEntry(f)}`).join("\n")}`
+      : "",
     pages.length ? `<source>\n${neutralizeSource(pages.map((p) => `[p.${p.no}] ${p.text}`).join("\n"))}\n</source>` : "",
     trimmedInstruction ? `Teacher instruction for regenerating this slide: ${neutralizeSource(trimmedInstruction)}` : "",
     problems?.length ? `Your previous answer had these problems; fix them:\n${problems.map((p) => `- ${p}`).join("\n")}` : "",
@@ -326,13 +360,17 @@ export async function writeSlide(ai: AiLayer, outline: Outline, specId: string, 
   if (!spec) throw new SpecNotFoundError(specId);
   const o = optionsOf(input.options);
   const pages = sourcePagesFor(spec, input);
+  const slideFigures = figuresForSpec(spec, input.figures);
+  // Enforce figure assetId membership whenever `input.figures` was supplied by the caller (even `[]`, so hallucinated figure assetIds are caught).
+  const knownAssetIds: ReadonlySet<string> | undefined = input.figures !== undefined ? new Set(input.figures.map((f) => f.assetId)) : undefined;
+  const checkOpts = knownAssetIds ? { knownAssetIds } : undefined;
   const call = (problems?: string[]) =>
     ai.callStructured({
       capability: "slide.write",
       promptVersion: SLIDE_PROMPT_VERSION,
       schema: outputSchemas[spec.layout],
       messages: buildMessages(spec, input, outline, problems),
-      stub: () => stubSlide({ spec, outline, lessonTitle: input.lessonTitle, pages }),
+      stub: () => stubSlide({ spec, outline, lessonTitle: input.lessonTitle, pages, figures: slideFigures }),
       temperature: 0.4,
       ctx: input.ctx,
     });
@@ -345,30 +383,30 @@ export async function writeSlide(ai: AiLayer, outline: Outline, specId: string, 
       .map((u) => (u.kind === "number" ? `number ${u.text}: not on the cited pages (待核实) — use only numbers from the source, or remove it` : `calculation ${u.text}: does not compute (待核实) — ${u.detail}`));
   let res = await call();
   let content = finish(res.output.content);
-  let found = problemsOf(content, spec.pageType, res.output.notes);
+  let found = problemsOf(content, spec.pageType, res.output.notes, checkOpts);
   const firstInvented = invented(content, res.output.notes);
   if ((found.errors.length || firstInvented.length) && res.providerId !== "stub" && o.slideCheckRetry) {
     res = await call([...found.errors, ...firstInvented]);
     content = finish(res.output.content);
-    found = problemsOf(content, spec.pageType, res.output.notes);
+    found = problemsOf(content, spec.pageType, res.output.notes, checkOpts);
   }
   // Fallbacks that always end in a slide the editor accepts (truncateFallback=false is an eval-only ablation).
   const repair = (c: SlideContent) => {
     const fixed = o.truncateFallback ? clipToBudgets(truncateLists(c, spec.pageType)) : c;
-    return sanitizeWidgets(fixed);
+    return sanitizeWidgets(fixed, { ...(knownAssetIds ? { knownAssetIds } : {}), fallbackFigures: slideFigures });
   };
   let safe = repair(content);
   content = safe.content;
-  if (o.truncateFallback && invalidSlots(content).length) {
-    const before = invalidSlots(content);
-    safe = repair(finish(stubSlide({ spec, outline, lessonTitle: input.lessonTitle, pages }).content));
+  if (o.truncateFallback && invalidSlots(content, knownAssetIds).length) {
+    const before = invalidSlots(content, knownAssetIds);
+    safe = repair(finish(stubSlide({ spec, outline, lessonTitle: input.lessonTitle, pages, figures: slideFigures }).content));
     content = safe.content;
-    if (invalidSlots(content).length) throw new SlideInvalidError(before);
+    if (invalidSlots(content, knownAssetIds).length) throw new SlideInvalidError(before);
     safe = { ...safe, replaced: [...safe.replaced, `slide → deterministic fallback (${before.slice(0, 2).join("; ")})`] };
   }
   const rawNotes = res.output.notes.trim();
-  const notes = (rawNotes ? res.output.notes : stubSlide({ spec, outline, lessonTitle: input.lessonTitle, pages }).notes).slice(0, NOTES_MAX);
-  found = problemsOf(content, spec.pageType, notes);
+  const notes = (rawNotes ? res.output.notes : stubSlide({ spec, outline, lessonTitle: input.lessonTitle, pages, figures: slideFigures }).notes).slice(0, NOTES_MAX);
+  found = problemsOf(content, spec.pageType, notes, checkOpts);
   return {
     content,
     notes,

@@ -242,7 +242,7 @@ export async function carryOverSlides(env: Env, version: VersionRow): Promise<vo
     const unverified = [...sourceUnverified(spec), ...(JSON.parse(src.unverified) as Unverified[]).filter((u) => u.kind !== "source")].slice(0, 10);
     return [{ ...src, id: newId("sl"), outlineVersionId: version.id, specId: spec.id, unverified: JSON.stringify(unverified), prevContent: null, prevNotes: null, updatedAt: Date.now() }];
   });
-  for (let i = 0; i < rows.length; i += 5) await d.insert(slides).values(rows.slice(i, i + 5));
+  for (let i = 0; i < rows.length; i += 5) await d.insert(slides).values(rows.slice(i, i + 5)).onConflictDoNothing({ target: [slides.outlineVersionId, slides.specId] });
 }
 
 /**

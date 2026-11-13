@@ -1,4 +1,4 @@
-import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { customType, index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { documents } from "../textbook/tables.ts";
 import { now, orgs, users } from "./accounts.ts";
 
@@ -186,3 +186,45 @@ export const auditLog = sqliteTable("audit_log", {
   detail: text("detail"),
   createdAt: integer("created_at").notNull().$defaultFn(now),
 });
+
+const binaryBlob = customType<{ data: Uint8Array; driverData: ArrayBuffer | Uint8Array | number[] }>({
+  dataType() {
+    return "blob";
+  },
+  toDriver(value: Uint8Array): ArrayBuffer {
+    return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength) as ArrayBuffer;
+  },
+  fromDriver(value: ArrayBuffer | Uint8Array | number[]): Uint8Array {
+    if (value instanceof Uint8Array) return value;
+    if (value instanceof ArrayBuffer) return new Uint8Array(value);
+    if (Array.isArray(value)) return Uint8Array.from(value);
+    return new Uint8Array(0);
+  },
+});
+
+export const mediaAssets = sqliteTable(
+  "media_assets",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id").notNull().references(() => orgs.id),
+    ownerId: text("owner_id").notNull().references(() => users.id),
+    documentId: text("document_id").references(() => documents.id, { onDelete: "cascade" }),
+    lessonId: text("lesson_id").references(() => lessons.id, { onDelete: "cascade" }),
+    pageNo: integer("page_no"),
+    label: text("label").notNull().default(""),
+    caption: text("caption").notNull().default(""),
+    mime: text("mime", { enum: ["image/png", "image/webp", "image/jpeg"] }).notNull(),
+    width: integer("width").notNull(),
+    height: integer("height").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    data: binaryBlob("data").notNull(),
+    sha256: text("sha256").notNull(),
+    createdAt: integer("created_at").notNull().$defaultFn(now),
+  },
+  (t) => [
+    index("media_assets_owner_idx").on(t.orgId, t.ownerId),
+    index("media_assets_doc_page_idx").on(t.documentId, t.pageNo),
+    index("media_assets_lesson_idx").on(t.lessonId),
+  ],
+);
+

@@ -4,7 +4,7 @@ import "@kj/player/player.css";
 import "./runtime.css";
 import { answerKey, keyAction, Player, type PlayerSlide, type Position } from "@kj/player";
 import type { TeachingLanguage, ThemeId } from "@kj/schema";
-import { inlineEmbeds, renderRichText } from "@kj/widgets/render";
+import { inlineEmbeds, inlineMedia, renderRichText } from "@kj/widgets/render";
 
 /** Deck data embedded in an offline file by `buildOfflineHtml`. */
 export interface OfflineDeck {
@@ -19,10 +19,13 @@ export interface OfflineDeck {
   slides: PlayerSlide[];
   /** Catalog simulation HTML by embed id, loaded via srcdoc. */
   sims: Record<string, string>;
+  /** Inline `data:image/...;base64,...` map by figure `assetId` so `file://` opens with 0 network requests. */
+  media?: Record<string, string>;
 }
 
 const deck = JSON.parse(document.getElementById("kj-deck")!.textContent!) as OfflineDeck;
 inlineEmbeds(deck.sims);
+if (deck.media) inlineMedia(deck.media);
 document.title = deck.title;
 
 let presenter: Window | null = null;

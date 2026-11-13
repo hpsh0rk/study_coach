@@ -49,6 +49,15 @@ describe("validateWidget", () => {
     expect(validateWidget({ kind: "sim", embedId: "nope" })[0]?.code).toBe("embed");
     expect(validateWidget({ kind: "sim", embedId: "wave-string" })).toEqual([]);
   });
+
+  it("validates figure assetId format and optional lesson knownAssetIds set", () => {
+    expect(validateWidget({ kind: "figure", assetId: "med_AbCdEf123456", caption: "Fig 16.8" })).toEqual([]);
+    expect(validateWidget({ kind: "figure", assetId: "https://evil.example/a.png" })[0]?.code).toBe("figure");
+    expect(validateWidget({ kind: "figure", assetId: "../etc/passwd" })[0]?.code).toBe("figure");
+    const known = new Set(["med_RealFig00001"]);
+    expect(validateWidget({ kind: "figure", assetId: "med_RealFig00001" }, { knownAssetIds: known })).toEqual([]);
+    expect(validateWidget({ kind: "figure", assetId: "med_Hallucinated" }, { knownAssetIds: known })[0]?.code).toBe("figure");
+  });
 });
 
 describe("chartOption", () => {

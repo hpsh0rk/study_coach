@@ -29,6 +29,8 @@ export interface RenderOptions {
   hideAnswers?: boolean;
   /** Live classroom player: when 0 tally votes are entered on a poll quiz, allow touchboard option taps. */
   allowPollClick?: boolean;
+  /** Share link token so `/s/:token` renders `/api/media/:id?share=<token>`. */
+  shareToken?: string;
 }
 
 /** A built-in label in the lesson's teaching language. */
@@ -78,7 +80,7 @@ function step<T extends HTMLElement>(el: T, k: number): T {
 }
 
 function widget(b: Builder, host: HTMLElement, spec: Parameters<typeof renderWidget>[0]): void {
-  b.handles.push(renderWidget(spec, host, { interactive: b.opts.interactive }));
+  b.handles.push(renderWidget(spec, host, { interactive: b.opts.interactive, ...(b.opts.shareToken ? { shareToken: b.opts.shareToken } : {}) }));
 }
 
 function title(b: Builder, value: string): void {

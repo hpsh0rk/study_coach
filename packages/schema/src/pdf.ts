@@ -108,3 +108,15 @@ export const PageRange = z
   .object({ start: z.number().int().min(1), end: z.number().int().min(1) })
   .refine((r) => r.end >= r.start, "end must be >= start");
 export type PageRange = z.infer<typeof PageRange>;
+
+/** Per-page figure catalog entry supplied to AI outline/slide generation and figure pickers. */
+export const FigureCatalogEntry = z.object({
+  assetId: z.string().trim().min(1).max(64),
+  /** Virtual or physical page number (matches `SlideSpec.sourcePages` / `PageText.no`). */
+  pageNo: z.number().int().min(1).optional(),
+  /** Printed or multi-PDF display page label (e.g. "704" or "Paper 4 p.5"). */
+  pageLabel: z.string().trim().max(60).optional(),
+  label: z.string().trim().max(80).default(""),
+  caption: z.string().trim().max(200).default(""),
+});
+export type FigureCatalogEntry = z.infer<typeof FigureCatalogEntry>;

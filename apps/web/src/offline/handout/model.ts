@@ -37,11 +37,29 @@ export interface HandoutLessonMeta {
   pageLabels?: Record<number, string>;
 }
 
+export interface HandoutMediaItem {
+  dataUrl: string;
+  pngBytes?: Uint8Array;
+  width: number;
+  height: number;
+}
+
 export interface HandoutInput {
   lesson: HandoutLessonMeta;
   outline: Outline;
   slides: Slide[];
   copy: HandoutCopy;
+  media?: Record<string, HandoutMediaItem>;
+}
+
+export interface HandoutFigure {
+  assetId: string;
+  caption?: HandoutRun[];
+  alt: string;
+  dataUrl?: string;
+  pngBytes?: Uint8Array;
+  width: number;
+  height: number;
 }
 
 export interface HandoutTable {
@@ -64,6 +82,7 @@ export interface HandoutNoteBlock {
   tables: HandoutTable[];
   formulas: HandoutFormula[];
   flows: HandoutRun[][][];
+  figures: HandoutFigure[];
 }
 
 export interface HandoutLoopGroup {
@@ -416,7 +435,12 @@ function tableFromChart(spec: ChartSpec, copy: HandoutCopy, source = ""): Handou
   };
 }
 
-function extractVisualIntoBlock(visual: VisualSpec, copy: HandoutCopy, block: HandoutNoteBlock): void {
+function extractVisualIntoBlock(
+  visual: VisualSpec,
+  copy: HandoutCopy,
+  block: HandoutNoteBlock,
+  media?: Record<string, HandoutMediaItem>,
+): void {
   switch (visual.kind) {
     case "table":
       block.tables.push(tableFromSpec(visual, copy));
@@ -441,6 +465,24 @@ function extractVisualIntoBlock(visual: VisualSpec, copy: HandoutCopy, block: Ha
         ),
       );
       break;
+    case "figure": {
+      const resolved = media?.[visual.assetId];
+      const capRuns = visual.caption ? parseInlineRuns(visual.caption, { copy }) : undefined;
+      const altText =
+        (visual.alt ? runsToPlainText(parseInlineRuns(visual.alt, { copy: "student" })) : "") ||
+        (capRuns ? runsToPlainText(capRuns) : "") ||
+        "Textbook figure";
+      block.figures.push({
+        assetId: visual.assetId,
+        ...(capRuns ? { caption: capRuns } : {}),
+        alt: altText,
+        ...(resolved?.dataUrl ? { dataUrl: resolved.dataUrl } : {}),
+        ...(resolved?.pngBytes ? { pngBytes: resolved.pngBytes } : {}),
+        width: resolved?.width && resolved.width > 0 ? resolved.width : 640,
+        height: resolved?.height && resolved.height > 0 ? resolved.height : 400,
+      });
+      break;
+    }
     case "placeholder":
       break;
   }
@@ -525,7 +567,7 @@ function isTeachingSlide(slide: Slide): boolean {
  * with zero extra LLM calls, guaranteeing exact numeric, formula, and past-paper alignment with the slide deck.
  */
 export function buildHandoutDoc(input: HandoutInput): HandoutDoc {
-  const { lesson, outline, slides, copy } = input;
+  const { lesson, outline, slides, copy, media } = input;
   const minutes = lesson.minutes ?? lesson.params?.minutes ?? 45;
   const level = lesson.level ?? lesson.params?.level ?? "intermediate";
   const lessonType = lesson.lessonType ?? lesson.params?.lessonType ?? "new";
@@ -619,19 +661,20 @@ export function buildHandoutDoc(input: HandoutInput): HandoutDoc {
         tables: [],
         formulas: [],
         flows: [],
+        figures: [],
       };
 
       if (c.layout === "statement") {
         block.bullets = c.bullets.map((b) => parseInlineRuns(b, { copy, blankHighlights: true, glossaryTerms: slideTerms }));
-        extractVisualIntoBlock(c.visual, copy, block);
+        extractVisualIntoBlock(c.visual, copy, block, media);
       } else if (c.layout === "chart") {
         block.bullets = c.takeaways.map((t) => parseInlineRuns(t, { copy, blankHighlights: true, glossaryTerms: slideTerms }));
         if (c.chart.kind === "table") {
           block.tables.push(tableFromSpec(c.chart, copy));
         } else if (c.chart.kind === "chart") {
           block.tables.push(tableFromChart(c.chart, copy, c.source));
-        } else if (c.chart.kind === "function") {
-          extractVisualIntoBlock(c.chart, copy, block);
+        } else if (c.chart.kind === "function" || c.chart.kind === "figure") {
+          extractVisualIntoBlock(c.chart, copy, block, media);
         }
       } else if (c.layout === "summary") {
         block.bullets = c.nodes.map((node) => {

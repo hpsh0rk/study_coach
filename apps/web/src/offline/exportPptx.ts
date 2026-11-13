@@ -103,9 +103,49 @@ async function svgMarkupTo2xPng(svgMarkup: string, width: number, height: number
   return canvas.toDataURL("image/png");
 }
 
-/** 2× PNG snapshot for ECharts plots and non-exact KaTeX display formula cards. */
+async function fetchFigurePngDataUrl(assetId: string): Promise<string | null> {
+  try {
+    const res = await fetch(`/api/media/${encodeURIComponent(assetId)}`, { credentials: "same-origin" });
+    if (!res.ok) return null;
+    const mime = res.headers.get("content-type")?.split(";")[0]?.trim() || "image/png";
+    const buf = await res.arrayBuffer();
+    if (mime === "image/png" || mime === "image/jpeg") {
+      return `data:${mime};base64,${arrayBufferToBase64(buf)}`;
+    }
+    // Convert WebP (or any browser-decodable raster) to PNG so PowerPoint / Keynote / LibreOffice open it universally.
+    const blobUrl = URL.createObjectURL(new Blob([buf], { type: mime }));
+    try {
+      const img = new Image();
+      img.src = blobUrl;
+      await img.decode();
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, img.naturalWidth || img.width);
+      canvas.height = Math.max(1, img.naturalHeight || img.height);
+      const ctx = canvas.getContext("2d")!;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL("image/png");
+    } finally {
+      URL.revokeObjectURL(blobUrl);
+    }
+  } catch {
+    return null;
+  }
+}
+
+/** 2× PNG snapshot for ECharts plots, non-exact KaTeX display formula cards, and native PNG data URLs for extracted textbook figures. */
 function chartSnapshot(theme: ThemeId) {
+  const figureCache = new Map<string, Promise<string | null>>();
   return async (item: ImageItem): Promise<string | null> => {
+    if (item.spec.kind === "figure") {
+      let hit = figureCache.get(item.spec.assetId);
+      if (!hit) {
+        hit = fetchFigurePngDataUrl(item.spec.assetId);
+        figureCache.set(item.spec.assetId, hit);
+      }
+      return hit;
+    }
     const frame = document.createElement("div");
     frame.className = `kj-slide kj-theme-${theme}`;
     Object.assign(frame.style, {

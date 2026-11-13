@@ -22,6 +22,7 @@ export function PlayerHost({
   onEscape,
   language,
   hideAnswers,
+  shareToken,
 }: {
   slides: PlayerSlide[];
   theme: ThemeId;
@@ -32,6 +33,7 @@ export function PlayerHost({
   onEscape?: () => void;
   language?: TeachingLanguage;
   hideAnswers?: boolean;
+  shareToken?: string;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const report = useRef(onPosition);
@@ -51,6 +53,7 @@ export function PlayerHost({
       pageLabels,
       language,
       hideAnswers,
+      ...(shareToken ? { shareToken } : {}),
       onChange: (pos) => {
         sync?.position(pos);
         report.current?.(pos);
@@ -72,7 +75,7 @@ export function PlayerHost({
       sync?.close();
       p.dispose();
     };
-  }, [slides, theme, onSource, pageLabels, syncId, language, hideAnswers]);
+  }, [slides, theme, onSource, pageLabels, syncId, language, hideAnswers, shareToken]);
   return <div ref={host} className="player-host" data-testid="player" />;
 }
 
@@ -157,7 +160,7 @@ export function SharePage() {
           课前预习 · 答案课后公布 Preview — answers after class
         </div>
       )}
-      <PlayerHost slides={data.slides} theme={data.theme} pageLabels={data.pageLabels} language={data.language} hideAnswers={data.hideAnswers} />
+      <PlayerHost slides={data.slides} theme={data.theme} pageLabels={data.pageLabels} language={data.language} hideAnswers={data.hideAnswers} shareToken={token} />
     </div>
   );
 }

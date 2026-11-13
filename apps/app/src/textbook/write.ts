@@ -6,7 +6,7 @@ import { and, asc, between, count, eq, gte, isNull, lte, sql } from "drizzle-orm
 import { distributeText, needsText, PASTE_PARSER, PDFJS_PARSER, pageFacts, type PageFacts } from "@kj/textbook";
 import { newId, type ChapterNode, type PageText } from "@kj/schema";
 import { db } from "../db/index.ts";
-import { auditLog } from "../db/schema.ts";
+import { auditLog, mediaAssets } from "../db/schema.ts";
 import type { Env, SessionUser } from "../env.ts";
 import { HttpError } from "../http.ts";
 import type { TextbookRow } from "./index.ts";
@@ -154,6 +154,7 @@ export async function purgeTextbook(env: Env, user: SessionUser, doc: TextbookRo
   await d.batch([
     d.delete(pages).where(eq(pages.documentId, doc.id)),
     d.delete(chapters).where(eq(chapters.documentId, doc.id)),
+    d.delete(mediaAssets).where(eq(mediaAssets.documentId, doc.id)),
     d.update(documents).set({ purgedAt: at, archivedAt: doc.archivedAt ?? at, fileSha256: null }).where(eq(documents.id, doc.id)),
     d.insert(auditLog).values({ orgId: doc.orgId, actorId: user.id, action: "document.purged", target: doc.id }),
   ]);

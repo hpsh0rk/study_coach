@@ -24,9 +24,9 @@ import { OUTLINE_SOURCE_CHARS, scopeAdvice } from "@kj/pedagogy";
 import { DEFAULT_PARAMS, type ChapterNode, type LessonSource, type PageKind, type PageRange, type PdfLessonSource, type PdfSourceRole } from "@kj/schema";
 import { ApiError, lessonSourcesOf, multisourceLessonApi } from "../../api.ts";
 import { lessonApi, type LessonView, type UnitPreview } from "../../lessonApi.ts";
-import { documentApi, type DocumentRow, type ExternalParserInfo, type PastedPage, type ReaderNotes, type VisionParserInfo } from "../../textbook/api.ts";
-import { parseExternally, pdfCutter, rememberedFile, rememberFile, type ExternalOutcome } from "../../textbook/external.ts";
-import { pageRenderer, parsePdf } from "../../textbook/pdf.ts";
+import { documentApi, mediaApi, type DocumentRow, type ExternalParserInfo, type PastedPage, type ReaderNotes, type VisionParserInfo } from "../../textbook/api.ts";
+import { parseExternally, pdfCutter, rememberedFile, rememberedPageOffset, rememberFile, type ExternalOutcome } from "../../textbook/external.ts";
+import { extractPdfFigures, pageRenderer, parsePdf } from "../../textbook/pdf.ts";
 import { readWithVision } from "../../textbook/vision.ts";
 import { fileProblem, ingestPdf, sha256Hex, type IngestOutcome } from "../../textbook/ingest.ts";
 import { Stepper, StepIntro, type StepKey } from "./Stepper.tsx";
@@ -536,13 +536,24 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
     setImportingMissing(true);
     setError("");
     try {
-      const parsed = await parsePdf(await file.arrayBuffer(), doc.title, { pageNumbers: stats.missing });
+      const buf = await file.arrayBuffer();
+      const offset = rememberedPageOffset(documentId);
+      const parsed = await parsePdf(buf, doc.title, { pageNumbers: stats.missing, ...(offset > 1 ? { pageOffset: offset } : {}) });
       const batchSize = 40;
       let latestReceived = doc.pagesReceived;
       for (let i = 0; i < parsed.pages.length; i += batchSize) {
         const res = await documentApi.putPages(documentId, parsed.pages.slice(i, i + batchSize));
         latestReceived = res.received;
       }
+      try {
+        const figs = await extractPdfFigures(buf, { pageNumbers: stats.missing.slice(0, 45), ...(offset > 1 ? { pageOffset: offset } : {}) });
+        for (let i = 0; i < figs.length; i += 8) {
+          await mediaApi.uploadBatch(
+            documentId,
+            figs.slice(i, i + 8).map(({ pageNo, label, caption, image }) => ({ pageNo, label, caption, image })),
+          );
+        }
+      } catch {}
       setDoc((prev) => (prev ? { ...prev, pagesReceived: latestReceived } : prev));
       setImportedRanges((prev) =>
         normalizeRanges([...(prev ?? []), ...parsed.pages.map((p) => ({ start: p.no, end: p.no }))], doc.pageCount),
@@ -628,6 +639,8 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
         putPages: documentApi.putPages,
         restore: documentApi.restore,
         confirmRestore: () => true,
+        extractFigures: (data, opts) => extractPdfFigures(data, opts),
+        putFigures: (docId, items) => mediaApi.uploadBatch(docId, items),
       });
       rememberFile(id, file);
       const list = (await documentApi.list()).documents.filter((d) => d.pagesReceived > 0);
@@ -725,6 +738,27 @@ export function ChaptersStep({ documentId, lesson, reached }: { documentId: stri
             ...existingNonPdf,
           ]
         : undefined;
+
+      // Ensure composite 2x figures exist for selected pages when the PDF is still in this tab (e.g. teacher initially imported full book > 45 pages, then picked Ch 16):
+      const memFile = rememberedFile(documentId);
+      if (memFile && selectedNos.length > 0 && selectedNos.length <= 45) {
+        try {
+          const existingMedia = await mediaApi.listForDocument(documentId, selectedNos);
+          if (existingMedia.assets.length === 0) {
+            const offset = rememberedPageOffset(documentId);
+            const figs = await extractPdfFigures(await memFile.arrayBuffer(), {
+              pageNumbers: selectedNos,
+              ...(offset > 1 ? { pageOffset: offset } : {}),
+            });
+            for (let i = 0; i < figs.length; i += 8) {
+              await mediaApi.uploadBatch(
+                documentId,
+                figs.slice(i, i + 8).map(({ pageNo, label, caption, image }) => ({ pageNo, label, caption, image })),
+              );
+            }
+          }
+        } catch {}
+      }
 
       const view = lesson
         ? await multisourceLessonApi.patch<LessonView>(lesson.lesson.id, {

@@ -1,12 +1,12 @@
 export { DEFAULT_OPTIONS, optionsOf, type PipelineOptions } from "./options.ts";
 export type { DraftInput, PlannerSection } from "./types.ts";
-export { buildMessages as buildOutlineMessages, draftOutline, normalizeOutline, OUTLINE_PROMPT_VERSION, OUTLINE_SOURCE_CHARS, rebalanceMinutes, type DraftResult } from "./outline.ts";
+export { buildMessages as buildOutlineMessages, draftOutline, formatFigureCatalogEntry, normalizeOutline, OUTLINE_PROMPT_VERSION, OUTLINE_SOURCE_CHARS, rebalanceMinutes, type DraftResult } from "./outline.ts";
 export { stubOutline } from "./outline-stub.ts";
 export { checkSourcePages, contentTokens, enforceCheckCadence } from "./outline-repair.ts";
 export { simFor } from "./sims.ts";
 export { buildMessages as buildSlideMessages, checkSourceText, SLIDE_PROMPT_VERSION, sourceUnverified, SLIDE_SOURCE_CHARS, SlideInvalidError, sourcePagesFor, SpecNotFoundError, visualRuleFor, workedSpecFor, writeSlide, type SlideInput, type WriteInput, type WriteResult } from "./slide.ts";
 export { slideKey, slideKeyInput } from "./slide-key.ts";
 export { findFormula, stubSlide, stubTable } from "./slide-stub.ts";
-export { applyGlossary, clipToBudgets, problemsOf, sanitizeWidgets, truncateLists } from "./checks.ts";
+export { applyGlossary, clipToBudgets, problemsOf, sanitizeWidgets, truncateLists, type SanitizeWidgetsOptions } from "./checks.ts";
 export { clip, quantitiesIn, sentencesOf } from "./text.ts";
 export { neutralizeSource, suspiciousContent } from "./safety.ts";

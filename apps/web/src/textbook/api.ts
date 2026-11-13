@@ -147,3 +147,41 @@ export interface LibraryRow {
   lessons: number;
   lessonsAll: number;
 }
+
+export interface MediaAssetDto {
+  id: string;
+  documentId: string | null;
+  lessonId: string | null;
+  pageNo: number | null;
+  virtualPageNo?: number | null;
+  label: string;
+  caption: string;
+  mime: "image/png" | "image/webp" | "image/jpeg";
+  width: number;
+  height: number;
+  sizeBytes: number;
+  sha256: string;
+  createdAt: number;
+}
+
+export interface UploadMediaItem {
+  pageNo?: number;
+  label?: string;
+  caption?: string;
+  image: string;
+}
+
+export const mediaApi = {
+  listForLesson: (lessonId: string) =>
+    api<{ assets: MediaAssetDto[] }>(`/api/media?lessonId=${encodeURIComponent(lessonId)}`),
+  listForDocument: (documentId: string, pages?: number[]) => {
+    const query = new URLSearchParams({ documentId });
+    if (pages?.length) query.set("pages", pages.join(","));
+    return api<{ assets: MediaAssetDto[] }>(`/api/media?${query.toString()}`);
+  },
+  upload: (body: UploadMediaItem & { documentId?: string; lessonId?: string }) =>
+    api<{ asset: MediaAssetDto; reused: boolean }>("/api/media", { body: { ...body } }),
+  uploadBatch: (documentId: string, items: UploadMediaItem[]) =>
+    api<{ assets: MediaAssetDto[]; reusedCount: number }>("/api/media/batch", { body: { documentId, items } }),
+  remove: (id: string) => api<{ ok: true }>(`/api/media/${encodeURIComponent(id)}`, { method: "DELETE" }),
+};

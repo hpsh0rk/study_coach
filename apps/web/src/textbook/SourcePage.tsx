@@ -2,7 +2,8 @@ import { useEffect, useId, useRef, useState } from "react";
 import { isVisionParser, MINERU_AGENT_PARSER, MINERU_PARSER, PASTE_PARSER, PDFJS_PARSER } from "@kj/textbook";
 import type { PdfSourceRole } from "@kj/schema";
 import { activeLessonPdfSources, ApiError } from "../api.ts";
-import { documentApi, type TextbookPage } from "./api.ts";
+import { documentApi, mediaApi, type MediaAssetDto, type TextbookPage } from "./api.ts";
+import { PageCropper } from "./PageCropper.tsx";
 
 const ORIGIN: Record<string, string> = {
   [PASTE_PARSER]: "这一页的文字由老师粘贴 · Text pasted by the teacher",
@@ -27,10 +28,12 @@ export function SourcePage({
   page,
   sources,
   onClose,
+  onFigureSaved,
 }: {
   page: TextbookPage;
   sources?: SourceDocOption[];
   onClose: () => void;
+  onFigureSaved?: (asset: MediaAssetDto) => void;
 }) {
   const titleId = useId();
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -41,12 +44,30 @@ export function SourcePage({
   const [activeDocId, setActiveDocId] = useState<string>(page.documentId ?? docOptions[0]?.documentId ?? "");
   const [switchError, setSwitchError] = useState("");
   const [loadingDoc, setLoadingDoc] = useState(false);
+  const [pageFigures, setPageFigures] = useState<MediaAssetDto[]>([]);
+  const [cropping, setCropping] = useState(false);
 
   useEffect(() => {
     setCurrentPage(page);
     setActiveDocId(page.documentId ?? docOptions[0]?.documentId ?? "");
     setSwitchError("");
+    setCropping(false);
   }, [page]);
+
+  useEffect(() => {
+    if (!activeDocId || !currentPage.no) {
+      setPageFigures([]);
+      return;
+    }
+    let alive = true;
+    mediaApi
+      .listForDocument(activeDocId, [currentPage.no])
+      .then((r) => alive && setPageFigures(r.assets))
+      .catch(() => alive && setPageFigures([]));
+    return () => {
+      alive = false;
+    };
+  }, [activeDocId, currentPage.no]);
 
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -161,6 +182,61 @@ export function SourcePage({
               </p>
             )}
             <pre className="source-text">{currentPage.text}</pre>
+            {activeDocId && (
+              <div style={{ marginTop: 12 }}>
+                <div className="row between wrap">
+                  <span className="muted small">
+                    本页已提取插图：{pageFigures.length} 张 · Figures on this page
+                  </span>
+                  <button
+                    type="button"
+                    className="btn small ghost"
+                    data-testid="source-toggle-cropper"
+                    onClick={() => setCropping((v) => !v)}
+                  >
+                    {cropping ? "收起裁图" : "✂ 从本页框选插图 Crop figure"}
+                  </button>
+                </div>
+                {pageFigures.length > 0 && (
+                  <div className="row wrap" style={{ gap: 10, marginTop: 8 }} data-testid="source-page-figures">
+                    {pageFigures.map((fig) => (
+                      <figure
+                        key={fig.id}
+                        style={{
+                          margin: 0,
+                          padding: 6,
+                          border: "1px solid var(--line)",
+                          borderRadius: 8,
+                          background: "#fff",
+                          maxWidth: 160,
+                        }}
+                      >
+                        <img
+                          src={`/api/media/${encodeURIComponent(fig.id)}`}
+                          alt={fig.caption || fig.label || "Figure"}
+                          style={{ display: "block", maxWidth: 146, maxHeight: 96, objectFit: "contain", margin: "0 auto" }}
+                        />
+                        <figcaption className="small muted" style={{ marginTop: 4, textAlign: "center" }}>
+                          {fig.label || `p.${fig.pageNo}`}
+                        </figcaption>
+                      </figure>
+                    ))}
+                  </div>
+                )}
+                {cropping && (
+                  <PageCropper
+                    documentId={activeDocId}
+                    pageNo={currentPage.no}
+                    onCancel={() => setCropping(false)}
+                    onCropped={(asset) => {
+                      setPageFigures((prev) => (prev.some((x) => x.id === asset.id) ? prev : [...prev, asset]));
+                      setCropping(false);
+                      onFigureSaved?.(asset);
+                    }}
+                  />
+                )}
+              </div>
+            )}
           </>
         )}
       </div>

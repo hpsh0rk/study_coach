@@ -104,6 +104,34 @@ function simIds(slides: Slide[]): string[] {
   return [...ids];
 }
 
+export function figureAssetIdsOf(slides: Pick<Slide, "content">[]): string[] {
+  const ids = new Set<string>();
+  for (const s of slides) {
+    if (s.content.layout === "statement" && s.content.visual.kind === "figure") ids.add(s.content.visual.assetId);
+    if (s.content.layout === "chart" && s.content.chart.kind === "figure") ids.add(s.content.chart.assetId);
+  }
+  return [...ids];
+}
+
+async function fetchMediaDataUrls(assetIds: string[]): Promise<Record<string, string>> {
+  if (!assetIds.length) return {};
+  const out: Record<string, string> = {};
+  await Promise.all(
+    assetIds.map(async (id) => {
+      try {
+        const res = await fetch(`/api/media/${encodeURIComponent(id)}`, { credentials: "same-origin" });
+        if (!res.ok) return;
+        const mime = res.headers.get("content-type")?.split(";")[0]?.trim() || "image/png";
+        const buf = await res.arrayBuffer();
+        out[id] = `data:${mime};base64,${base64(buf)}`;
+      } catch {
+        // Skip unreachable figure asset cleanly.
+      }
+    }),
+  );
+  return out;
+}
+
 const escapeHtml = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
 
 interface OfflineFile {
@@ -120,7 +148,12 @@ interface OfflineSourceDeck {
 }
 
 /** Canonical data embedded in the offline file; student notes are removed even if the caller supplied them. */
-export function offlineDeckData(deck: OfflineSourceDeck, audience: OfflineAudience, sims: Record<string, string> = {}): OfflineDeck {
+export function offlineDeckData(
+  deck: OfflineSourceDeck,
+  audience: OfflineAudience,
+  sims: Record<string, string> = {},
+  media?: Record<string, string>,
+): OfflineDeck {
   return {
     title: deck.lesson.title,
     audience,
@@ -130,6 +163,7 @@ export function offlineDeckData(deck: OfflineSourceDeck, audience: OfflineAudien
     pageLabels: deck.lesson.pageLabels,
     slides: deck.slides.map((s) => ({ content: s.content, sources: s.sources, notes: audience === "student" ? "" : s.notes, pageType: s.pageType })),
     sims,
+    ...(media && Object.keys(media).length > 0 ? { media } : {}),
   };
 }
 
@@ -155,10 +189,17 @@ async function buildOfflineHtml(lessonId: string, audience: OfflineAudience, ans
     const entry = resolveEmbed(id);
     if (entry) sims[id] = await text(entry.src);
   }
-  const data = offlineDeckData(deck, audience, sims);
+  const media = await fetchMediaDataUrls(figureAssetIdsOf(deck.slides));
+  const data = offlineDeckData(deck, audience, sims, media);
   const json = serializeOfflineDeck(data);
+  // Scan character code points from slide text/title/labels only (skipping base64 image/sim payloads) so font subsetting stays minimal!
+  const textOnlyJson = JSON.stringify({
+    title: data.title,
+    pageLabels: data.pageLabels,
+    slides: data.slides,
+  });
   const chars = new Set<number>();
-  for (const ch of json + ALWAYS) chars.add(ch.codePointAt(0)!);
+  for (const ch of textOnlyJson + ALWAYS) chars.add(ch.codePointAt(0)!);
   const fonts = await inlineFontFaces(chars, hasMath(deck.slides, audience));
   const html = [
     "<!doctype html>",

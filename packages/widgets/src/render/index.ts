@@ -3,7 +3,7 @@ import { BarChart, LineChart, ScatterChart } from "echarts/charts";
 import { GridComponent, LegendComponent } from "echarts/components";
 import * as echarts from "echarts/core";
 import { SVGRenderer } from "echarts/renderers";
-import { tokenizeRichText, type FlowSpec, type FormulaSpec, type FunctionSpec, type PlaceholderSpec, type RichInline, type SimSpec, type TableSpec, type WidgetSpec } from "@kj/schema";
+import { tokenizeRichText, type FigureSpec, type FlowSpec, type FormulaSpec, type FunctionSpec, type PlaceholderSpec, type RichInline, type SimSpec, type TableSpec, type WidgetSpec } from "@kj/schema";
 import { chartOption, functionOption, initialValues, resolveEmbed, type Palette } from "../index.ts";
 
 echarts.use([BarChart, LineChart, ScatterChart, GridComponent, LegendComponent, SVGRenderer]);
@@ -15,13 +15,28 @@ export interface WidgetHandle {
 export interface WidgetContext {
   /** Thumbnails and measurement render static (no iframes, no slider handlers). */
   interactive: boolean;
+  /** Optional share link token appended to `/api/media/:id?share=...` in `/s/:token`. */
+  shareToken?: string;
 }
 
 let embedHtml: Record<string, string> | null = null;
+let mediaDataUrls: Record<string, string> | null = null;
 
 /** Self-contained decks (offline export) ship each simulation's HTML and load it via srcdoc. */
 export function inlineEmbeds(html: Record<string, string>): void {
   embedHtml = html;
+}
+
+/** Self-contained offline decks ship referenced `assetId` images as `data:image/...;base64,...` URLs. */
+export function inlineMedia(media: Record<string, string>): void {
+  mediaDataUrls = Object.keys(media).length > 0 ? media : null;
+}
+
+export function resolveMediaSrc(assetId: string, shareToken?: string): string {
+  const inlined = mediaDataUrls?.[assetId];
+  if (inlined !== undefined) return inlined;
+  const safeId = encodeURIComponent(assetId);
+  return shareToken ? `/api/media/${safeId}?share=${encodeURIComponent(shareToken)}` : `/api/media/${safeId}`;
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?: string): HTMLElementTagNameMap[K] {
@@ -202,6 +217,32 @@ function renderPlaceholder(spec: PlaceholderSpec, host: HTMLElement): WidgetHand
   return { dispose() {} };
 }
 
+function renderFigure(spec: FigureSpec, host: HTMLElement, ctx: WidgetContext): WidgetHandle {
+  const doc = host.ownerDocument ?? document;
+  const fig = doc.createElement("figure");
+  fig.className = "kj-figure";
+  const stage = doc.createElement("div");
+  stage.className = "kj-figure-stage";
+  const img = doc.createElement("img");
+  img.className = "kj-figure-img";
+  img.src = resolveMediaSrc(spec.assetId, ctx.shareToken);
+  img.alt = spec.alt?.trim() || spec.caption?.trim() || "Textbook figure";
+  img.decoding = "async";
+  img.addEventListener("error", () => {
+    fig.dataset.broken = "1";
+  });
+  stage.append(img);
+  fig.append(stage);
+  if (spec.caption?.trim()) {
+    const cap = doc.createElement("figcaption");
+    cap.className = "kj-figure-caption";
+    renderRichText(cap, spec.caption);
+    fig.append(cap);
+  }
+  host.append(fig);
+  return { dispose() {} };
+}
+
 /** Renders a widget into `host` (which must already have its final size). */
 /** Renders a widget; a spec that throws (e.g. an expression that does not compile) shows the 图示待补 placeholder instead. */
 export function renderWidget(spec: WidgetSpec, host: HTMLElement, ctx: WidgetContext): WidgetHandle {
@@ -236,6 +277,8 @@ function renderWidgetUnchecked(spec: WidgetSpec, host: HTMLElement, ctx: WidgetC
       return renderSim(spec, host, ctx);
     case "table":
       return renderTable(spec, host);
+    case "figure":
+      return renderFigure(spec, host, ctx);
     case "placeholder":
       return renderPlaceholder(spec, host);
   }

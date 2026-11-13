@@ -242,4 +242,15 @@ describe("verifyNumbers", () => {
       expect.objectContaining({ kind: "calc", text: "v = 5 × 0.4 = 2.5" }),
     ]);
   });
+
+  it("ignores textbook figure numbers (Fig. 16.8, Figure 16.14, 图 16.2) and figure widget captions", () => {
+    const withFigRef: SlideContent = {
+      layout: "statement",
+      title: "Magnetic field around a solenoid",
+      bullets: ["See Fig. 16.8 and Figure 16.14 for field lines", "参见图 16.2 的磁感线分布"],
+      visual: { kind: "figure", assetId: "med_solenoid704", caption: "Fig 16.8: Magnetic field around a solenoid" },
+      terms: [],
+    };
+    expect(verifyNumbers(withFigRef, "Magnetic field lines run from North to South.", { pageType: "concept" })).toEqual([]);
+  });
 });

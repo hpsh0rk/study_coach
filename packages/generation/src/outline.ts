@@ -8,6 +8,7 @@ import {
   SlideSpec,
   SOURCE_STRIDE,
   VisualKind,
+  type FigureCatalogEntry,
   type GlossaryEntry,
   type LessonParams,
   type LessonSource,
@@ -61,12 +62,28 @@ function draftSchemaFor(o: PipelineOptions) {
   return hit;
 }
 
-function pageTypeTable(o: PipelineOptions, sim: EmbedEntry | undefined): string {
+const TEXTBOOK_FIGURE_FOCUS_RE =
+  /书本.*图|原书.*图|教材.*图|课本.*图|书上.*图|多用.*原图|直接用.*图|\b(?:textbook|book|coursebook|source)\s+(?:figures?|images?|diagrams?|illustrations?|pictures?)\b/i;
+
+export function formatFigureCatalogEntry(f: FigureCatalogEntry): string {
+  const loc =
+    f.pageNo !== undefined
+      ? f.pageNo > SOURCE_STRIDE
+        ? `S${decodeSourcePage(f.pageNo).pdfIndex + 1} p.${decodeSourcePage(f.pageNo).pageNo} | sourcePage=${f.pageNo}`
+        : `p.${f.pageLabel ?? f.pageNo}`
+      : "lesson";
+  const labelPart = f.label ? ` ${neutralizeSource(f.label)}` : "";
+  const capPart = f.caption ? `: ${neutralizeSource(f.caption)}` : "";
+  return `[${loc}${labelPart} (assetId: ${f.assetId})${capPart}]`;
+}
+
+function pageTypeTable(o: PipelineOptions, sim: EmbedEntry | undefined, hasFigures = false): string {
   return PageType.options
     .filter((t) => t !== "experiment" || sim)
     .map((t) => {
       const d = PAGE_TYPES[t];
-      const visual = o.visualPlanning === "outline" ? `, visual one of [${PAGE_TYPE_VISUALS[t].join(", ")}]` : "";
+      const allowedVisuals = hasFigures ? PAGE_TYPE_VISUALS[t] : PAGE_TYPE_VISUALS[t].filter((v) => v !== "figure");
+      const visual = o.visualPlanning === "outline" ? `, visual one of [${allowedVisuals.join(", ")}]` : "";
       return `- ${t} (${d.label.en}): ${d.minutes} min (range ${d.range[0]}–${d.range[1]}), ${d.mode}, layout "${LAYOUTS[layoutForPageType(t)].label.en}"${visual}`;
     })
     .join("\n");
@@ -114,6 +131,9 @@ export function buildMessages(input: MultiSourceDraftInput, problems?: Violation
   const syllabusItems = syllabusItemsOf(input.sources);
   const hasExamSource = pdfSources.some((s) => s.role === "past_paper" || s.role === "workbook");
   const isMultiPdf = pdfSources.length > 1 || input.pages.some((p) => p.no > SOURCE_STRIDE);
+  const figures = input.figures ?? [];
+  const hasFigures = figures.length > 0;
+  const wantsTextbookFigures = TEXTBOOK_FIGURE_FOCUS_RE.test(input.params.focus ?? "");
   const langRule =
     input.params.language === "zh"
       ? "Write all titles, objectives, key points, notCovered and glossary terms in pure Simplified Chinese (never English term labels unless teaching an explicit English symbol)."
@@ -145,7 +165,14 @@ export function buildMessages(input: MultiSourceDraftInput, problems?: Violation
     o.budgetsInPrompt
       ? "- One teaching point per slide. Title = a full-sentence assertion (≤ 12 words). 2–3 key points per slide, each ≤ 9 words."
       : "- One teaching point per slide. Title = a full-sentence assertion.",
-    o.visualPlanning === "outline" ? "- Concept, process and data pages need a meaningful visual (formula, function plot, chart, flow or a small table). Choose \"none\" only when the point needs a picture none of these can draw; the slide then shows a \"图示待补\" placeholder for the teacher." : "",
+    o.visualPlanning === "outline"
+      ? hasFigures
+        ? '- Concept, process and data pages need a meaningful visual (formula, function plot, chart, flow, table or figure). Choose "figure" when an extracted textbook diagram in Available textbook figures directly illustrates the teaching point, and cite that figure\'s page in sourcePages. Choose "none" only when none of these apply.'
+        : '- Concept, process and data pages need a meaningful visual (formula, function plot, chart, flow or a small table). Choose "none" only when the point needs a picture none of these can draw; the slide then shows a "图示待补" placeholder for the teacher.'
+      : "",
+    hasFigures && wantsTextbookFigures
+      ? '- Teacher figure preference: actively select visual "figure" on concept, process or data slides whenever a relevant textbook diagram is available on the cited pages.'
+      : "",
     isMultiPdf
       ? "- sourcePages: cite the exact integer sourcePage of each supporting page (for S1 use the page number N; for S2+ use the `sourcePage=...` integer shown on that line). Stay faithful to the sources; do not invent facts."
       : "- sourcePages: the textbook pages ([p.N] markers) that support the slide. Stay faithful to the source; do not invent facts.",
@@ -157,7 +184,7 @@ export function buildMessages(input: MultiSourceDraftInput, problems?: Violation
         : "- glossary: the key English terms of the lesson (`zh` empty string).",
     `- ${SOURCE_RULE}`,
     "Page types:",
-    pageTypeTable(o, sim),
+    pageTypeTable(o, sim, hasFigures),
     `Return JSON only, matching this JSON Schema: ${draftSchemaFor(o).json}`,
   ]
     .filter(Boolean)
@@ -176,6 +203,7 @@ export function buildMessages(input: MultiSourceDraftInput, problems?: Violation
       : "",
     syllabusItems.length ? `Syllabus checklist (MUST cover all items):\n${syllabusItems.map((it, idx) => `${idx + 1}. ${neutralizeSource(it)}`).join("\n")}` : "",
     noteSources.length ? `Teacher reference notes:\n${noteSources.map((n) => `- ${neutralizeSource(n.title)}: ${neutralizeSource(n.text)}`).join("\n")}` : "",
+    hasFigures ? `Available textbook figures on selected pages:\n${figures.slice(0, 60).map((f) => `- ${formatFigureCatalogEntry(f)}`).join("\n")}` : "",
     `<source>\n${neutralizeSource(sourceOf(input.pages, isMultiPdf).text)}\n</source>`,
     problems?.length ? `Your previous outline broke these rules; fix them:\n${problems.map((p) => `- ${p.message}`).join("\n")}` : "",
   ]
@@ -193,6 +221,8 @@ interface NormalizeContext {
   validPages: number[];
   /** Experiment pages become practice pages when no catalog simulation fits. */
   simAvailable: boolean;
+  /** Whether extracted textbook/lesson figures exist; without them `visual: "figure"` downgrades to default. */
+  figuresAvailable?: boolean;
   /** Text of the selection, for the source-page match check. */
   pages?: PageText[];
   options?: Partial<PipelineOptions>;
@@ -217,7 +247,7 @@ export function normalizeOutline(draft: DraftOutline, ctx: NormalizeContext): Ou
   const slides = draft.slides.map((s, i) => {
     const pageType: PageType = s.pageType === "experiment" && !ctx.simAvailable ? "practice" : s.pageType;
     const def = PAGE_TYPES[pageType];
-    const visuals = PAGE_TYPE_VISUALS[pageType];
+    const visuals = ctx.figuresAvailable ? PAGE_TYPE_VISUALS[pageType] : PAGE_TYPE_VISUALS[pageType].filter((v) => v !== "figure");
     const visual = o.visualPlanning === "writer" ? "none" : visuals.includes(s.visual) ? s.visual : visuals[0]!;
     return SlideSpec.parse({
       ...s,
@@ -253,7 +283,13 @@ export function rebalanceMinutes(outline: Outline, params: LessonParams): Outlin
 
 export async function draftOutline(ai: AiLayer, input: MultiSourceDraftInput): Promise<DraftResult> {
   const o = optionsOf(input.options);
-  const ctx: NormalizeContext = { validPages: input.pages.map((p) => p.no), simAvailable: !!simFor(input), pages: input.pages, options: o };
+  const ctx: NormalizeContext = {
+    validPages: input.pages.map((p) => p.no),
+    simAvailable: !!simFor(input),
+    figuresAvailable: !!(input.figures && input.figures.length > 0),
+    pages: input.pages,
+    options: o,
+  };
   const isMultiPdf = (input.sources ?? []).filter((s) => s.kind === "pdf").length > 1 || input.pages.some((p) => p.no > SOURCE_STRIDE);
   const { omitted } = sourceOf(input.pages, isMultiPdf);
   const labels = new Map(input.pages.flatMap((p) => (p.label ? [[p.no, p.label] as const] : [])));
